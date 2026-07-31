@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{3E5A9C71-8D42-4B16-9F03-2C7E64B18A55}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>WebOverlay</RootNamespace>
+    <AssemblyName>Anvil-WebOverlay</AssemblyName>
+    <Company>https://github.com/maschine34675/WebOverlay</Company>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <SptRoot Condition="'$(SptRoot)' == ''">C:\SPT</SptRoot>
+    <DeployToSpt Condition="'$(DeployToSpt)' == ''">false</DeployToSpt>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3">
+      <PrivateAssets>All</PrivateAssets>
+    </PackageReference>
+    <Reference Include="BepInEx">
+      <HintPath>$(SptRoot)\BepInEx\core\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Branding.cs" />
+    <Compile Include="Interop\ComCallback.cs" />
+    <Compile Include="Interop\WebView2Api.cs" />
+    <Compile Include="OverlayHost.cs" />
+    <Compile Include="OverlayWindow.cs" />
+    <Compile Include="WebOverlays.cs" />
+    <Compile Include="WebOverlayPlugin.cs" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
+  <Target Name="DeployToSpt" AfterTargets="Build" Condition="'$(DeployToSpt)' == 'true'">
+    <Error Condition="'$(SptRoot)' == ''" Text="Set SptRoot when DeployToSpt=true." />
+    <PropertyGroup>
+      <PluginDirectory>$(SptRoot)\BepInEx\plugins\$(AssemblyName)</PluginDirectory>
+    </PropertyGroup>
+    <MakeDir Directories="$(PluginDirectory)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDirectory)" />
+    <Copy SourceFiles="..\ThirdParty\WebView2\WebView2Loader.dll" DestinationFolder="$(PluginDirectory)" />
+    <Copy SourceFiles="..\ThirdParty\WebView2\WebView2-LICENSE.txt;..\ThirdParty\WebView2\WebView2-NOTICE.txt" DestinationFolder="$(PluginDirectory)" />
+  </Target>
+</Project>
