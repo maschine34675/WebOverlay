@@ -62,6 +62,31 @@ namespace WebOverlay
 
         /// <summary>Allow F12 developer tools. Useful while building a page.</summary>
         public bool DevTools { get; set; }
+
+        /// <summary>
+        /// Overall window opacity from 0.15 to 1.0; values outside are clamped.
+        /// The whole window - content included - fades evenly. The overlay stays
+        /// interactive, so this suits panels that should not fully cover the game.
+        /// </summary>
+        public double Opacity { get; set; } = 1.0;
+
+        /// <summary>
+        /// Display-only HUD mode. Pixels the page leaves unpainted show the
+        /// game; painted content floats over it. The window ignores the mouse
+        /// and never takes focus, so the game stays fully playable - which also
+        /// means <see cref="CloseKeys"/> cannot apply: hide the HUD from the
+        /// mod's own hotkey via <see cref="IWebOverlay.Hide"/> or Toggle.
+        /// Unless a size is set, the HUD covers the game's whole client area,
+        /// and <see cref="Frame"/> is ignored.
+        ///
+        /// Transparency is per pixel but binary: a pixel either shows the game
+        /// or shows page content. Semi-transparent page pixels blend towards
+        /// near-black instead of the game, and antialiased edges pick up a hint
+        /// of that - design HUD elements on their own solid-ish backgrounds.
+        /// The page must not paint exactly rgb(3,1,3); that color is reserved
+        /// as the transparency key.
+        /// </summary>
+        public bool Transparent { get; set; }
     }
 
     /// <summary>A single overlay window.</summary>

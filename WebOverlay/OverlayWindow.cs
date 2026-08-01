@@ -79,6 +79,8 @@ namespace WebOverlay
             }
 
             applySettings();
+            if (options.Transparent)
+                applyTransparentBackground();
             subscribeToKeys();
             subscribeToMessages();
             fitToClientArea();
@@ -223,8 +225,10 @@ namespace WebOverlay
             positionOverGame();
             fitToClientArea();
             setControllerVisible(true);
-            ShowWindow(window, SW_SHOW);
-            SetForegroundWindow(window);
+            // A HUD must never take the keyboard from the game.
+            ShowWindow(window, options.Transparent ? SW_SHOWNOACTIVATE : SW_SHOW);
+            if (!options.Transparent)
+                SetForegroundWindow(window);
             IsVisible = true;
         }
 
@@ -236,7 +240,9 @@ namespace WebOverlay
             ShowWindow(window, SW_HIDE);
             IsVisible = false;
             // Hand the keyboard back to the game, not to whatever sits behind.
-            if (OverlayHost.GameWindow != IntPtr.Zero && IsWindow(OverlayHost.GameWindow))
+            // A HUD never had it, so there is nothing to hand back.
+            if (!options.Transparent
+                && OverlayHost.GameWindow != IntPtr.Zero && IsWindow(OverlayHost.GameWindow))
                 SetForegroundWindow(OverlayHost.GameWindow);
             Closed?.Invoke();
         }
@@ -270,13 +276,19 @@ namespace WebOverlay
 
         private bool createWindow()
         {
+            // HUD windows get their own class because the class carries the
+            // background brush, and theirs must be the transparency key: those
+            // are exactly the pixels the chroma key later removes.
+            string className = options.Transparent ? HudWindowClassName : WindowClassName;
             var windowClass = new OverlayHost.WNDCLASSEX
             {
                 cbSize = Marshal.SizeOf(typeof(OverlayHost.WNDCLASSEX)),
                 lpfnWndProc = Marshal.GetFunctionPointerForDelegate(windowProc),
                 hInstance = OverlayHost.GetModuleHandle(null),
-                lpszClassName = WindowClassName,
-                hbrBackground = (IntPtr)(COLOR_WINDOW + 1)
+                lpszClassName = className,
+                hbrBackground = options.Transparent
+                    ? CreateSolidBrush(TransparencyKey)
+                    : (IntPtr)(COLOR_WINDOW + 1)
             };
 
             if (OverlayHost.RegisterClassEx(ref windowClass) == 0
@@ -289,13 +301,26 @@ namespace WebOverlay
             // An owned popup rather than a child window: Unity presents through
             // a flip-model swapchain, which does not composite child windows.
             uint style = WS_POPUP;
-            if (options.Frame)
+            if (options.Frame && !options.Transparent)
                 style |= WS_CAPTION | WS_SYSMENU | WS_SIZEBOX;
+
+            uint exStyle = WS_EX_TOOLWINDOW;
+            byte alpha = opacityAsAlpha();
+            if (options.Transparent)
+            {
+                // Layered for the chroma key; transparent and no-activate so the
+                // mouse and the keyboard never leave the game.
+                exStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+            }
+            else if (alpha < byte.MaxValue)
+            {
+                exStyle |= WS_EX_LAYERED;
+            }
 
             getBounds(out int x, out int y, out int width, out int height);
             window = OverlayHost.CreateWindowEx(
-                WS_EX_TOOLWINDOW,
-                WindowClassName,
+                exStyle,
+                className,
                 title,
                 style,
                 x, y, width, height,
@@ -311,7 +336,59 @@ namespace WebOverlay
                 return false;
             }
 
+            if (options.Transparent)
+            {
+                uint flags = LWA_COLORKEY;
+                if (alpha < byte.MaxValue)
+                    flags |= LWA_ALPHA;
+                SetLayeredWindowAttributes(window, TransparencyKey, alpha, flags);
+            }
+            else if (alpha < byte.MaxValue)
+            {
+                SetLayeredWindowAttributes(window, 0, alpha, LWA_ALPHA);
+            }
+
             return true;
+        }
+
+        private byte opacityAsAlpha()
+        {
+            double opacity = options.Opacity;
+            if (double.IsNaN(opacity) || opacity >= 1.0)
+                return byte.MaxValue;
+            if (opacity < 0.15)
+                opacity = 0.15;
+            return (byte)Math.Round(opacity * byte.MaxValue);
+        }
+
+        /// <summary>
+        /// Asks the browser to render nothing where the page paints nothing.
+        /// Those pixels then show this window's key-color background, which the
+        /// chroma key in turn replaces with the game. Needs the Controller2
+        /// interface, present in every WebView2 runtime from 2021 on.
+        /// </summary>
+        private void applyTransparentBackground()
+        {
+            Guid iid = WebView2Api.IID_Controller2;
+            if (Marshal.QueryInterface(controller, ref iid, out IntPtr controller2) != WebView2Api.S_OK
+                || controller2 == IntPtr.Zero)
+            {
+                OverlayHost.LogWarning("WebOverlay: this WebView2 runtime cannot make a HUD transparent; update it.");
+                return;
+            }
+
+            try
+            {
+                // COREWEBVIEW2_COLOR {A,R,G,B} by value; zero is fully transparent.
+                int hr = WebView2Api.Method<WebView2Api.PutColorDelegate>(
+                    controller2, WebView2Api.Controller2_PutDefaultBackgroundColor)(controller2, 0u);
+                if (hr != WebView2Api.S_OK)
+                    OverlayHost.LogWarning("WebOverlay: transparent background failed, hr=0x" + hr.ToString("X8") + ".");
+            }
+            finally
+            {
+                Marshal.Release(controller2);
+            }
         }
 
         private IntPtr wndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
@@ -384,6 +461,19 @@ namespace WebOverlay
 
             int clientWidth = client.right - client.left;
             int clientHeight = client.bottom - client.top;
+            if (options.Transparent)
+            {
+                // A HUD's natural canvas is the whole game picture; the page
+                // decides where on it something appears.
+                if (options.Width <= 0)
+                    width = clientWidth;
+                if (options.Height <= 0)
+                    height = clientHeight;
+                x = topLeft.x;
+                y = topLeft.y;
+                return;
+            }
+
             if (options.Width <= 0)
                 width = Math.Max(640, (int)(clientWidth * 0.8));
             if (options.Height <= 0)
@@ -393,6 +483,15 @@ namespace WebOverlay
         }
 
         private const string WindowClassName = "WebOverlayWindow";
+        private const string HudWindowClassName = "WebOverlayHudWindow";
+
+        /// <summary>
+        /// COLORREF (0x00BBGGRR) of rgb(3,1,3): dark enough that antialiased
+        /// edges blending towards it stay invisible, and unlikely enough that no
+        /// page paints it on purpose.
+        /// </summary>
+        private const uint TransparencyKey = 0x00030103;
+
         private const int COLOR_WINDOW = 5;
         private const int ERROR_CLASS_ALREADY_EXISTS = 1410;
         private const uint WS_POPUP = 0x80000000;
@@ -400,6 +499,11 @@ namespace WebOverlay
         private const uint WS_SYSMENU = 0x00080000;
         private const uint WS_SIZEBOX = 0x00040000;
         private const uint WS_EX_TOOLWINDOW = 0x00000080;
+        private const uint WS_EX_LAYERED = 0x00080000;
+        private const uint WS_EX_TRANSPARENT = 0x00000020;
+        private const uint WS_EX_NOACTIVATE = 0x08000000;
+        private const uint LWA_COLORKEY = 0x1;
+        private const uint LWA_ALPHA = 0x2;
         private const uint WM_CLOSE = 0x0010;
         private const uint WM_SIZE = 0x0005;
         private const uint WM_KEYDOWN = 0x0100;
@@ -407,6 +511,7 @@ namespace WebOverlay
         private const uint SWP_NOZORDER = 0x0004;
         private const int SW_HIDE = 0;
         private const int SW_SHOW = 5;
+        private const int SW_SHOWNOACTIVATE = 4;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT
@@ -432,5 +537,11 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern bool ClientToScreen(IntPtr hwnd, ref POINT point);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateSolidBrush(uint color);
     }
 }

@@ -41,7 +41,32 @@ window.chrome.webview.addEventListener('message', e => console.log(e.data));
 unavailable, so a fallback is always a null check. Events arrive on the overlay
 thread - queue them and touch game state from `Update()`.
 
-Install the demo plugin to see a working panel: press **F10** in game.
+Install the demo plugin to see a working panel: press **F10** in game, and
+**F11** for the transparent HUD demo.
+
+## Translucency and HUDs
+
+Two options in `OverlayOptions` control how much of the game shows through:
+
+- **`Opacity`** (0.15 to 1.0) fades the whole window - content included -
+  evenly. The overlay stays a normal interactive window; this suits panels that
+  should not completely cover the game.
+- **`Transparent`** turns the overlay into a display-only HUD. Pixels the page
+  leaves unpainted show the game; painted content floats over it. The window
+  ignores the mouse and never takes focus, so the game stays fully playable.
+  Unless a size is set the HUD covers the game's whole picture, and the page
+  decides where on it something appears. Both can be combined for a faded HUD.
+
+HUD rules that follow from how it works (chroma key, see below):
+
+- **Interaction:** none - clicks go to the game everywhere, and `CloseKeys`
+  cannot apply. Hide the HUD from the mod's own hotkey (`Hide`/`Toggle`).
+- **Per-pixel transparency is binary.** A pixel either shows the game or shows
+  page content. Semi-transparent page pixels blend towards near-black rather
+  than the game, and antialiased edges pick up a hint of that - design HUD
+  elements on solid dark panels (see the demo's HUD page), not as glass.
+- The page must not paint exactly `rgb(3,1,3)`; that color is the reserved
+  transparency key.
 
 ## Requirements and limits
 
@@ -69,7 +94,34 @@ Install the demo plugin to see a working panel: press **F10** in game.
   wrong function - measured, it kills the process with no managed exception.
   Function pointers taken from delegates work reliably, so every interface used
   here is bound by explicit slot number, taken from the official `WebView2.h`.
-  **Only members of the v1 interfaces may be used**; see `Interop/WebView2Api.cs`.
+  Members of versioned interfaces (`ICoreWebView2Controller2` and later) are
+  reached only via an explicit `QueryInterface` plus an absolute slot counted
+  through every inherited member - and each such slot must be proven by an
+  observable effect before it is trusted; see `Interop/WebView2Api.cs`.
+- **HUD transparency is a chroma key.** DWM applies `LWA_COLORKEY` to a window's
+  classic redirection surface, which Chromium's GPU compositing bypasses - so
+  keying the page's own pixels does not work (measured). What does work:
+  `DefaultBackgroundColor` alpha 0 makes the browser render nothing where the
+  page paints nothing, those pixels show the window's key-color background
+  brush, and the chroma key replaces exactly them with the game. Hit-testing
+  reads the same surface, which is why the whole HUD is click-through - and why
+  that cannot be selective in this mode.
+
+One caution: WebView2 transparency has regressed before in runtime updates
+(opaque instead of transparent, runtime 145.x, fixed since). If a HUD suddenly
+shows a dark background after a Windows update, suspect the runtime first.
+
+## Roadmap
+
+- **True per-pixel alpha with interaction** (glass panels, soft shadows over
+  the game, clickable HUD elements) is possible but is a different hosting
+  model: composition hosting via `ICoreWebView2Environment3` /
+  `ICoreWebView2CompositionController`, a DirectComposition visual tree in a
+  `WS_EX_NOREDIRECTIONBITMAP` window, and manual forwarding of all mouse input
+  plus cursor handling. The interop fits this library's hand-built-vtable
+  approach; the work is roughly a week for the core and is planned as a second
+  overlay mode. Microsoft's `WebView2APISample` (ViewComponent.cpp) shows the
+  canonical native implementation.
 
 ## Third-party components
 

@@ -19,7 +19,9 @@ namespace WebOverlay.Demo
     public class DemoPlugin : BaseUnityPlugin
     {
         private ConfigEntry<KeyboardShortcut> toggleKey;
+        private ConfigEntry<KeyboardShortcut> hudKey;
         private IWebOverlay overlay;
+        private IWebOverlay hud;
         private readonly Queue<string> fromPage = new Queue<string>();
         private float nextPush;
 
@@ -27,15 +29,47 @@ namespace WebOverlay.Demo
         {
             toggleKey = this.Config.Bind("Demo", "Toggle", new KeyboardShortcut(KeyCode.F10),
                 "Shows the WebOverlay demo panel.");
+            hudKey = this.Config.Bind("Demo", "Toggle HUD", new KeyboardShortcut(KeyCode.F11),
+                "Shows the transparent HUD demo. Click-through: the game stays fully playable.");
         }
 
         private void Update()
         {
             if (toggleKey.Value.IsDown())
                 toggle();
+            if (hudKey.Value.IsDown())
+                toggleHud();
 
             drainPageMessages();
             pushLiveValue();
+        }
+
+        private void toggleHud()
+        {
+            if (hud != null)
+            {
+                hud.Toggle();
+                return;
+            }
+
+            if (!WebOverlayPlugin.IsDisplayModeSupported)
+            {
+                this.Logger.LogWarning("Exclusive fullscreen cannot show an overlay; use borderless windowed.");
+                return;
+            }
+
+            hud = WebOverlays.Create("WebOverlay HUD demo", new OverlayOptions
+            {
+                Transparent = true
+            });
+
+            if (hud == null)
+            {
+                this.Logger.LogWarning("Overlays are unavailable - is the WebView2 runtime installed?");
+                return;
+            }
+
+            hud.LoadHtml(HudPage);
         }
 
         private void toggle()
@@ -95,15 +129,20 @@ namespace WebOverlay.Demo
 
         private void pushLiveValue()
         {
-            if (overlay == null || !overlay.IsVisible || Time.time < nextPush)
+            if (Time.time < nextPush)
                 return;
             nextPush = Time.time + 1f;
-            overlay.Post("fps:" + Mathf.RoundToInt(1f / Mathf.Max(0.0001f, Time.deltaTime)));
+            string value = "fps:" + Mathf.RoundToInt(1f / Mathf.Max(0.0001f, Time.deltaTime));
+            if (overlay != null && overlay.IsVisible)
+                overlay.Post(value);
+            if (hud != null && hud.IsVisible)
+                hud.Post(value);
         }
 
         private void OnDestroy()
         {
             overlay?.Dispose();
+            hud?.Dispose();
         }
 
         private const string Page = @"<!doctype html>
@@ -126,6 +165,35 @@ namespace WebOverlay.Demo
   function say(what) { window.chrome.webview.postMessage(what); }
   window.chrome.webview.addEventListener('message', e => {
     document.getElementById('live').textContent = e.data;
+  });
+</script>";
+
+        // Everything the page does not paint shows the game. Elements sit on
+        // solid dark panels: semi-transparent pixels would blend towards the
+        // near-black transparency key rather than the game, so panels are the
+        // look that works, glass is not.
+        private const string HudPage = @"<!doctype html>
+<meta charset='utf-8'>
+<style>
+  body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; overflow:hidden; }
+  .panel { position:absolute; background:#14150f; border:1px solid #3a3b30;
+           border-radius:6px; color:#d0cdbd; padding:10px 16px; }
+  #top { top:16px; left:50%; transform:translateX(-50%);
+         font-weight:650; letter-spacing:.12em; color:#c2ad6d; }
+  #corner { right:16px; bottom:16px; text-align:right; }
+  #fps { font-size:1.6rem; color:#72ba80; }
+  .label { font-size:.7rem; color:#918e7e; text-transform:uppercase; letter-spacing:.1em; }
+</style>
+<div class='panel' id='top'>WEBOVERLAY HUD - CLICK-THROUGH</div>
+<div class='panel' id='corner'>
+  <div class='label'>frames per second</div>
+  <div id='fps'>-</div>
+</div>
+<script>
+  window.chrome.webview.addEventListener('message', e => {
+    const value = String(e.data);
+    if (value.startsWith('fps:'))
+      document.getElementById('fps').textContent = value.slice(4);
   });
 </script>";
     }

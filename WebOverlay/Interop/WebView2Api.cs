@@ -7,11 +7,14 @@ namespace WebOverlay.Interop
     /// Vtable slot numbers and signatures for the parts of WebView2 this library
     /// uses, taken from the official WebView2.h.
     ///
-    /// Only members of the v1 interfaces appear here, and that is a hard rule:
-    /// the v2+ interfaces express their inherited slots with `_VtblGap` markers
-    /// that Mono ignores, so calling one of those would dispatch to a different
-    /// function with a different signature. Before adding anything, check that
-    /// the member exists on the base interface in WebView2.h.
+    /// The `_VtblGap` rule: the SDK's managed wrapper expresses inherited vtable
+    /// slots with `_VtblGap` markers that Mono ignores, so that wrapper must
+    /// never be used - calls would dispatch to the wrong function. Members of
+    /// versioned interfaces (Controller2 and later) are reachable, but only via
+    /// an explicit QueryInterface for that interface's IID plus an absolute slot
+    /// counted through every inherited member in WebView2.h - and each such slot
+    /// must be proven by an observable effect (see the transparency probe notes
+    /// in the README) before it is trusted.
     /// </summary>
     internal static class WebView2Api
     {
@@ -21,6 +24,7 @@ namespace WebOverlay.Interop
         public static readonly Guid IID_ControllerCompleted = new Guid("6c4819f3-c9b7-4260-8127-c9f5bde7f68c");
         public static readonly Guid IID_AcceleratorKeyPressed = new Guid("b29c7e28-fa79-41a8-8e44-65811c76dcb2");
         public static readonly Guid IID_WebMessageReceived = new Guid("57213f19-00e6-49fa-8e07-898ea01ecbd2");
+        public static readonly Guid IID_Controller2 = new Guid("c979903e-d4ca-4228-92eb-47ee3fa96eab");
 
         // ICoreWebView2Environment
         public const int Environment_CreateController = 3;
@@ -31,6 +35,11 @@ namespace WebOverlay.Interop
         public const int Controller_AddAcceleratorKeyPressed = 19;
         public const int Controller_Close = 24;
         public const int Controller_GetCoreWebView2 = 25;
+
+        // ICoreWebView2Controller2 - only after QueryInterface(IID_Controller2).
+        // Slot verified empirically: an opaque color visibly painted the view's
+        // background and an alpha of 0 let the host window show through.
+        public const int Controller2_PutDefaultBackgroundColor = 27;
 
         // ICoreWebView2
         public const int WebView_GetSettings = 3;
@@ -83,6 +92,13 @@ namespace WebOverlay.Interop
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int PutBoundsDelegate(IntPtr self, RECT bounds);
+
+        /// <summary>
+        /// COREWEBVIEW2_COLOR is four bytes {A,R,G,B} passed by value, which on
+        /// x64 travels as the little-endian integer A | R&lt;&lt;8 | G&lt;&lt;16 | B&lt;&lt;24.
+        /// </summary>
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate int PutColorDelegate(IntPtr self, uint color);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int GetPointerDelegate(IntPtr self, out IntPtr value);
