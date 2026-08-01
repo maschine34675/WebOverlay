@@ -56,3 +56,22 @@ if ($unexpected.Count -gt 0 -or $missing.Count -gt 0) {
 
 Compress-Archive -Path (Join-Path $stageRoot '*') -DestinationPath $archivePath -CompressionLevel Optimal
 Write-Host "Created $archivePath"
+
+# The demo ships as its own zip: it is a try-it-out plugin plus reference
+# source, not something every player should install.
+dotnet build (Join-Path $repositoryRoot 'WebOverlay.Demo\WebOverlay.Demo.csproj') -c $Configuration
+if ($LASTEXITCODE -ne 0) {
+    throw "The demo build failed."
+}
+
+$demoStage = Join-Path $artifactDirectory "Anvil-WebOverlayDemo-v$version"
+$demoArchive = Join-Path $artifactDirectory "Anvil-WebOverlayDemo-v$version.zip"
+if (Test-Path $demoStage) { Remove-Item -Recurse -Force $demoStage }
+if (Test-Path $demoArchive) { Remove-Item -Force $demoArchive }
+$demoPluginDirectory = Join-Path $demoStage 'BepInEx\plugins\Anvil-WebOverlayDemo'
+New-Item -ItemType Directory -Path $demoPluginDirectory -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repositoryRoot "WebOverlay.Demo\bin\$Configuration\Anvil-WebOverlayDemo.dll") -Destination $demoPluginDirectory
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'WebOverlay.Demo\DemoPlugin.cs') -Destination $demoStage
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $demoStage
+Compress-Archive -Path (Join-Path $demoStage '*') -DestinationPath $demoArchive -CompressionLevel Optimal
+Write-Host "Created $demoArchive"
