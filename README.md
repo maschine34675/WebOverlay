@@ -80,7 +80,11 @@ HUD rules that follow from how it works (chroma key, see below):
   over the game would minimise it, so check `WebOverlayPlugin.IsDisplayModeSupported`.
 - While the overlay holds the keyboard the game does not see key presses, and
   the other way round. That is why the window has a title bar with a close
-  button by default, and why `OverlayOptions.CloseKeys` exists.
+  button by default, and why `OverlayOptions.CloseKeys` exists. The title bar
+  is recolored to a dark game-appropriate grey (Windows 11 exact, Windows 10
+  dark mode, older keeps the stock look); `OverlayOptions.Frame = false`
+  removes it entirely - then the close keys are the only way out, so make sure
+  they are set.
 
 ## How it works, and why it looks like this
 

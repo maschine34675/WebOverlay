@@ -376,6 +376,9 @@ namespace WebOverlay
 
             byHandle[window] = this;
 
+            if (options.Frame && !options.Transparent)
+                applyDarkFrame();
+
             if (options.Transparent)
             {
                 uint flags = LWA_COLORKEY;
@@ -389,6 +392,30 @@ namespace WebOverlay
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// A stock Windows title bar over a game breaks the picture, so the
+        /// frame is recolored to a dark game-appropriate grey. Windows 11 takes
+        /// the exact colors; Windows 10 only knows its dark mode; anything
+        /// older keeps the stock frame. All of it is cosmetic, so every call
+        /// may fail freely.
+        /// </summary>
+        private void applyDarkFrame()
+        {
+            uint caption = CaptionColor;
+            if (DwmSetWindowAttribute(window, DWMWA_CAPTION_COLOR, ref caption, sizeof(uint)) == 0)
+            {
+                uint text = CaptionTextColor;
+                DwmSetWindowAttribute(window, DWMWA_TEXT_COLOR, ref text, sizeof(uint));
+                uint border = CaptionColor;
+                DwmSetWindowAttribute(window, DWMWA_BORDER_COLOR, ref border, sizeof(uint));
+            }
+            else
+            {
+                uint darkMode = 1;
+                DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkMode, sizeof(uint));
+            }
         }
 
         private byte opacityAsAlpha()
@@ -550,6 +577,16 @@ namespace WebOverlay
         /// <summary>One brush per process; the HUD window class owns it forever.</summary>
         private static IntPtr hudBrush;
 
+        // COLORREF (0x00BBGGRR): a dark desaturated grey close to the game's
+        // own panels (#1B1C17), with the light grey the game uses for text.
+        private const uint CaptionColor = 0x00171C1B;
+        private const uint CaptionTextColor = 0x00BDCDD0;
+
+        private const uint DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+        private const uint DWMWA_BORDER_COLOR = 34;
+        private const uint DWMWA_CAPTION_COLOR = 35;
+        private const uint DWMWA_TEXT_COLOR = 36;
+
         private const int COLOR_WINDOW = 5;
         private const int ERROR_CLASS_ALREADY_EXISTS = 1410;
         private const uint WS_POPUP = 0x80000000;
@@ -608,5 +645,8 @@ namespace WebOverlay
 
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateSolidBrush(uint color);
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, uint attribute, ref uint value, uint size);
     }
 }
