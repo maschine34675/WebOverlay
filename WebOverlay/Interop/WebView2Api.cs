@@ -51,6 +51,7 @@ namespace WebOverlay.Interop
 
         // ICoreWebView2
         public const int WebView_GetSettings = 3;
+        public const int WebView_GetSource = 4;
         public const int WebView_Navigate = 5;
         public const int WebView_NavigateToString = 6;
         public const int WebView_AddNavigationStarting = 7;
@@ -108,6 +109,7 @@ namespace WebOverlay.Interop
         public const int ProcessFailedArgs_GetKind = 3;
         public const int ProcessFailedKindBrowserExited = 0;
         public const int ProcessFailedKindRenderExited = 1;
+        public const int ProcessFailedKindRenderUnresponsive = 2;
 
         public const int KeyEventKindKeyDown = 0;
         public const int KeyEventKindSystemKeyDown = 2;

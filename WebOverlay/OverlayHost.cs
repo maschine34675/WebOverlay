@@ -81,6 +81,9 @@ namespace WebOverlay
 
         internal static IntPtr Environment => environment;
 
+        /// <summary>The game is quitting; failures are expected, not news.</summary>
+        internal static bool Stopping => stopping;
+
         internal static void Register(OverlayWindow window)
         {
             lock (windows)
@@ -235,15 +238,17 @@ namespace WebOverlay
             }
 
             // The completion may arrive re-entrantly or through the pump. This
-            // wait runs on the overlay thread, never on Unity's.
+            // wait runs on the overlay thread, never on Unity's - and a
+            // shutdown mid-wait ends it instead of holding the thread for the
+            // full timeout.
             var timer = System.Diagnostics.Stopwatch.StartNew();
-            while (environment == IntPtr.Zero && timer.Elapsed.TotalSeconds < 30)
+            while (environment == IntPtr.Zero && !stopping && timer.Elapsed.TotalSeconds < 30)
             {
                 pump();
                 Thread.Sleep(5);
             }
 
-            if (environment == IntPtr.Zero)
+            if (environment == IntPtr.Zero && !stopping)
                 LogWarning("WebOverlay: the browser environment did not start within 30 seconds.");
             return environment != IntPtr.Zero;
         }
@@ -278,7 +283,12 @@ namespace WebOverlay
             {
                 if (message == WM_APP_WORK)
                 {
-                    drainWork();
+                    // Not before the environment attempt finished: the pump
+                    // runs during it (it must, for the completion), and a
+                    // Shutdown wake arriving then would execute queued window
+                    // creations against a still-absent environment.
+                    if (acceptingWork)
+                        drainWork();
                     return IntPtr.Zero;
                 }
             }

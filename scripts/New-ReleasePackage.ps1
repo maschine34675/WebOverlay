@@ -73,5 +73,12 @@ New-Item -ItemType Directory -Path $demoPluginDirectory -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "WebOverlay.Demo\bin\$Configuration\Anvil-WebOverlayDemo.dll") -Destination $demoPluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'WebOverlay.Demo\DemoPlugin.cs') -Destination $demoStage
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $demoStage
+Set-Content -LiteralPath (Join-Path $demoStage 'README.txt') -Value @"
+Anvil-WebOverlay demo plugin.
+
+Requires the Anvil-WebOverlay library (install its zip first).
+In game: F10 toggles an interactive panel, F11 a transparent click-through HUD.
+DemoPlugin.cs is the reference source for using the library from a mod.
+"@
 Compress-Archive -Path (Join-Path $demoStage '*') -DestinationPath $demoArchive -CompressionLevel Optimal
 Write-Host "Created $demoArchive"

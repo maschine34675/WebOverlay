@@ -77,7 +77,7 @@ namespace WebOverlay.Demo
                 if (ReferenceEquals(hud, createdHud))
                     hud = null;
             };
-            hud.LoadHtml(HudPage);
+            createdHud.LoadHtml(HudPage);
         }
 
         private void toggle()
@@ -126,7 +126,9 @@ namespace WebOverlay.Demo
                     overlay = null;
             };
 
-            overlay.LoadHtml(Page);
+            // Through the local: the latched Failed handler may already have
+            // run during the subscription and nulled the field.
+            created.LoadHtml(Page);
         }
 
         private void drainPageMessages()

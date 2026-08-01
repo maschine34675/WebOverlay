@@ -112,10 +112,29 @@ namespace WebOverlay
                 ShowWindow(window, SW_HIDE);
                 isVisible = false;
             }
-            Failed?.Invoke();
+            // During game shutdown a failure is expected, and notifying the
+            // consumer would trigger its fallback - for CraftQueue that meant
+            // a browser window popping up while quitting.
+            if (!OverlayHost.Stopping)
+                Failed?.Invoke();
         }
 
         public bool Create()
+        {
+            try
+            {
+                return createCore();
+            }
+            catch (Exception ex)
+            {
+                // Whatever went wrong, the consumer must hear a terminal state -
+                // a handle stuck in Creating answers nothing forever.
+                fail("creation threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+                return false;
+            }
+        }
+
+        private bool createCore()
         {
             if (OverlayHost.Environment == IntPtr.Zero)
             {
@@ -151,7 +170,16 @@ namespace WebOverlay
 
                 controller = pointer;
                 Marshal.AddRef(controller);
-                configure();
+                try
+                {
+                    configure();
+                }
+                catch (Exception ex)
+                {
+                    // The ComCallback thunk would swallow this silently and
+                    // leave the handle in Creating forever.
+                    fail("configuration threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+                }
                 return WebView2Api.S_OK;
             });
 
@@ -217,14 +245,14 @@ namespace WebOverlay
             {
                 pageReady = false;
                 expectInlineNavigation = true;
-                WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_NavigateToString)(
-                    webView, pendingHtml);
+                checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                    webView, WebView2Api.WebView_NavigateToString)(webView, pendingHtml), "LoadHtml");
             }
             else if (pendingUrl != null)
             {
                 pageReady = false;
-                WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_Navigate)(
-                    webView, pendingUrl);
+                checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                    webView, WebView2Api.WebView_Navigate)(webView, pendingUrl), "Navigate");
             }
         }
 
@@ -387,12 +415,25 @@ namespace WebOverlay
                 if (success != 0)
                 {
                     pageReady = true;
-                    flushOutbox();
+                    // Flush only when the document that actually loaded is the
+                    // target the mod asked for. A redirect to a different -
+                    // even allowed - origin must not receive data buffered for
+                    // the original target.
+                    if (currentDocumentIsTarget())
+                    {
+                        flushOutbox();
+                    }
+                    else if (outbox.Count > 0)
+                    {
+                        OverlayHost.LogWarning("WebOverlay: dropped " + outbox.Count
+                            + " buffered send(s); the page ended up somewhere else than the mod's target.");
+                        outbox.Clear();
+                    }
                 }
                 return WebView2Api.S_OK;
             });
-            WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddNavigationCompleted)(
-                webView, navigationCompletedCallback.Pointer, out _);
+            armed &= WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddNavigationCompleted)(
+                webView, navigationCompletedCallback.Pointer, out _) == WebView2Api.S_OK;
 
             newWindowCallback = new ComCallback(WebView2Api.IID_NewWindowRequested, (IntPtr sender, IntPtr args) =>
             {
@@ -423,14 +464,26 @@ namespace WebOverlay
                 {
                     fail("the browser process exited; the overlay is dead.");
                 }
-                else if (kind == WebView2Api.ProcessFailedKindRenderExited && renderRecoveries < 2)
+                else if (kind == WebView2Api.ProcessFailedKindRenderExited
+                    || kind == WebView2Api.ProcessFailedKindRenderUnresponsive)
                 {
-                    // A crashed renderer leaves an error page; reloading the
-                    // mod's content usually recovers. Bounded, so a page that
-                    // kills its renderer on load cannot loop forever.
-                    renderRecoveries++;
-                    OverlayHost.LogWarning("WebOverlay: the page's renderer crashed; reloading (attempt " + renderRecoveries + ").");
-                    startPendingNavigation();
+                    if (renderRecoveries < 2)
+                    {
+                        // A crashed or frozen renderer leaves a dead page;
+                        // reloading the mod's content usually recovers.
+                        // Bounded, so a page that kills its renderer on load
+                        // cannot loop forever.
+                        renderRecoveries++;
+                        OverlayHost.LogWarning("WebOverlay: the page's renderer failed (kind " + kind
+                            + "); reloading (attempt " + renderRecoveries + ").");
+                        startPendingNavigation();
+                    }
+                    else
+                    {
+                        // A handle that stays "Ready" over a permanently dead
+                        // page would never hand the consumer to its fallback.
+                        fail("the page's renderer keeps failing; the overlay is dead.");
+                    }
                 }
                 else
                 {
@@ -449,7 +502,7 @@ namespace WebOverlay
             if (args == IntPtr.Zero)
                 return WebView2Api.S_OK;
             string uri = readString(args, WebView2Api.NavArgs_GetUri);
-            if (!isNavigationAllowed(uri))
+            if (!isNavigationAllowed(uri, topLevel))
             {
                 OverlayHost.LogWarning("WebOverlay: blocked navigation to " + (uri ?? "<unknown>") + ".");
                 WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.NavArgs_PutCancel)(args, 1);
@@ -461,6 +514,27 @@ namespace WebOverlay
             if (topLevel)
                 pageReady = false;
             return WebView2Api.S_OK;
+        }
+
+        /// <summary>
+        /// Whether the top-level document currently shown is the one the mod
+        /// last targeted: for LoadHtml the inline page (about:blank or its
+        /// data: form), for Navigate a document on the same origin as the URL.
+        /// The check runs against the live source, so buffered and direct
+        /// sends both stay bound to the mod's own target.
+        /// </summary>
+        private bool currentDocumentIsTarget()
+        {
+            string source = readString(webView, WebView2Api.WebView_GetSource);
+            if (source == null)
+                return false;
+            if (htmlLoaded)
+                return source == "about:blank" || source.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
+            if (pendingUrl == null)
+                return false;
+            string expected = originOf(pendingUrl);
+            string actual = originOf(source);
+            return expected != null && expected == actual;
         }
 
         private static string readString(IntPtr comObject, int slot)
@@ -484,15 +558,21 @@ namespace WebOverlay
         /// NavigateToString is implemented by the browser as a navigation to a
         /// data: URI (measured in game: the filter blocked it and LoadHtml
         /// pages stayed white). That exact navigation is allowed once per
-        /// LoadHtml via a one-shot; any other data: navigation stays blocked.
+        /// LoadHtml via a one-shot bound to the top level - a frame must
+        /// neither consume nor use it. Runtimes that report the inline page as
+        /// about:blank disarm the one-shot there instead.
         /// </summary>
-        private bool isNavigationAllowed(string uri)
+        private bool isNavigationAllowed(string uri, bool topLevel)
         {
             if (uri == null)
                 return false;
             if (uri == "about:blank")
+            {
+                if (topLevel && htmlLoaded)
+                    expectInlineNavigation = false;
                 return htmlLoaded;
-            if (expectInlineNavigation && uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            }
+            if (topLevel && expectInlineNavigation && uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             {
                 expectInlineNavigation = false;
                 return true;
@@ -566,7 +646,20 @@ namespace WebOverlay
             if (webView == IntPtr.Zero)
                 return;
             pageReady = false;
-            WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_Navigate)(webView, url);
+            checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                webView, WebView2Api.WebView_Navigate)(webView, url), "Navigate");
+        }
+
+        /// <summary>
+        /// A synchronously rejected navigation (invalid URL, inline HTML over
+        /// the 2 MB limit) never produces NavigationCompleted - without this
+        /// log, further sends would just buffer silently forever.
+        /// </summary>
+        private static void checkNavigationResult(int hr, string what)
+        {
+            if (hr != WebView2Api.S_OK)
+                OverlayHost.LogWarning("WebOverlay: " + what + " was rejected, hr=0x" + hr.ToString("X8")
+                    + "; the page will not change and sends stay buffered.");
         }
 
         /// <summary>Shows markup directly, so a mod needs no web server at all.</summary>
@@ -580,17 +673,24 @@ namespace WebOverlay
                 return;
             pageReady = false;
             expectInlineNavigation = true;
-            WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_NavigateToString)(webView, html);
+            checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                webView, WebView2Api.WebView_NavigateToString)(webView, html), "LoadHtml");
         }
 
         public void PostMessageToPage(string message)
         {
             // WebView2 does not deliver messages sent before the page finished
-            // loading, so they wait in a bounded outbox until it has.
+            // loading, so they wait in a bounded outbox until it has - and a
+            // live send only goes out while the mod's own target is showing.
             if (webView == IntPtr.Zero || !pageReady)
             {
                 if (outbox.Count < OutboxLimit)
                     outbox.Add(new KeyValuePair<bool, string>(false, message));
+                return;
+            }
+            if (!currentDocumentIsTarget())
+            {
+                OverlayHost.LogWarning("WebOverlay: dropped a message; the page is not the mod's target document.");
                 return;
             }
             WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_PostWebMessageAsString)(
@@ -603,6 +703,11 @@ namespace WebOverlay
             {
                 if (outbox.Count < OutboxLimit)
                     outbox.Add(new KeyValuePair<bool, string>(true, script));
+                return;
+            }
+            if (!currentDocumentIsTarget())
+            {
+                OverlayHost.LogWarning("WebOverlay: dropped a script; the page is not the mod's target document.");
                 return;
             }
             WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(webView, WebView2Api.WebView_ExecuteScript)(
@@ -704,26 +809,44 @@ namespace WebOverlay
             closed = true;
             bool wasVisible = isVisible;
             isVisible = false;
+            // Each native resource on its own: one failing close must not skip
+            // the rest, and every pointer is nulled regardless so a retry can
+            // never double-release.
             try
             {
                 if (controller != IntPtr.Zero)
                 {
-                    WebView2Api.Method<WebView2Api.NoArgsDelegate>(controller, WebView2Api.Controller_Close)(controller);
-                    Marshal.Release(controller);
+                    IntPtr toClose = controller;
                     controller = IntPtr.Zero;
+                    WebView2Api.Method<WebView2Api.NoArgsDelegate>(toClose, WebView2Api.Controller_Close)(toClose);
+                    Marshal.Release(toClose);
                 }
+            }
+            catch
+            {
+            }
+            try
+            {
                 // get_CoreWebView2 handed out its own reference; Close() above
                 // does not return it.
                 if (webView != IntPtr.Zero)
                 {
-                    Marshal.Release(webView);
+                    IntPtr toRelease = webView;
                     webView = IntPtr.Zero;
+                    Marshal.Release(toRelease);
                 }
+            }
+            catch
+            {
+            }
+            try
+            {
                 if (window != IntPtr.Zero)
                 {
-                    byHandle.Remove(window);
-                    OverlayHost.DestroyWindow(window);
+                    IntPtr toDestroy = window;
                     window = IntPtr.Zero;
+                    byHandle.Remove(toDestroy);
+                    OverlayHost.DestroyWindow(toDestroy);
                 }
             }
             catch

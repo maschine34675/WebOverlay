@@ -1,5 +1,8 @@
 # Vollständiges Code-Review: WebOverlay
 
+> **Historischer Bericht.** Bezieht sich auf einen aelteren Commit; die hier genannten Befunde, Hashes und Laufzeitgrenzen sind inzwischen ueberholt. Massgeblich ist der juengste Review-Bericht im Repository (aktuell `FOLLOW-UP-REVIEW-2026-08-01.md`).
+
+
 **Projekt:** `C:\SPT\Development\WebOverlay`
 **Review-Datum:** 1. August 2026
 **Review-Basis:** `e6213db11fdb5da80d520f2cc42abac684eb6cfd` (`master`)

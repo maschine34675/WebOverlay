@@ -45,7 +45,9 @@ raise the handle's **`Failed`** event; dispose the handle there and use your
 fallback. `Ready` fires once the view is fully set up, and messages or
 scripts sent before the page finished loading wait in a bounded outbox, so
 posting right after `Create` is fine. Events arrive on the overlay thread -
-queue them and touch game state from `Update()`.
+except a latched `Ready`/`Failed` subscribed after the fact, which runs on the
+subscribing thread. Treat handlers as "any thread": queue what they learn and
+touch game state from `Update()`.
 
 When another mod ships alongside this library, reference it with
 `<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your

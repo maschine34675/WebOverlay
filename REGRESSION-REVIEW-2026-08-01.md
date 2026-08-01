@@ -1,5 +1,8 @@
 # Regression-Review: WebOverlay-Fixes
 
+> **Historischer Bericht.** Bezieht sich auf einen aelteren Commit; die hier genannten Befunde, Hashes und Laufzeitgrenzen sind inzwischen ueberholt. Massgeblich ist der juengste Review-Bericht im Repository (aktuell `FOLLOW-UP-REVIEW-2026-08-01.md`).
+
+
 **Datum:** 1. August 2026
 **WebOverlay-Basis:** `d2a0b2abdbf9d87b91c07353f2a6037e5508514f`
 **CraftQueue-Basis:** `f39bc93820a451265f374f3d5f577ce450758522`

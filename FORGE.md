@@ -18,8 +18,10 @@ A shared library that lets BepInEx mods show **web pages in windows over Escape 
 
 ```csharp
 var overlay = WebOverlays.Create("My panel");
-overlay.LoadHtml("<h1>Hello</h1>");            // or Navigate(url)
+if (overlay == null) return;                   // known-unavailable: fall back
+overlay.Failed += () => { ... };               // async failure: dispose + fall back
 overlay.MessageReceived += text => { ... };    // page -> mod
+overlay.LoadHtml("<h1>Hello</h1>");            // or Navigate(url)
 overlay.Post("live value");                    // mod -> page
 ```
 
