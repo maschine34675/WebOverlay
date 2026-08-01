@@ -58,6 +58,7 @@ namespace WebOverlay
         private CreationState state = CreationState.Creating;
         private bool pageReady;
         private bool htmlLoaded;
+        private bool expectInlineNavigation;
         private bool closed;
 
         public OverlayWindow(string title, OverlayOptions options)
@@ -296,7 +297,7 @@ namespace WebOverlay
                 // any navigation this library failed to block, the sender would
                 // be foreign and its messages must not reach the mod.
                 string source = readString(args, WebView2Api.MessageArgs_GetSource);
-                if (!isAllowed(source))
+                if (!isMessageAllowed(source))
                 {
                     OverlayHost.LogWarning("WebOverlay: dropped a message from " + (source ?? "<unknown>") + ".");
                     return WebView2Api.S_OK;
@@ -333,7 +334,7 @@ namespace WebOverlay
                 if (args == IntPtr.Zero)
                     return WebView2Api.S_OK;
                 string uri = readString(args, WebView2Api.NavArgs_GetUri);
-                if (!isAllowed(uri))
+                if (!isNavigationAllowed(uri))
                 {
                     OverlayHost.LogWarning("WebOverlay: blocked navigation to " + (uri ?? "<unknown>") + ".");
                     WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.NavArgs_PutCancel)(args, 1);
@@ -417,16 +418,41 @@ namespace WebOverlay
                 allowedOrigins.Add(origin);
         }
 
-        private bool isAllowed(string uri)
+        /// <summary>
+        /// NavigateToString is implemented by the browser as a navigation to a
+        /// data: URI (measured in game: the filter blocked it and LoadHtml
+        /// pages stayed white). That exact navigation is allowed once per
+        /// LoadHtml via a one-shot; any other data: navigation stays blocked.
+        /// </summary>
+        private bool isNavigationAllowed(string uri)
         {
             if (uri == null)
                 return false;
-            // NavigateToString pages live on about:blank - but only while the
-            // mod itself put inline HTML there. Trusting it unconditionally
-            // would whitelist anything that manages to end up on about:blank.
             if (uri == "about:blank")
                 return htmlLoaded;
+            if (expectInlineNavigation && uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                expectInlineNavigation = false;
+                return true;
+            }
             string origin = originOf(uri);
+            return origin != null && allowedOrigins.Contains(origin);
+        }
+
+        /// <summary>
+        /// Messages from the mod's own inline page report about:blank or its
+        /// data: URI as their source, depending on the runtime. Both are only
+        /// reachable through LoadHtml (navigation there is blocked otherwise),
+        /// so while inline HTML is loaded they are the mod's own content.
+        /// </summary>
+        private bool isMessageAllowed(string source)
+        {
+            if (source == null)
+                return false;
+            if (htmlLoaded
+                && (source == "about:blank" || source.StartsWith("data:", StringComparison.OrdinalIgnoreCase)))
+                return true;
+            string origin = originOf(source);
             return origin != null && allowedOrigins.Contains(origin);
         }
 
@@ -470,6 +496,7 @@ namespace WebOverlay
             pendingUrl = url;
             pendingHtml = null;
             htmlLoaded = false;
+            expectInlineNavigation = false;
             // The mod asked for this page, so its origin becomes trusted.
             allowOrigin(url);
             if (webView == IntPtr.Zero)
@@ -487,6 +514,7 @@ namespace WebOverlay
             if (webView == IntPtr.Zero)
                 return;
             pageReady = false;
+            expectInlineNavigation = true;
             WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_NavigateToString)(webView, html);
         }
 
