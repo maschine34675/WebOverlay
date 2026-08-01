@@ -21,8 +21,23 @@ namespace WebOverlay
         private static readonly Dictionary<IntPtr, OverlayWindow> byHandle =
             new Dictionary<IntPtr, OverlayWindow>();
 
+        private enum CreationState
+        {
+            Creating,
+            Ready,
+            Failed,
+        }
+
         private readonly string title;
         private readonly OverlayOptions options;
+
+        // Only pages from these origins may be navigated to or send messages.
+        // Filled from the mod's own Navigate calls and options.AllowedOrigins;
+        // everything else - redirects, followed links, injected navigation -
+        // is cancelled, so a foreign page never gains the message bridge.
+        private readonly HashSet<string> allowedOrigins = new HashSet<string>(StringComparer.Ordinal);
+        private readonly List<string> outboxMessages = new List<string>();
+        private readonly List<string> outboxScripts = new List<string>();
 
         private IntPtr window;
         private IntPtr controller;
@@ -30,15 +45,28 @@ namespace WebOverlay
         private ComCallback controllerCallback;
         private ComCallback keyCallback;
         private ComCallback messageCallback;
+        private ComCallback navigationStartingCallback;
+        private ComCallback frameNavigationCallback;
+        private ComCallback navigationCompletedCallback;
+        private ComCallback newWindowCallback;
+        private ComCallback permissionCallback;
+        private ComCallback processFailedCallback;
         private string pendingUrl;
         private string pendingHtml;
         private bool desiredVisible = true;
-        private bool hudUnavailable;
+        private volatile bool isVisible;
+        private CreationState state = CreationState.Creating;
+        private bool pageReady;
+        private bool htmlLoaded;
+        private bool closed;
 
         public OverlayWindow(string title, OverlayOptions options)
         {
             this.title = title;
             this.options = options;
+            if (options.AllowedOrigins != null)
+                foreach (string origin in options.AllowedOrigins)
+                    allowOrigin(origin);
         }
 
         private static IntPtr staticWndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
@@ -52,22 +80,63 @@ namespace WebOverlay
             return OverlayHost.DefWindowProc(hwnd, message, wParam, lParam);
         }
 
-        public bool IsVisible { get; private set; }
+        public bool IsVisible => isVisible;
+
+        internal bool DesiredVisible => desiredVisible;
 
         public Action<string> MessageReceived;
         public Action<int> KeyPressed;
         public Action Closed;
+        public Action Ready;
+        public Action Failed;
+
+        /// <summary>
+        /// Marks the overlay broken and tells the consumer, exactly once. The
+        /// window is hidden rather than destroyed - the consumer still owns the
+        /// handle and disposes it.
+        /// </summary>
+        private void fail(string reason)
+        {
+            if (state == CreationState.Failed)
+                return;
+            state = CreationState.Failed;
+            OverlayHost.LogWarning("WebOverlay: " + reason);
+            if (window != IntPtr.Zero && isVisible)
+            {
+                ShowWindow(window, SW_HIDE);
+                isVisible = false;
+            }
+            Failed?.Invoke();
+        }
 
         public bool Create()
         {
-            if (!createWindow())
+            if (OverlayHost.Environment == IntPtr.Zero)
+            {
+                fail("no browser environment; the overlay cannot be created.");
                 return false;
+            }
+
+            if (!createWindow())
+            {
+                fail("the overlay window could not be created.");
+                return false;
+            }
 
             controllerCallback = new ComCallback(WebView2Api.IID_ControllerCompleted, (int result, IntPtr pointer) =>
             {
                 if (result != WebView2Api.S_OK || pointer == IntPtr.Zero)
                 {
-                    OverlayHost.LogWarning("WebOverlay: the browser view failed, hr=0x" + result.ToString("X8") + ".");
+                    fail("the browser view failed, hr=0x" + result.ToString("X8") + ".");
+                    return WebView2Api.S_OK;
+                }
+
+                // The overlay may have been disposed while the browser was
+                // still starting. Storing the controller now would resurrect
+                // a closed overlay and leak the browser - close it instead.
+                if (closed)
+                {
+                    WebView2Api.Method<WebView2Api.NoArgsDelegate>(pointer, WebView2Api.Controller_Close)(pointer);
                     return WebView2Api.S_OK;
                 }
 
@@ -82,7 +151,7 @@ namespace WebOverlay
                 OverlayHost.Environment, window, controllerCallback.Pointer);
             if (hr != WebView2Api.S_OK)
             {
-                OverlayHost.LogWarning("WebOverlay: could not request a browser view, hr=0x" + hr.ToString("X8") + ".");
+                fail("could not request a browser view, hr=0x" + hr.ToString("X8") + ".");
                 return false;
             }
 
@@ -95,7 +164,7 @@ namespace WebOverlay
                 controller, out webView);
             if (webView == IntPtr.Zero)
             {
-                OverlayHost.LogWarning("WebOverlay: the browser view could not be obtained.");
+                fail("the browser view could not be obtained.");
                 return;
             }
 
@@ -105,13 +174,16 @@ namespace WebOverlay
                 // Without a transparent background the "HUD" would be a white
                 // click-through sheet over the whole game. Staying invisible is
                 // the only safe failure.
-                hudUnavailable = true;
-                OverlayHost.LogWarning("WebOverlay: the HUD stays hidden because transparency is unavailable.");
+                fail("the HUD stays hidden because transparency is unavailable.");
                 return;
             }
             subscribeToKeys();
             subscribeToMessages();
+            subscribeToNavigation();
             fitToClientArea();
+
+            state = CreationState.Ready;
+            Ready?.Invoke();
 
             if (pendingHtml != null)
                 LoadHtml(pendingHtml);
@@ -135,11 +207,46 @@ namespace WebOverlay
             {
                 // Messaging is what turns a page into a control surface, so it is
                 // on by default; the browser chrome is off because this should
-                // not look like a browser.
+                // not look like a browser. Script dialogs are off because a
+                // page-triggered alert() would freeze the overlay UI.
                 setSetting(settings, WebView2Api.Settings_PutIsWebMessageEnabled, true);
                 setSetting(settings, WebView2Api.Settings_PutIsStatusBarEnabled, false);
                 setSetting(settings, WebView2Api.Settings_PutAreDefaultContextMenusEnabled, options.ContextMenu);
                 setSetting(settings, WebView2Api.Settings_PutAreDevToolsEnabled, options.DevTools);
+                setSetting(settings, WebView2Api.Settings_PutAreDefaultScriptDialogsEnabled, false);
+
+                // Browser shortcuts (print, find, refresh) make an overlay feel
+                // like a browser - off unless a developer wants F5/F12. The
+                // password and form-fill stores are shared across every mod
+                // using this library, so they stay off entirely. All three live
+                // on versioned settings interfaces: QI, absolute slot, and old
+                // runtimes simply keep their defaults.
+                Guid settings3 = WebView2Api.IID_Settings3;
+                if (Marshal.QueryInterface(settings, ref settings3, out IntPtr s3) == WebView2Api.S_OK && s3 != IntPtr.Zero)
+                {
+                    try
+                    {
+                        setSetting(s3, WebView2Api.Settings3_PutAreBrowserAcceleratorKeysEnabled, options.DevTools);
+                    }
+                    finally
+                    {
+                        Marshal.Release(s3);
+                    }
+                }
+
+                Guid settings4 = WebView2Api.IID_Settings4;
+                if (Marshal.QueryInterface(settings, ref settings4, out IntPtr s4) == WebView2Api.S_OK && s4 != IntPtr.Zero)
+                {
+                    try
+                    {
+                        setSetting(s4, WebView2Api.Settings4_PutIsPasswordAutosaveEnabled, false);
+                        setSetting(s4, WebView2Api.Settings4_PutIsGeneralAutofillEnabled, false);
+                    }
+                    finally
+                    {
+                        Marshal.Release(s4);
+                    }
+                }
             }
             finally
             {
@@ -166,7 +273,11 @@ namespace WebOverlay
 
                 WebView2Api.Method<WebView2Api.GetUIntDelegate>(args, WebView2Api.KeyArgs_GetVirtualKey)(
                     args, out uint key);
-                onKey((int)key);
+                bool consumed = onKey((int)key);
+                // A consumed close key must not also reach the page or trigger
+                // a browser accelerator - and auto-repeat would reopen chaos.
+                if (consumed)
+                    WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.KeyArgs_PutHandled)(args, 1);
                 return WebView2Api.S_OK;
             });
 
@@ -180,6 +291,16 @@ namespace WebOverlay
             {
                 if (args == IntPtr.Zero || MessageReceived == null)
                     return WebView2Api.S_OK;
+
+                // The bridge only trusts pages the mod itself put there; after
+                // any navigation this library failed to block, the sender would
+                // be foreign and its messages must not reach the mod.
+                string source = readString(args, WebView2Api.MessageArgs_GetSource);
+                if (!isAllowed(source))
+                {
+                    OverlayHost.LogWarning("WebOverlay: dropped a message from " + (source ?? "<unknown>") + ".");
+                    return WebView2Api.S_OK;
+                }
 
                 WebView2Api.Method<WebView2Api.GetPointerDelegate>(
                     args, WebView2Api.MessageArgs_TryGetWebMessageAsString)(args, out IntPtr text);
@@ -196,23 +317,164 @@ namespace WebOverlay
                 webView, messageCallback.Pointer, out _);
         }
 
-        private void onKey(int virtualKey)
+        /// <summary>
+        /// The security boundary of the overlay: navigation is refused unless
+        /// the target origin was put on the list by the mod itself, popups are
+        /// suppressed, permission prompts (camera, location, ...) are denied,
+        /// and a dead browser process is reported instead of silently showing
+        /// a corpse.
+        /// </summary>
+        private void subscribeToNavigation()
+        {
+            // Top-level and iframe navigation run through the same filter -
+            // an unfiltered iframe would still load a foreign page.
+            Func<IntPtr, IntPtr, int> filterNavigation = (IntPtr sender, IntPtr args) =>
+            {
+                if (args == IntPtr.Zero)
+                    return WebView2Api.S_OK;
+                string uri = readString(args, WebView2Api.NavArgs_GetUri);
+                if (!isAllowed(uri))
+                {
+                    OverlayHost.LogWarning("WebOverlay: blocked navigation to " + (uri ?? "<unknown>") + ".");
+                    WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.NavArgs_PutCancel)(args, 1);
+                }
+                return WebView2Api.S_OK;
+            };
+
+            navigationStartingCallback = new ComCallback(WebView2Api.IID_NavigationStarting, filterNavigation);
+            WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddNavigationStarting)(
+                webView, navigationStartingCallback.Pointer, out _);
+
+            frameNavigationCallback = new ComCallback(WebView2Api.IID_NavigationStarting, filterNavigation);
+            WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddFrameNavigationStarting)(
+                webView, frameNavigationCallback.Pointer, out _);
+
+            navigationCompletedCallback = new ComCallback(WebView2Api.IID_NavigationCompleted, (IntPtr sender, IntPtr args) =>
+            {
+                if (args == IntPtr.Zero)
+                    return WebView2Api.S_OK;
+                WebView2Api.Method<WebView2Api.GetIntDelegate>(args, WebView2Api.NavCompletedArgs_GetIsSuccess)(
+                    args, out int success);
+                if (success != 0)
+                {
+                    pageReady = true;
+                    flushOutbox();
+                }
+                return WebView2Api.S_OK;
+            });
+            WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddNavigationCompleted)(
+                webView, navigationCompletedCallback.Pointer, out _);
+
+            newWindowCallback = new ComCallback(WebView2Api.IID_NewWindowRequested, (IntPtr sender, IntPtr args) =>
+            {
+                if (args != IntPtr.Zero)
+                    WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.NewWindowArgs_PutHandled)(args, 1);
+                return WebView2Api.S_OK;
+            });
+            WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddNewWindowRequested)(
+                webView, newWindowCallback.Pointer, out _);
+
+            permissionCallback = new ComCallback(WebView2Api.IID_PermissionRequested, (IntPtr sender, IntPtr args) =>
+            {
+                if (args != IntPtr.Zero)
+                    WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.PermissionArgs_PutState)(
+                        args, WebView2Api.PermissionStateDeny);
+                return WebView2Api.S_OK;
+            });
+            WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddPermissionRequested)(
+                webView, permissionCallback.Pointer, out _);
+
+            processFailedCallback = new ComCallback(WebView2Api.IID_ProcessFailed, (IntPtr sender, IntPtr args) =>
+            {
+                int kind = -1;
+                if (args != IntPtr.Zero)
+                    WebView2Api.Method<WebView2Api.GetIntDelegate>(args, WebView2Api.ProcessFailedArgs_GetKind)(
+                        args, out kind);
+                if (kind == WebView2Api.ProcessFailedKindBrowserExited)
+                    fail("the browser process exited; the overlay is dead.");
+                else
+                    OverlayHost.LogWarning("WebOverlay: a browser subprocess failed (kind " + kind + ").");
+                return WebView2Api.S_OK;
+            });
+            WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddProcessFailed)(
+                webView, processFailedCallback.Pointer, out _);
+        }
+
+        private static string readString(IntPtr comObject, int slot)
+        {
+            WebView2Api.Method<WebView2Api.GetPointerDelegate>(comObject, slot)(comObject, out IntPtr text);
+            if (text == IntPtr.Zero)
+                return null;
+            string value = Marshal.PtrToStringUni(text);
+            Marshal.FreeCoTaskMem(text);
+            return value;
+        }
+
+        private void allowOrigin(string uriOrOrigin)
+        {
+            string origin = originOf(uriOrOrigin);
+            if (origin != null)
+                allowedOrigins.Add(origin);
+        }
+
+        private bool isAllowed(string uri)
+        {
+            if (uri == null)
+                return false;
+            // NavigateToString pages live on about:blank - but only while the
+            // mod itself put inline HTML there. Trusting it unconditionally
+            // would whitelist anything that manages to end up on about:blank.
+            if (uri == "about:blank")
+                return htmlLoaded;
+            string origin = originOf(uri);
+            return origin != null && allowedOrigins.Contains(origin);
+        }
+
+        /// <summary>
+        /// Only http/https with a real host produce an origin. Everything else
+        /// (data:, javascript:, file:, about:) returns null and is therefore
+        /// never allowed - authority-less schemes would otherwise all collapse
+        /// onto the same empty string and trust each other.
+        /// </summary>
+        private static string originOf(string uri)
+        {
+            try
+            {
+                var parsed = new Uri(uri, UriKind.Absolute);
+                if (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps)
+                    return null;
+                if (string.IsNullOrEmpty(parsed.Host))
+                    return null;
+                return parsed.GetLeftPart(UriPartial.Authority).ToLowerInvariant();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private bool onKey(int virtualKey)
         {
             if (options.CloseKeys != null && Array.IndexOf(options.CloseKeys, virtualKey) >= 0)
             {
                 Hide();
-                return;
+                return true;
             }
 
             KeyPressed?.Invoke(virtualKey);
+            return false;
         }
 
         public void Navigate(string url)
         {
             pendingUrl = url;
             pendingHtml = null;
+            htmlLoaded = false;
+            // The mod asked for this page, so its origin becomes trusted.
+            allowOrigin(url);
             if (webView == IntPtr.Zero)
                 return;
+            pageReady = false;
             WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_Navigate)(webView, url);
         }
 
@@ -221,25 +483,55 @@ namespace WebOverlay
         {
             pendingHtml = html;
             pendingUrl = null;
+            htmlLoaded = true;
             if (webView == IntPtr.Zero)
                 return;
+            pageReady = false;
             WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_NavigateToString)(webView, html);
         }
 
         public void PostMessageToPage(string message)
         {
-            if (webView == IntPtr.Zero)
+            // WebView2 does not deliver messages sent before the page finished
+            // loading, so they wait in a bounded outbox until it has.
+            if (webView == IntPtr.Zero || !pageReady)
+            {
+                if (outboxMessages.Count < OutboxLimit)
+                    outboxMessages.Add(message);
                 return;
+            }
             WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_PostWebMessageAsString)(
                 webView, message);
         }
 
         public void ExecuteScript(string script)
         {
-            if (webView == IntPtr.Zero)
+            if (webView == IntPtr.Zero || !pageReady)
+            {
+                if (outboxScripts.Count < OutboxLimit)
+                    outboxScripts.Add(script);
                 return;
+            }
             WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(webView, WebView2Api.WebView_ExecuteScript)(
                 webView, script, IntPtr.Zero);
+        }
+
+        private void flushOutbox()
+        {
+            if (outboxMessages.Count > 0)
+            {
+                var messages = outboxMessages.ToArray();
+                outboxMessages.Clear();
+                foreach (string message in messages)
+                    PostMessageToPage(message);
+            }
+            if (outboxScripts.Count > 0)
+            {
+                var scripts = outboxScripts.ToArray();
+                outboxScripts.Clear();
+                foreach (string script in scripts)
+                    ExecuteScript(script);
+            }
         }
 
         public void OpenDevTools()
@@ -252,7 +544,7 @@ namespace WebOverlay
         public void Show()
         {
             desiredVisible = true;
-            if (window == IntPtr.Zero || hudUnavailable)
+            if (window == IntPtr.Zero || state == CreationState.Failed)
                 return;
             positionOverGame();
             fitToClientArea();
@@ -261,7 +553,9 @@ namespace WebOverlay
             ShowWindow(window, options.Transparent ? SW_SHOWNOACTIVATE : SW_SHOW);
             if (!options.Transparent)
                 SetForegroundWindow(window);
-            IsVisible = true;
+            else
+                SetTimer(window, TrackTimerId, TrackIntervalMilliseconds, IntPtr.Zero);
+            isVisible = true;
         }
 
         public void Hide()
@@ -269,9 +563,11 @@ namespace WebOverlay
             desiredVisible = false;
             if (window == IntPtr.Zero)
                 return;
+            if (options.Transparent)
+                KillTimer(window, TrackTimerId);
             setControllerVisible(false);
             ShowWindow(window, SW_HIDE);
-            IsVisible = false;
+            isVisible = false;
             // Hand the keyboard back to the game, not to whatever sits behind.
             // A HUD never had it, so there is nothing to hand back.
             if (!options.Transparent
@@ -280,8 +576,44 @@ namespace WebOverlay
             Closed?.Invoke();
         }
 
+        /// <summary>
+        /// A HUD is glued to the game picture, but the game window can move,
+        /// change monitor or resolution. A cheap half-second check keeps the
+        /// canvas aligned without hooking the game's message loop.
+        /// </summary>
+        private void followGameWindow()
+        {
+            if (!isVisible || window == IntPtr.Zero)
+                return;
+            getBounds(out int x, out int y, out int width, out int height);
+            if (!GetWindowRect(window, out WebView2Api.RECT current))
+                return;
+            if (current.left == x && current.top == y
+                && current.right - current.left == width && current.bottom - current.top == height)
+                return;
+
+            SetWindowPos(window, IntPtr.Zero, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+            fitToClientArea();
+            notifyPositionChanged();
+        }
+
+        /// <summary>
+        /// WebView2 places dialogs, tooltips and accessibility popups relative
+        /// to remembered screen coordinates; it asks to be told when they move.
+        /// </summary>
+        private void notifyPositionChanged()
+        {
+            if (controller == IntPtr.Zero)
+                return;
+            WebView2Api.Method<WebView2Api.NoArgsDelegate>(
+                controller, WebView2Api.Controller_NotifyParentWindowPositionChanged)(controller);
+        }
+
         public void CloseFromHost()
         {
+            closed = true;
+            bool wasVisible = isVisible;
+            isVisible = false;
             try
             {
                 if (controller != IntPtr.Zero)
@@ -290,7 +622,13 @@ namespace WebOverlay
                     Marshal.Release(controller);
                     controller = IntPtr.Zero;
                 }
-                webView = IntPtr.Zero;
+                // get_CoreWebView2 handed out its own reference; Close() above
+                // does not return it.
+                if (webView != IntPtr.Zero)
+                {
+                    Marshal.Release(webView);
+                    webView = IntPtr.Zero;
+                }
                 if (window != IntPtr.Zero)
                 {
                     byHandle.Remove(window);
@@ -305,7 +643,15 @@ namespace WebOverlay
             controllerCallback?.Dispose();
             keyCallback?.Dispose();
             messageCallback?.Dispose();
+            navigationStartingCallback?.Dispose();
+            frameNavigationCallback?.Dispose();
+            navigationCompletedCallback?.Dispose();
+            newWindowCallback?.Dispose();
+            permissionCallback?.Dispose();
+            processFailedCallback?.Dispose();
             OverlayHost.Unregister(this);
+            if (wasVisible)
+                Closed?.Invoke();
         }
 
         private bool createWindow()
@@ -317,7 +663,16 @@ namespace WebOverlay
             // creating one per window would leak a GDI handle each time.
             string className = options.Transparent ? HudWindowClassName : WindowClassName;
             if (options.Transparent && hudBrush == IntPtr.Zero)
+            {
                 hudBrush = CreateSolidBrush(TransparencyKey);
+                if (hudBrush == IntPtr.Zero)
+                {
+                    // Without the key brush the chroma key has nothing to key
+                    // out - the HUD would be an opaque sheet. Fail instead.
+                    OverlayHost.LogWarning("WebOverlay: the HUD key brush could not be created.");
+                    return false;
+                }
+            }
             var windowClass = new OverlayHost.WNDCLASSEX
             {
                 cbSize = Marshal.SizeOf(typeof(OverlayHost.WNDCLASSEX)),
@@ -384,7 +739,13 @@ namespace WebOverlay
                 uint flags = LWA_COLORKEY;
                 if (alpha < byte.MaxValue)
                     flags |= LWA_ALPHA;
-                SetLayeredWindowAttributes(window, TransparencyKey, alpha, flags);
+                if (!SetLayeredWindowAttributes(window, TransparencyKey, alpha, flags))
+                {
+                    // Same reasoning as the brush: no chroma key, no HUD.
+                    OverlayHost.LogWarning("WebOverlay: the HUD chroma key could not be applied, win32 error "
+                        + Marshal.GetLastWin32Error() + ".");
+                    return false;
+                }
             }
             else if (alpha < byte.MaxValue)
             {
@@ -475,6 +836,16 @@ namespace WebOverlay
                     case WM_SIZE:
                         fitToClientArea();
                         return IntPtr.Zero;
+                    case WM_MOVE:
+                        notifyPositionChanged();
+                        break;
+                    case WM_TIMER:
+                        if (wParam.ToInt64() == TrackTimerId)
+                        {
+                            followGameWindow();
+                            return IntPtr.Zero;
+                        }
+                        break;
                     case WM_KEYDOWN:
                     case WM_SYSKEYDOWN:
                         // Reached when the frame itself holds the keyboard, for
@@ -601,9 +972,14 @@ namespace WebOverlay
         private const uint LWA_ALPHA = 0x2;
         private const uint WM_CLOSE = 0x0010;
         private const uint WM_SIZE = 0x0005;
+        private const uint WM_MOVE = 0x0003;
+        private const uint WM_TIMER = 0x0113;
         private const uint WM_KEYDOWN = 0x0100;
         private const uint WM_SYSKEYDOWN = 0x0104;
         private const uint WM_NCDESTROY = 0x0082;
+        private const int TrackTimerId = 1;
+        private const uint TrackIntervalMilliseconds = 500;
+        private const int OutboxLimit = 100;
         private const uint SWP_NOZORDER = 0x0004;
         private const uint SWP_NOACTIVATE = 0x0010;
         private const int SM_CXSCREEN = 0;
@@ -642,6 +1018,15 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int index);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetTimer(IntPtr hwnd, int id, uint interval, IntPtr callback);
+
+        [DllImport("user32.dll")]
+        private static extern bool KillTimer(IntPtr hwnd, int id);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hwnd, out WebView2Api.RECT rect);
 
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateSolidBrush(uint color);

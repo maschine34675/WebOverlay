@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -34,8 +35,14 @@ namespace WebOverlay.Interop
         private readonly AddRefDelegate release;
         private readonly Delegate invoke;
 
-        private readonly IntPtr vtable;
+        // Instances that outlive their Dispose because native code still held
+        // them. Rooting them here keeps the delegates alive too - a leaked
+        // vtable whose thunks got collected would crash just the same.
+        private static readonly List<ComCallback> leaked = new List<ComCallback>();
+
+        private IntPtr vtable;
         private int references = 1;
+        private int disposed;
 
         /// <summary>Completion handler shape: Invoke(HRESULT, result).</summary>
         public ComCallback(Guid interfaceId, Func<int, IntPtr, int> handler)
@@ -123,15 +130,36 @@ namespace WebOverlay.Interop
             catch { return S_OK; }
         }
 
+        /// <summary>
+        /// Releases the managed owner's reference. The memory is freed only
+        /// when the native side holds no reference either - a completion that
+        /// never arrived, or an event source that was not closed, still owns
+        /// the pointer, and freeing memory native code can call is a process
+        /// crash. Such instances are deliberately leaked (and rooted, so their
+        /// delegates survive). Idempotent.
+        /// </summary>
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+                return;
+
+            if (Interlocked.Decrement(ref references) > 0)
+            {
+                lock (leaked)
+                    leaked.Add(this);
+                return;
+            }
+
             if (Pointer != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(Pointer);
                 Pointer = IntPtr.Zero;
             }
             if (vtable != IntPtr.Zero)
+            {
                 Marshal.FreeHGlobal(vtable);
+                vtable = IntPtr.Zero;
+            }
         }
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]

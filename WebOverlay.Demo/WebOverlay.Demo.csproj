@@ -9,9 +9,6 @@
     <RootNamespace>WebOverlay</RootNamespace>
     <AssemblyName>Anvil-WebOverlayDemo</AssemblyName>
     <Company>https://github.com/maschine34675/WebOverlay</Company>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0</AssemblyVersion>
-    <FileVersion>1.0.0</FileVersion>
     <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
@@ -47,6 +44,7 @@
 
   <ItemGroup>
     <Compile Include="DemoPlugin.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

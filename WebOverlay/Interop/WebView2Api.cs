@@ -25,6 +25,13 @@ namespace WebOverlay.Interop
         public static readonly Guid IID_AcceleratorKeyPressed = new Guid("b29c7e28-fa79-41a8-8e44-65811c76dcb2");
         public static readonly Guid IID_WebMessageReceived = new Guid("57213f19-00e6-49fa-8e07-898ea01ecbd2");
         public static readonly Guid IID_Controller2 = new Guid("c979903e-d4ca-4228-92eb-47ee3fa96eab");
+        public static readonly Guid IID_NavigationStarting = new Guid("9adbe429-f36d-432b-9ddc-f8881fbd76e3");
+        public static readonly Guid IID_NavigationCompleted = new Guid("d33a35bf-1c49-4f98-93ab-006e0533fe1c");
+        public static readonly Guid IID_NewWindowRequested = new Guid("d4c185fe-c81c-4989-97af-2d3fa7ab5651");
+        public static readonly Guid IID_PermissionRequested = new Guid("15e1c6a3-c72a-4df3-91d7-d097fbec6bfd");
+        public static readonly Guid IID_ProcessFailed = new Guid("79e0aea4-990b-42d9-aa1d-0fcc2e5bc7f1");
+        public static readonly Guid IID_Settings3 = new Guid("fdb5ab74-af33-4854-84f0-0a631deb5eba");
+        public static readonly Guid IID_Settings4 = new Guid("cb56846c-4168-4d53-b04f-03b6d6796ff2");
 
         // ICoreWebView2Environment
         public const int Environment_CreateController = 3;
@@ -33,6 +40,7 @@ namespace WebOverlay.Interop
         public const int Controller_PutIsVisible = 4;
         public const int Controller_PutBounds = 6;
         public const int Controller_AddAcceleratorKeyPressed = 19;
+        public const int Controller_NotifyParentWindowPositionChanged = 23;
         public const int Controller_Close = 24;
         public const int Controller_GetCoreWebView2 = 25;
 
@@ -45,24 +53,61 @@ namespace WebOverlay.Interop
         public const int WebView_GetSettings = 3;
         public const int WebView_Navigate = 5;
         public const int WebView_NavigateToString = 6;
+        public const int WebView_AddNavigationStarting = 7;
+        public const int WebView_AddNavigationCompleted = 15;
+        // Anchored between the verified NavigationCompleted pair (15/16) and
+        // ScriptDialogOpening (21); same handler and args as NavigationStarting.
+        public const int WebView_AddFrameNavigationStarting = 17;
+        public const int WebView_AddPermissionRequested = 23;
+        public const int WebView_AddProcessFailed = 25;
         public const int WebView_ExecuteScript = 29;
         public const int WebView_PostWebMessageAsJson = 32;
         public const int WebView_PostWebMessageAsString = 33;
         public const int WebView_AddWebMessageReceived = 34;
+        public const int WebView_AddNewWindowRequested = 44;
         public const int WebView_OpenDevToolsWindow = 51;
 
         // ICoreWebView2Settings
+        public const int Settings_PutAreDefaultScriptDialogsEnabled = 8;
         public const int Settings_PutIsWebMessageEnabled = 6;
         public const int Settings_PutIsStatusBarEnabled = 10;
         public const int Settings_PutAreDevToolsEnabled = 12;
         public const int Settings_PutAreDefaultContextMenusEnabled = 14;
 
+        // ICoreWebView2Settings3/4 - only after QueryInterface, see the header
+        // rule above. Slots counted through Settings v1 (3-20) and Settings2's
+        // UserAgent pair (21-22), confirmed against the C-style vtbl listing.
+        public const int Settings3_PutAreBrowserAcceleratorKeysEnabled = 24;
+        public const int Settings4_PutIsPasswordAutosaveEnabled = 26;
+        public const int Settings4_PutIsGeneralAutofillEnabled = 28;
+
         // ICoreWebView2AcceleratorKeyPressedEventArgs
         public const int KeyArgs_GetKeyEventKind = 3;
         public const int KeyArgs_GetVirtualKey = 4;
+        public const int KeyArgs_PutHandled = 8;
 
         // ICoreWebView2WebMessageReceivedEventArgs
+        public const int MessageArgs_GetSource = 3;
         public const int MessageArgs_TryGetWebMessageAsString = 5;
+
+        // ICoreWebView2NavigationStartingEventArgs
+        public const int NavArgs_GetUri = 3;
+        public const int NavArgs_PutCancel = 8;
+
+        // ICoreWebView2NavigationCompletedEventArgs
+        public const int NavCompletedArgs_GetIsSuccess = 3;
+
+        // ICoreWebView2NewWindowRequestedEventArgs
+        public const int NewWindowArgs_PutHandled = 6;
+
+        // ICoreWebView2PermissionRequestedEventArgs
+        public const int PermissionArgs_PutState = 7;
+        public const int PermissionStateDeny = 2;
+
+        // ICoreWebView2ProcessFailedEventArgs
+        public const int ProcessFailedArgs_GetKind = 3;
+        public const int ProcessFailedKindBrowserExited = 0;
+        public const int ProcessFailedKindRenderExited = 1;
 
         public const int KeyEventKindKeyDown = 0;
         public const int KeyEventKindSystemKeyDown = 2;

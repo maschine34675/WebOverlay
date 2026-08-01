@@ -6,18 +6,21 @@ namespace WebOverlay
     /// Shows web pages in windows over Escape From Tarkov, so a mod can build a
     /// user interface in HTML instead of an immediate-mode toolkit.
     ///
-    /// Everything is safe to call from Unity's thread; the work is handed to the
-    /// overlay's own thread internally. Nothing here throws: when the overlay
-    /// cannot be used - typically because no WebView2 runtime is installed -
-    /// <see cref="IsAvailable"/> is false and <see cref="Create"/> returns null,
-    /// so a mod can fall back to its own behaviour.
+    /// Everything is safe to call from Unity's thread and nothing blocks it:
+    /// the browser starts asynchronously on its own thread. Nothing here
+    /// throws: when overlays are already known to be unusable,
+    /// <see cref="Create"/> returns null; failures that surface later (no
+    /// WebView2 runtime, the browser will not start) raise the handle's
+    /// <see cref="IWebOverlay.Failed"/> event - dispose the handle there and
+    /// fall back.
     /// </summary>
     public static class WebOverlays
     {
         /// <summary>
-        /// Whether overlays can be shown at all. Starts the browser on first
-        /// call, which takes a moment, so call it when the player asks for an
-        /// overlay rather than during start-up.
+        /// Kicks off the browser start and reports whether overlays are still
+        /// plausible. False only when a previous start already failed; a true
+        /// does not yet guarantee success - that is what
+        /// <see cref="IWebOverlay.Failed"/> is for.
         /// </summary>
         public static bool IsAvailable => OverlayHost.EnsureStarted();
 
@@ -54,6 +57,7 @@ namespace WebOverlay
                 DevTools = options.DevTools,
                 Opacity = options.Opacity,
                 Transparent = options.Transparent,
+                AllowedOrigins = options.AllowedOrigins == null ? null : (string[])options.AllowedOrigins.Clone(),
             };
         }
     }
@@ -110,6 +114,15 @@ namespace WebOverlay
         /// such pixels can vanish).
         /// </summary>
         public bool Transparent { get; set; }
+
+        /// <summary>
+        /// Extra origins ("https://example.com") the overlay may navigate to
+        /// and receive messages from. The origin of every URL passed to
+        /// <see cref="IWebOverlay.Navigate"/> is trusted automatically; all
+        /// other navigation - redirects, followed links - is blocked, so a
+        /// foreign page never reaches the message bridge.
+        /// </summary>
+        public string[] AllowedOrigins { get; set; }
     }
 
     /// <summary>A single overlay window.</summary>
@@ -151,12 +164,26 @@ namespace WebOverlay
 
         /// <summary>Raised whenever the overlay is hidden or closed.</summary>
         event Action Closed;
+
+        /// <summary>
+        /// Raised once the browser view is fully set up. Like every event here
+        /// it runs on the overlay thread.
+        /// </summary>
+        event Action Ready;
+
+        /// <summary>
+        /// Raised when the overlay cannot work - browser start failed, the
+        /// browser process died, HUD transparency unavailable. The overlay
+        /// stays hidden; dispose the handle and use a fallback. Runs on the
+        /// overlay thread.
+        /// </summary>
+        event Action Failed;
     }
 
     internal sealed class OverlayHandle : IWebOverlay
     {
         private readonly OverlayWindow window;
-        private bool disposed;
+        private int disposed;
 
         public OverlayHandle(string title, OverlayOptions options)
         {
@@ -164,11 +191,58 @@ namespace WebOverlay
             window.MessageReceived = message => MessageReceived?.Invoke(message);
             window.KeyPressed = key => KeyPressed?.Invoke(key);
             window.Closed = () => Closed?.Invoke();
+            window.Ready = () => fire(ref readyHandlers, ref readyAlready);
+            window.Failed = () => fire(ref failedHandlers, ref failedAlready);
         }
 
         public event Action<string> MessageReceived;
         public event Action<int> KeyPressed;
         public event Action Closed;
+
+        // Ready and Failed are latched: creation runs on the overlay thread and
+        // can finish - or fail - before the consumer had a chance to subscribe.
+        // A handler added after the fact runs immediately on the adding thread;
+        // either way each handler runs exactly once.
+        private readonly object stateSync = new object();
+        private Action readyHandlers;
+        private Action failedHandlers;
+        private bool readyAlready;
+        private bool failedAlready;
+
+        public event Action Ready
+        {
+            add { addLatched(ref readyHandlers, ref readyAlready, value); }
+            remove { lock (stateSync) readyHandlers -= value; }
+        }
+
+        public event Action Failed
+        {
+            add { addLatched(ref failedHandlers, ref failedAlready, value); }
+            remove { lock (stateSync) failedHandlers -= value; }
+        }
+
+        private void addLatched(ref Action handlers, ref bool already, Action value)
+        {
+            bool fireNow;
+            lock (stateSync)
+            {
+                handlers += value;
+                fireNow = already;
+            }
+            if (fireNow)
+                value();
+        }
+
+        private void fire(ref Action handlers, ref bool already)
+        {
+            Action snapshot;
+            lock (stateSync)
+            {
+                already = true;
+                snapshot = handlers;
+            }
+            snapshot?.Invoke();
+        }
 
         public bool IsVisible => window.IsVisible;
 
@@ -185,7 +259,10 @@ namespace WebOverlay
 
         public void Toggle() => post(() =>
         {
-            if (window.IsVisible)
+            // Against the desired state, not the visible one: while the browser
+            // is still starting, IsVisible is false although the overlay is
+            // about to show - a toggle in that gap means "keep it closed".
+            if (window.DesiredVisible)
                 window.Hide();
             else
                 window.Show();
@@ -203,15 +280,17 @@ namespace WebOverlay
 
         public void Dispose()
         {
-            if (disposed)
+            // Atomic: the consumer's Failed handler (overlay thread) and a
+            // game-shutdown Dispose (Unity thread) can race, and a double
+            // CloseFromHost would double-free native resources.
+            if (System.Threading.Interlocked.Exchange(ref disposed, 1) != 0)
                 return;
-            disposed = true;
             OverlayHost.Post(() => window.CloseFromHost());
         }
 
         private void post(Action action)
         {
-            if (disposed)
+            if (disposed != 0)
                 return;
             OverlayHost.Post(action);
         }

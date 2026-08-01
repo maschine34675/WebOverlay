@@ -31,8 +31,9 @@ namespace WebOverlay
         private static ComCallback environmentCallback;
         private static WndProcDelegate dispatcherProc;
         private static volatile bool running;
+        private static volatile bool stopping;
         private static volatile bool startFailed;
-        private static ManualResetEventSlim environmentReady;
+        private static volatile bool acceptingWork;
 
         internal static Action<string> LogInfo = _ => { };
         internal static Action<string> LogWarning = _ => { };
@@ -42,43 +43,39 @@ namespace WebOverlay
         internal static IntPtr GameWindow { get; set; }
 
         /// <summary>
-        /// Starts the thread and the browser environment on first use. Blocks
-        /// the caller until the environment is up, because a mod calling
-        /// Create() wants a usable overlay back.
+        /// Starts the thread and the browser environment on first use, without
+        /// waiting for either: Unity's thread must never block on a browser
+        /// start that can take many seconds. Work posted meanwhile is queued
+        /// and runs once the environment attempt has finished; whether it
+        /// succeeded surfaces through each overlay's Failed event.
         /// </summary>
         internal static bool EnsureStarted()
         {
             lock (startSync)
             {
-                if (startFailed)
+                if (startFailed || stopping)
                     return false;
-                if (running && environment != IntPtr.Zero)
-                    return true;
 
                 if (thread == null)
                 {
-                    environmentReady = new ManualResetEventSlim(false);
                     thread = new Thread(run) { IsBackground = true, Name = "WebOverlay" };
                     thread.SetApartmentState(ApartmentState.STA);
                     thread.Start();
                 }
             }
 
-            // Chromium needs a moment on a cold start.
-            if (!environmentReady.Wait(TimeSpan.FromSeconds(30)))
-            {
-                LogWarning("WebOverlay: the browser environment did not start within 30 seconds.");
-                startFailed = true;
-                return false;
-            }
-
-            return environment != IntPtr.Zero;
+            return true;
         }
 
         internal static void Post(Action action)
         {
+            if (stopping)
+                return;
             work.Enqueue(action);
-            if (dispatcherWindow != IntPtr.Zero)
+            // Before the environment attempt finishes the pump already runs (it
+            // must, for the completion callback), so the dispatcher must not
+            // drain overlay work yet - the queue holds it until then.
+            if (dispatcherWindow != IntPtr.Zero && acceptingWork)
                 PostMessage(dispatcherWindow, WM_APP_WORK, IntPtr.Zero, IntPtr.Zero);
         }
 
@@ -98,6 +95,7 @@ namespace WebOverlay
 
         internal static void Shutdown()
         {
+            stopping = true;
             running = false;
             if (dispatcherWindow != IntPtr.Zero)
                 PostMessage(dispatcherWindow, WM_APP_WORK, IntPtr.Zero, IntPtr.Zero);
@@ -106,20 +104,32 @@ namespace WebOverlay
         private static void run()
         {
             running = true;
+            // Shutdown sets stopping before running; whichever way the writes
+            // interleave, either this check exits or the loop condition does.
+            if (stopping)
+                return;
             try
             {
-                if (!createDispatcherWindow() || !loadRuntime() || !createEnvironment())
-                {
+                bool started = createDispatcherWindow() && loadRuntime() && createEnvironment();
+                if (!started)
                     startFailed = true;
-                    environmentReady.Set();
-                    return;
-                }
 
-                while (running)
+                // Drain even on failure: queued window creations then fail fast
+                // and report through their Failed events instead of sitting in
+                // the queue forever.
+                acceptingWork = true;
+                drainWork();
+
+                if (!started)
+                    return;
+
+                // GetMessage blocks until something arrives; Post() and
+                // Shutdown() both wake it with WM_APP_WORK. No idle polling.
+                while (running && GetMessage(out MSG message, IntPtr.Zero, 0, 0) > 0)
                 {
+                    TranslateMessage(ref message);
+                    DispatchMessage(ref message);
                     drainWork();
-                    pump();
-                    Thread.Sleep(5);
                 }
             }
             catch (ThreadAbortException)
@@ -133,7 +143,6 @@ namespace WebOverlay
             }
             finally
             {
-                environmentReady?.Set();
                 closeEverything();
             }
         }
@@ -202,7 +211,6 @@ namespace WebOverlay
                     LogWarning("WebOverlay: the browser environment failed, hr=0x" + result.ToString("X8") + ".");
                 }
 
-                environmentReady.Set();
                 return WebView2Api.S_OK;
             });
 
@@ -214,14 +222,17 @@ namespace WebOverlay
                 return false;
             }
 
-            // The completion may arrive re-entrantly or through the pump.
+            // The completion may arrive re-entrantly or through the pump. This
+            // wait runs on the overlay thread, never on Unity's.
             var timer = System.Diagnostics.Stopwatch.StartNew();
-            while (environment == IntPtr.Zero && !environmentReady.IsSet && timer.Elapsed.TotalSeconds < 30)
+            while (environment == IntPtr.Zero && timer.Elapsed.TotalSeconds < 30)
             {
                 pump();
                 Thread.Sleep(5);
             }
 
+            if (environment == IntPtr.Zero)
+                LogWarning("WebOverlay: the browser environment did not start within 30 seconds.");
             return environment != IntPtr.Zero;
         }
 
@@ -268,28 +279,53 @@ namespace WebOverlay
 
         private static void closeEverything()
         {
+            // Each resource on its own: one failing close must not leak the
+            // rest, and each failure should be visible.
+            OverlayWindow[] open;
+            lock (windows)
+                open = windows.ToArray();
+            foreach (OverlayWindow window in open)
+            {
+                try
+                {
+                    window.CloseFromHost();
+                }
+                catch (Exception ex)
+                {
+                    LogWarning("WebOverlay: closing an overlay failed (" + ex.GetType().Name + ").");
+                }
+            }
+
             try
             {
-                OverlayWindow[] open;
-                lock (windows)
-                    open = windows.ToArray();
-                foreach (OverlayWindow window in open)
-                    window.CloseFromHost();
-
                 if (environment != IntPtr.Zero)
                 {
                     Marshal.Release(environment);
                     environment = IntPtr.Zero;
                 }
-                environmentCallback?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                LogWarning("WebOverlay: releasing the environment failed (" + ex.GetType().Name + ").");
+            }
+
+            // environmentCallback is deliberately never disposed: if the
+            // environment creation timed out, the native side may still hold
+            // the handler, and freeing memory that native code can call is a
+            // process crash. One small allocation for the process lifetime is
+            // the safe trade.
+
+            try
+            {
                 if (dispatcherWindow != IntPtr.Zero)
                 {
                     DestroyWindow(dispatcherWindow);
                     dispatcherWindow = IntPtr.Zero;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                LogWarning("WebOverlay: closing the dispatcher failed (" + ex.GetType().Name + ").");
             }
         }
 
@@ -352,6 +388,9 @@ namespace WebOverlay
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern bool PeekMessage(out MSG message, IntPtr hwnd, uint filterMin, uint filterMax, uint removeMessage);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetMessage(out MSG message, IntPtr hwnd, uint filterMin, uint filterMax);
 
         [DllImport("user32.dll")]
         private static extern bool TranslateMessage(ref MSG message);

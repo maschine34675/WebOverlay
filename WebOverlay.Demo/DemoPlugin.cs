@@ -69,6 +69,7 @@ namespace WebOverlay.Demo
                 return;
             }
 
+            hud.Failed += () => this.Logger.LogWarning("The demo HUD failed; see the WebOverlay log lines above.");
             hud.LoadHtml(HudPage);
         }
 
@@ -107,6 +108,8 @@ namespace WebOverlay.Demo
                 lock (fromPage)
                     fromPage.Enqueue(message);
             };
+            // Creation is asynchronous; this is how a failure comes back.
+            overlay.Failed += () => this.Logger.LogWarning("The demo overlay failed; see the WebOverlay log lines above.");
 
             overlay.LoadHtml(Page);
         }

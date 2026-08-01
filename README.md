@@ -37,12 +37,40 @@ window.chrome.webview.postMessage('button pressed');
 window.chrome.webview.addEventListener('message', e => console.log(e.data));
 ```
 
-`WebOverlays.Create` returns `null` rather than throwing whenever overlays are
-unavailable, so a fallback is always a null check. Events arrive on the overlay
-thread - queue them and touch game state from `Update()`.
+`WebOverlays.Create` returns `null` when overlays are known to be unavailable,
+and otherwise a handle whose browser is still starting: creation is
+asynchronous and never blocks Unity's thread. Failures that surface later -
+no WebView2 runtime, a browser that will not start, a dead browser process -
+raise the handle's **`Failed`** event; dispose the handle there and use your
+fallback. `Ready` fires once the view is fully set up, and messages or
+scripts sent before the page finished loading wait in a bounded outbox, so
+posting right after `Create` is fine. Events arrive on the overlay thread -
+queue them and touch game state from `Update()`.
+
+When another mod ships alongside this library, reference it with
+`<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your
+own release zip - it is a shared dependency the user installs once.
 
 Install the demo plugin to see a working panel: press **F10** in game, and
 **F11** for the transparent HUD demo.
+
+## Security defaults
+
+The overlay is meant for pages the mod itself provides, and the defaults
+enforce that:
+
+- Navigation is allowed only to origins the mod itself asked for (each
+  `Navigate` URL's origin, plus `OverlayOptions.AllowedOrigins`); redirects
+  and followed links to anywhere else are cancelled.
+- Messages are dropped unless they come from an allowed origin, so a foreign
+  page never reaches the message bridge.
+- Popups are suppressed, permission prompts (camera, location, ...) are
+  denied, `alert()`-style script dialogs are off, and the browser's password
+  saving and form autofill are disabled - the browser profile is shared by
+  every mod using the library (one per Windows user under
+  `%LOCALAPPDATA%\WebOverlay`), so nothing sensitive should be stored in it.
+- Browser accelerator keys (print, find, refresh) are off unless the overlay
+  was created with `DevTools = true`.
 
 ## Translucency and HUDs
 
@@ -75,7 +103,9 @@ HUD rules that follow from how it works (chroma key, see below):
 ## Requirements and limits
 
 - Needs the Microsoft WebView2 runtime, which current Windows 10 and 11
-  installations already include. Without it `WebOverlays.Create` returns null.
+  installations already include. Without it the failure surfaces
+  asynchronously: the first `WebOverlays.Create` still returns a handle whose
+  `Failed` event fires shortly after; later calls return null.
 - Needs borderless windowed or windowed mode. In exclusive fullscreen a window
   over the game would minimise it, so check `WebOverlayPlugin.IsDisplayModeSupported`.
 - While the overlay holds the keyboard the game does not see key presses, and
