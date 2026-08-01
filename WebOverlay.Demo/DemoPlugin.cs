@@ -69,7 +69,14 @@ namespace WebOverlay.Demo
                 return;
             }
 
-            hud.Failed += () => this.Logger.LogWarning("The demo HUD failed; see the WebOverlay log lines above.");
+            var createdHud = hud;
+            hud.Failed += () =>
+            {
+                this.Logger.LogWarning("The demo HUD failed; see the WebOverlay log lines above.");
+                createdHud.Dispose();
+                if (ReferenceEquals(hud, createdHud))
+                    hud = null;
+            };
             hud.LoadHtml(HudPage);
         }
 
@@ -108,8 +115,16 @@ namespace WebOverlay.Demo
                 lock (fromPage)
                     fromPage.Enqueue(message);
             };
-            // Creation is asynchronous; this is how a failure comes back.
-            overlay.Failed += () => this.Logger.LogWarning("The demo overlay failed; see the WebOverlay log lines above.");
+            // Creation is asynchronous; this is how a failure comes back. The
+            // dead handle is dropped so the next F10 can try again.
+            var created = overlay;
+            overlay.Failed += () =>
+            {
+                this.Logger.LogWarning("The demo overlay failed; see the WebOverlay log lines above.");
+                created.Dispose();
+                if (ReferenceEquals(overlay, created))
+                    overlay = null;
+            };
 
             overlay.LoadHtml(Page);
         }

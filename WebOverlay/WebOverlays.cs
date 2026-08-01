@@ -166,16 +166,18 @@ namespace WebOverlay
         event Action Closed;
 
         /// <summary>
-        /// Raised once the browser view is fully set up. Like every event here
-        /// it runs on the overlay thread.
+        /// Raised once the browser view is fully set up. Latched: a handler
+        /// subscribed after the fact runs immediately on the subscribing
+        /// thread, otherwise on the overlay thread - treat it as "any thread".
         /// </summary>
         event Action Ready;
 
         /// <summary>
         /// Raised when the overlay cannot work - browser start failed, the
         /// browser process died, HUD transparency unavailable. The overlay
-        /// stays hidden; dispose the handle and use a fallback. Runs on the
-        /// overlay thread.
+        /// stays hidden; dispose the handle and use a fallback. Latched like
+        /// <see cref="Ready"/>: may run on the overlay thread or, when
+        /// subscribed after the fact, on the subscribing thread.
         /// </summary>
         event Action Failed;
     }
@@ -230,7 +232,7 @@ namespace WebOverlay
                 fireNow = already;
             }
             if (fireNow)
-                value();
+                invokeIsolated(value);
         }
 
         private void fire(ref Action handlers, ref bool already)
@@ -241,7 +243,24 @@ namespace WebOverlay
                 already = true;
                 snapshot = handlers;
             }
-            snapshot?.Invoke();
+            if (snapshot == null)
+                return;
+            // Each subscriber on its own: one throwing handler must neither
+            // silence the others nor unwind into the native callback frames.
+            foreach (Delegate handler in snapshot.GetInvocationList())
+                invokeIsolated((Action)handler);
+        }
+
+        private static void invokeIsolated(Action handler)
+        {
+            try
+            {
+                handler();
+            }
+            catch (Exception ex)
+            {
+                OverlayHost.LogWarning("WebOverlay: an event handler threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+            }
         }
 
         public bool IsVisible => window.IsVisible;

@@ -114,22 +114,34 @@ namespace WebOverlay
                 if (!started)
                     startFailed = true;
 
-                // Drain even on failure: queued window creations then fail fast
-                // and report through their Failed events instead of sitting in
-                // the queue forever.
                 acceptingWork = true;
                 drainWork();
 
-                if (!started)
-                    return;
-
-                // GetMessage blocks until something arrives; Post() and
-                // Shutdown() both wake it with WM_APP_WORK. No idle polling.
-                while (running && GetMessage(out MSG message, IntPtr.Zero, 0, 0) > 0)
+                // The loop runs even after a failed start: a window creation
+                // racing the failure may be posted at any moment, and it must
+                // run so it can fail through its own path and raise Failed -
+                // work rotting in a dead queue would leave the consumer with a
+                // handle that never answers. One idle thread is the price.
+                if (dispatcherWindow != IntPtr.Zero)
                 {
-                    TranslateMessage(ref message);
-                    DispatchMessage(ref message);
-                    drainWork();
+                    // GetMessage blocks until something arrives; Post() and
+                    // Shutdown() both wake it with WM_APP_WORK. No idle polling.
+                    while (running && GetMessage(out MSG message, IntPtr.Zero, 0, 0) > 0)
+                    {
+                        TranslateMessage(ref message);
+                        DispatchMessage(ref message);
+                        drainWork();
+                    }
+                }
+                else
+                {
+                    // No dispatcher window (extreme failure): a slow poll still
+                    // serves late registrations their failure.
+                    while (running)
+                    {
+                        drainWork();
+                        Thread.Sleep(50);
+                    }
                 }
             }
             catch (ThreadAbortException)
