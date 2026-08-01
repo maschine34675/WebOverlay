@@ -216,6 +216,17 @@ namespace WebOverlay
 
             environmentCallback = new ComCallback(WebView2Api.IID_EnvironmentCompleted, (int result, IntPtr pointer) =>
             {
+                // A completion that arrives after the start already timed out
+                // must not adopt the environment: EnsureStarted is latched to
+                // failure, nobody would ever use it, and the browser process
+                // would idle until game exit. Not storing it lets the browser
+                // shut itself down.
+                if (startFailed || stopping)
+                {
+                    LogWarning("WebOverlay: a late browser environment arrived after the timeout; discarding it.");
+                    return WebView2Api.S_OK;
+                }
+
                 if (result == WebView2Api.S_OK && pointer != IntPtr.Zero)
                 {
                     environment = pointer;

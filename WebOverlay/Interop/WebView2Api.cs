@@ -25,6 +25,7 @@ namespace WebOverlay.Interop
         public static readonly Guid IID_AcceleratorKeyPressed = new Guid("b29c7e28-fa79-41a8-8e44-65811c76dcb2");
         public static readonly Guid IID_WebMessageReceived = new Guid("57213f19-00e6-49fa-8e07-898ea01ecbd2");
         public static readonly Guid IID_Controller2 = new Guid("c979903e-d4ca-4228-92eb-47ee3fa96eab");
+        public static readonly Guid IID_ExecuteScriptCompleted = new Guid("49511172-cc67-4bca-9923-137112f4c4cc");
         public static readonly Guid IID_NavigationStarting = new Guid("9adbe429-f36d-432b-9ddc-f8881fbd76e3");
         public static readonly Guid IID_NavigationCompleted = new Guid("d33a35bf-1c49-4f98-93ab-006e0533fe1c");
         public static readonly Guid IID_NewWindowRequested = new Guid("d4c185fe-c81c-4989-97af-2d3fa7ab5651");
@@ -74,6 +75,7 @@ namespace WebOverlay.Interop
         public const int Settings_PutIsStatusBarEnabled = 10;
         public const int Settings_PutAreDevToolsEnabled = 12;
         public const int Settings_PutAreDefaultContextMenusEnabled = 14;
+        public const int Settings_PutAreHostObjectsAllowed = 16;
 
         // ICoreWebView2Settings3/4 - only after QueryInterface, see the header
         // rule above. Slots counted through Settings v1 (3-20) and Settings2's

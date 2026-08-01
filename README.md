@@ -65,7 +65,9 @@ enforce that:
   `Navigate` URL's origin, plus `OverlayOptions.AllowedOrigins`); redirects
   and followed links to anywhere else are cancelled.
 - Messages are dropped unless they come from an allowed origin, so a foreign
-  page never reaches the message bridge.
+  page never reaches the message bridge. Outgoing sends are bound to the
+  mod's target at origin granularity: a redirect to a different path on the
+  same origin still counts as the target, as in the classic origin model.
 - Popups are suppressed, permission prompts (camera, location, ...) are
   denied, `alert()`-style script dialogs are off, and the browser's password
   saving and form autofill are disabled - the browser profile is shared by

@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyProduct("Anvil-WebOverlayDemo")]
 [assembly: AssemblyDescription("Demo panel and HUD for the Anvil-WebOverlay library")]
 [assembly: AssemblyCompany("https://github.com/maschine34675/WebOverlay")]
-[assembly: AssemblyVersion("1.0.0")]
-[assembly: AssemblyFileVersion("1.0.0")]
+// The demo follows the library's version; Branding is the one source.
+[assembly: AssemblyVersion(WebOverlay.Branding.PluginVersion)]
+[assembly: AssemblyFileVersion(WebOverlay.Branding.PluginVersion)]
 [assembly: ComVisible(false)]

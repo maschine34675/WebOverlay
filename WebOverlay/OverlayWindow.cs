@@ -55,6 +55,7 @@ namespace WebOverlay
         private ComCallback newWindowCallback;
         private ComCallback permissionCallback;
         private ComCallback processFailedCallback;
+        private ComCallback scriptCompletedCallback;
         private string pendingUrl;
         private string pendingHtml;
         private bool desiredVisible = true;
@@ -65,6 +66,7 @@ namespace WebOverlay
         private bool expectInlineNavigation;
         private bool closed;
         private int renderRecoveries;
+        private int overflowDropped;
 
         public OverlayWindow(string title, OverlayOptions options)
         {
@@ -222,7 +224,18 @@ namespace WebOverlay
                 fail("the HUD stays hidden because transparency is unavailable.");
                 return;
             }
-            subscribeToKeys();
+            if (!subscribeToKeys())
+            {
+                // A frameless interactive overlay whose close keys did not
+                // register would trap the player: no frame, no way out. A
+                // framed one still has its close button; a HUD never has focus.
+                if (!options.Frame && !options.Transparent)
+                {
+                    fail("the close keys could not register on a frameless overlay.");
+                    return;
+                }
+                OverlayHost.LogWarning("WebOverlay: the close keys could not register; use the close button.");
+            }
             fitToClientArea();
 
             // Replays what the mod asked for while the browser was starting -
@@ -276,6 +289,9 @@ namespace WebOverlay
                 setSetting(settings, WebView2Api.Settings_PutIsStatusBarEnabled, false);
                 setSetting(settings, WebView2Api.Settings_PutAreDefaultContextMenusEnabled, options.ContextMenu);
                 setSetting(settings, WebView2Api.Settings_PutAreDevToolsEnabled, options.DevTools);
+                // No host objects are ever registered, but the default is
+                // permissive - close the door explicitly.
+                setSetting(settings, WebView2Api.Settings_PutAreHostObjectsAllowed, false);
                 if (!critical)
                     return false;
 
@@ -324,7 +340,7 @@ namespace WebOverlay
             return WebView2Api.Method<WebView2Api.PutBoolDelegate>(settings, slot)(settings, value ? 1 : 0);
         }
 
-        private void subscribeToKeys()
+        private bool subscribeToKeys()
         {
             keyCallback = new ComCallback(WebView2Api.IID_AcceleratorKeyPressed, (IntPtr sender, IntPtr args) =>
             {
@@ -346,8 +362,8 @@ namespace WebOverlay
                 return WebView2Api.S_OK;
             });
 
-            WebView2Api.Method<WebView2Api.AddEventDelegate>(controller, WebView2Api.Controller_AddAcceleratorKeyPressed)(
-                controller, keyCallback.Pointer, out _);
+            return WebView2Api.Method<WebView2Api.AddEventDelegate>(controller, WebView2Api.Controller_AddAcceleratorKeyPressed)(
+                controller, keyCallback.Pointer, out _) == WebView2Api.S_OK;
         }
 
         private bool subscribeToMessages()
@@ -635,6 +651,8 @@ namespace WebOverlay
 
         public void Navigate(string url)
         {
+            if (string.IsNullOrEmpty(url))
+                return;
             pendingUrl = url;
             pendingHtml = null;
             htmlLoaded = false;
@@ -652,19 +670,25 @@ namespace WebOverlay
 
         /// <summary>
         /// A synchronously rejected navigation (invalid URL, inline HTML over
-        /// the 2 MB limit) never produces NavigationCompleted - without this
-        /// log, further sends would just buffer silently forever.
+        /// the 2 MB limit) never produces NavigationCompleted. The buffered
+        /// sends were meant for the page that will now never load, so they are
+        /// dropped - silently growing a queue nobody will ever flush would
+        /// hide the defect from the consumer.
         /// </summary>
-        private static void checkNavigationResult(int hr, string what)
+        private void checkNavigationResult(int hr, string what)
         {
-            if (hr != WebView2Api.S_OK)
-                OverlayHost.LogWarning("WebOverlay: " + what + " was rejected, hr=0x" + hr.ToString("X8")
-                    + "; the page will not change and sends stay buffered.");
+            if (hr == WebView2Api.S_OK)
+                return;
+            OverlayHost.LogWarning("WebOverlay: " + what + " was rejected, hr=0x" + hr.ToString("X8")
+                + "; the page will not change" + (outbox.Count > 0 ? " and " + outbox.Count + " buffered send(s) were dropped" : "") + ".");
+            outbox.Clear();
         }
 
         /// <summary>Shows markup directly, so a mod needs no web server at all.</summary>
         public void LoadHtml(string html)
         {
+            if (html == null)
+                return;
             pendingHtml = html;
             pendingUrl = null;
             htmlLoaded = true;
@@ -679,13 +703,14 @@ namespace WebOverlay
 
         public void PostMessageToPage(string message)
         {
+            if (message == null)
+                return;
             // WebView2 does not deliver messages sent before the page finished
             // loading, so they wait in a bounded outbox until it has - and a
             // live send only goes out while the mod's own target is showing.
             if (webView == IntPtr.Zero || !pageReady)
             {
-                if (outbox.Count < OutboxLimit)
-                    outbox.Add(new KeyValuePair<bool, string>(false, message));
+                buffer(false, message);
                 return;
             }
             if (!currentDocumentIsTarget())
@@ -699,10 +724,11 @@ namespace WebOverlay
 
         public void ExecuteScript(string script)
         {
+            if (script == null)
+                return;
             if (webView == IntPtr.Zero || !pageReady)
             {
-                if (outbox.Count < OutboxLimit)
-                    outbox.Add(new KeyValuePair<bool, string>(true, script));
+                buffer(true, script);
                 return;
             }
             if (!currentDocumentIsTarget())
@@ -710,8 +736,35 @@ namespace WebOverlay
                 OverlayHost.LogWarning("WebOverlay: dropped a script; the page is not the mod's target document.");
                 return;
             }
-            WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(webView, WebView2Api.WebView_ExecuteScript)(
-                webView, script, IntPtr.Zero);
+
+            // A real completion handler: passing null there is undocumented
+            // behavior, and its error code is the only way a script failure
+            // ever becomes visible. One callback serves every call.
+            if (scriptCompletedCallback == null)
+                scriptCompletedCallback = new ComCallback(WebView2Api.IID_ExecuteScriptCompleted, (int hrScript, IntPtr resultJson) =>
+                {
+                    if (hrScript != WebView2Api.S_OK)
+                        OverlayHost.LogWarning("WebOverlay: a script failed, hr=0x" + hrScript.ToString("X8") + ".");
+                    return WebView2Api.S_OK;
+                });
+
+            int hr = WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(webView, WebView2Api.WebView_ExecuteScript)(
+                webView, script, scriptCompletedCallback.Pointer);
+            if (hr != WebView2Api.S_OK)
+                OverlayHost.LogWarning("WebOverlay: ExecuteScript was rejected, hr=0x" + hr.ToString("X8") + ".");
+        }
+
+        private void buffer(bool isScript, string payload)
+        {
+            if (outbox.Count < OutboxLimit)
+            {
+                outbox.Add(new KeyValuePair<bool, string>(isScript, payload));
+                return;
+            }
+            overflowDropped++;
+            if (overflowDropped == 1)
+                OverlayHost.LogWarning("WebOverlay: the outbox is full (" + OutboxLimit
+                    + " entries); further sends are dropped until the page loads.");
         }
 
         private void flushOutbox()
@@ -862,6 +915,7 @@ namespace WebOverlay
             newWindowCallback?.Dispose();
             permissionCallback?.Dispose();
             processFailedCallback?.Dispose();
+            scriptCompletedCallback?.Dispose();
             OverlayHost.Unregister(this);
             if (wasVisible)
                 Closed?.Invoke();
