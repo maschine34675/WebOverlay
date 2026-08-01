@@ -55,7 +55,9 @@ Two options in `OverlayOptions` control how much of the game shows through:
   leaves unpainted show the game; painted content floats over it. The window
   ignores the mouse and never takes focus, so the game stays fully playable.
   Unless a size is set the HUD covers the game's whole picture, and the page
-  decides where on it something appears. Both can be combined for a faded HUD.
+  decides where on it something appears (a sized HUD sits at the picture's
+  top-left corner - prefer the full-size default and place elements with CSS).
+  Both can be combined for a faded HUD.
 
 HUD rules that follow from how it works (chroma key, see below):
 
@@ -65,8 +67,10 @@ HUD rules that follow from how it works (chroma key, see below):
   page content. Semi-transparent page pixels blend towards near-black rather
   than the game, and antialiased edges pick up a hint of that - design HUD
   elements on solid dark panels (see the demo's HUD page), not as glass.
-- The page must not paint exactly `rgb(3,1,3)`; that color is the reserved
-  transparency key.
+- `rgb(3,1,3)` is the reserved transparency key. A page pixel of exactly that
+  color normally just shows as near-black (page pixels are not keyed on the
+  GPU path), but avoid it anyway: under software rendering such pixels can
+  land on the keyed surface and vanish.
 
 ## Requirements and limits
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using WebOverlay.Interop;
 
@@ -11,9 +12,17 @@ namespace WebOverlay
     /// </summary>
     internal sealed class OverlayWindow
     {
+        // A window class outlives every window and cannot be unregistered
+        // safely, so its WndProc must be a process-lifetime thunk - a
+        // per-instance delegate here would dangle after that instance is
+        // collected, and the next window of the class would crash the game.
+        // Both fields are touched only on the overlay thread.
+        private static readonly OverlayHost.WndProcDelegate classProc = staticWndProc;
+        private static readonly Dictionary<IntPtr, OverlayWindow> byHandle =
+            new Dictionary<IntPtr, OverlayWindow>();
+
         private readonly string title;
         private readonly OverlayOptions options;
-        private readonly OverlayHost.WndProcDelegate windowProc;
 
         private IntPtr window;
         private IntPtr controller;
@@ -23,12 +32,24 @@ namespace WebOverlay
         private ComCallback messageCallback;
         private string pendingUrl;
         private string pendingHtml;
+        private bool desiredVisible = true;
+        private bool hudUnavailable;
 
         public OverlayWindow(string title, OverlayOptions options)
         {
             this.title = title;
             this.options = options;
-            windowProc = wndProc;
+        }
+
+        private static IntPtr staticWndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
+        {
+            if (byHandle.TryGetValue(hwnd, out OverlayWindow target))
+            {
+                if (message == WM_NCDESTROY)
+                    byHandle.Remove(hwnd);
+                return target.wndProc(hwnd, message, wParam, lParam);
+            }
+            return OverlayHost.DefWindowProc(hwnd, message, wParam, lParam);
         }
 
         public bool IsVisible { get; private set; }
@@ -79,8 +100,15 @@ namespace WebOverlay
             }
 
             applySettings();
-            if (options.Transparent)
-                applyTransparentBackground();
+            if (options.Transparent && !applyTransparentBackground())
+            {
+                // Without a transparent background the "HUD" would be a white
+                // click-through sheet over the whole game. Staying invisible is
+                // the only safe failure.
+                hudUnavailable = true;
+                OverlayHost.LogWarning("WebOverlay: the HUD stays hidden because transparency is unavailable.");
+                return;
+            }
             subscribeToKeys();
             subscribeToMessages();
             fitToClientArea();
@@ -90,7 +118,10 @@ namespace WebOverlay
             else if (pendingUrl != null)
                 Navigate(pendingUrl);
 
-            Show();
+            // Replays what the mod asked for while the browser was starting: a
+            // Hide() or Toggle() in that gap must win over the default Show.
+            if (desiredVisible)
+                Show();
         }
 
         private void applySettings()
@@ -220,7 +251,8 @@ namespace WebOverlay
 
         public void Show()
         {
-            if (window == IntPtr.Zero)
+            desiredVisible = true;
+            if (window == IntPtr.Zero || hudUnavailable)
                 return;
             positionOverGame();
             fitToClientArea();
@@ -234,6 +266,7 @@ namespace WebOverlay
 
         public void Hide()
         {
+            desiredVisible = false;
             if (window == IntPtr.Zero)
                 return;
             setControllerVisible(false);
@@ -260,6 +293,7 @@ namespace WebOverlay
                 webView = IntPtr.Zero;
                 if (window != IntPtr.Zero)
                 {
+                    byHandle.Remove(window);
                     OverlayHost.DestroyWindow(window);
                     window = IntPtr.Zero;
                 }
@@ -278,16 +312,20 @@ namespace WebOverlay
         {
             // HUD windows get their own class because the class carries the
             // background brush, and theirs must be the transparency key: those
-            // are exactly the pixels the chroma key later removes.
+            // are exactly the pixels the chroma key later removes. The brush is
+            // created once and owned by the class for the rest of the process;
+            // creating one per window would leak a GDI handle each time.
             string className = options.Transparent ? HudWindowClassName : WindowClassName;
+            if (options.Transparent && hudBrush == IntPtr.Zero)
+                hudBrush = CreateSolidBrush(TransparencyKey);
             var windowClass = new OverlayHost.WNDCLASSEX
             {
                 cbSize = Marshal.SizeOf(typeof(OverlayHost.WNDCLASSEX)),
-                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(windowProc),
+                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(classProc),
                 hInstance = OverlayHost.GetModuleHandle(null),
                 lpszClassName = className,
                 hbrBackground = options.Transparent
-                    ? CreateSolidBrush(TransparencyKey)
+                    ? hudBrush
                     : (IntPtr)(COLOR_WINDOW + 1)
             };
 
@@ -336,6 +374,8 @@ namespace WebOverlay
                 return false;
             }
 
+            byHandle[window] = this;
+
             if (options.Transparent)
             {
                 uint flags = LWA_COLORKEY;
@@ -367,14 +407,14 @@ namespace WebOverlay
         /// chroma key in turn replaces with the game. Needs the Controller2
         /// interface, present in every WebView2 runtime from 2021 on.
         /// </summary>
-        private void applyTransparentBackground()
+        private bool applyTransparentBackground()
         {
             Guid iid = WebView2Api.IID_Controller2;
             if (Marshal.QueryInterface(controller, ref iid, out IntPtr controller2) != WebView2Api.S_OK
                 || controller2 == IntPtr.Zero)
             {
                 OverlayHost.LogWarning("WebOverlay: this WebView2 runtime cannot make a HUD transparent; update it.");
-                return;
+                return false;
             }
 
             try
@@ -383,7 +423,11 @@ namespace WebOverlay
                 int hr = WebView2Api.Method<WebView2Api.PutColorDelegate>(
                     controller2, WebView2Api.Controller2_PutDefaultBackgroundColor)(controller2, 0u);
                 if (hr != WebView2Api.S_OK)
+                {
                     OverlayHost.LogWarning("WebOverlay: transparent background failed, hr=0x" + hr.ToString("X8") + ".");
+                    return false;
+                }
+                return true;
             }
             finally
             {
@@ -441,26 +485,37 @@ namespace WebOverlay
         private void positionOverGame()
         {
             getBounds(out int x, out int y, out int width, out int height);
-            SetWindowPos(window, IntPtr.Zero, x, y, width, height, SWP_NOZORDER);
+            // NOACTIVATE matters for HUDs: SetWindowPos would otherwise
+            // activate the window and undo everything WS_EX_NOACTIVATE built.
+            // The interactive path activates explicitly in Show().
+            SetWindowPos(window, IntPtr.Zero, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         private void getBounds(out int x, out int y, out int width, out int height)
         {
-            x = 120;
-            y = 120;
             width = options.Width;
             height = options.Height;
 
+            // Measure the game picture; when that fails (window not found, or
+            // gone mid-shutdown) the primary screen stands in, so a default
+            // size never collapses to a zero-sized window.
             IntPtr owner = OverlayHost.GameWindow;
-            if (owner == IntPtr.Zero || !GetClientRect(owner, out WebView2Api.RECT client))
-                return;
-
-            var topLeft = new POINT { x = client.left, y = client.top };
-            if (!ClientToScreen(owner, ref topLeft))
-                return;
-
-            int clientWidth = client.right - client.left;
-            int clientHeight = client.bottom - client.top;
+            var topLeft = new POINT();
+            int clientWidth;
+            int clientHeight;
+            if (owner != IntPtr.Zero
+                && GetClientRect(owner, out WebView2Api.RECT client)
+                && ClientToScreen(owner, ref topLeft))
+            {
+                clientWidth = client.right - client.left;
+                clientHeight = client.bottom - client.top;
+            }
+            else
+            {
+                topLeft = new POINT();
+                clientWidth = GetSystemMetrics(SM_CXSCREEN);
+                clientHeight = GetSystemMetrics(SM_CYSCREEN);
+            }
             if (options.Transparent)
             {
                 // A HUD's natural canvas is the whole game picture; the page
@@ -492,6 +547,9 @@ namespace WebOverlay
         /// </summary>
         private const uint TransparencyKey = 0x00030103;
 
+        /// <summary>One brush per process; the HUD window class owns it forever.</summary>
+        private static IntPtr hudBrush;
+
         private const int COLOR_WINDOW = 5;
         private const int ERROR_CLASS_ALREADY_EXISTS = 1410;
         private const uint WS_POPUP = 0x80000000;
@@ -508,7 +566,11 @@ namespace WebOverlay
         private const uint WM_SIZE = 0x0005;
         private const uint WM_KEYDOWN = 0x0100;
         private const uint WM_SYSKEYDOWN = 0x0104;
+        private const uint WM_NCDESTROY = 0x0082;
         private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const int SM_CXSCREEN = 0;
+        private const int SM_CYSCREEN = 1;
         private const int SW_HIDE = 0;
         private const int SW_SHOW = 5;
         private const int SW_SHOWNOACTIVATE = 4;
@@ -540,6 +602,9 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int index);
 
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateSolidBrush(uint color);

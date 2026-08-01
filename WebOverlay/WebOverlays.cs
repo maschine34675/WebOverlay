@@ -33,8 +33,28 @@ namespace WebOverlay
             if (!OverlayHost.EnsureStarted())
                 return null;
 
-            var handle = new OverlayHandle(title ?? "Overlay", options ?? new OverlayOptions());
+            // A private copy: the overlay reads its options for its whole
+            // lifetime, and a caller mutating or reusing the object must not
+            // half-transform a live overlay.
+            var handle = new OverlayHandle(title ?? "Overlay", snapshot(options));
             return handle.Start() ? handle : null;
+        }
+
+        private static OverlayOptions snapshot(OverlayOptions options)
+        {
+            if (options == null)
+                return new OverlayOptions();
+            return new OverlayOptions
+            {
+                Width = options.Width,
+                Height = options.Height,
+                Frame = options.Frame,
+                CloseKeys = options.CloseKeys == null ? null : (int[])options.CloseKeys.Clone(),
+                ContextMenu = options.ContextMenu,
+                DevTools = options.DevTools,
+                Opacity = options.Opacity,
+                Transparent = options.Transparent,
+            };
         }
     }
 
@@ -77,14 +97,17 @@ namespace WebOverlay
         /// means <see cref="CloseKeys"/> cannot apply: hide the HUD from the
         /// mod's own hotkey via <see cref="IWebOverlay.Hide"/> or Toggle.
         /// Unless a size is set, the HUD covers the game's whole client area,
-        /// and <see cref="Frame"/> is ignored.
+        /// and <see cref="Frame"/> is ignored. A sized HUD sits at the game
+        /// picture's top-left corner - there is no placement option, so prefer
+        /// the full-size default and place elements with CSS.
         ///
         /// Transparency is per pixel but binary: a pixel either shows the game
         /// or shows page content. Semi-transparent page pixels blend towards
         /// near-black instead of the game, and antialiased edges pick up a hint
         /// of that - design HUD elements on their own solid-ish backgrounds.
-        /// The page must not paint exactly rgb(3,1,3); that color is reserved
-        /// as the transparency key.
+        /// rgb(3,1,3) is reserved as the transparency key; avoid painting it
+        /// (normally it just shows as near-black, but under software rendering
+        /// such pixels can vanish).
         /// </summary>
         public bool Transparent { get; set; }
     }
