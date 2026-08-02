@@ -1,5 +1,8 @@
 # Vollständiges Code-Review: WebOverlay
 
+> **Historischer Bericht.** Bezieht sich auf einen aelteren Commit; Befunde, Hashes und Laufzeitgrenzen sind ueberholt. Alle als valide bestaetigten Befunde saemtlicher Review-Runden wurden bis Commit `261f0af` umgesetzt; die zugehoerige Fault-Injection-Matrix ist in `docs/FAULT-TESTS.md` festgehalten.
+
+
 **Projekt:** `C:\SPT\Development\WebOverlay`  
 **Review-Datum:** 1. August 2026 (Abend)  
 **Review-Basis:** `9dc43ea52e1f25230b1e8be700b3aa577744d41c` (`master`, Tag `v1.0.0`)  

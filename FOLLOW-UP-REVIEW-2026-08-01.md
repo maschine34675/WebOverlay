@@ -1,5 +1,8 @@
 # Follow-up-Review: WebOverlay v1.0.0
 
+> **Historischer Bericht.** Bezieht sich auf einen aelteren Commit; Befunde, Hashes und Laufzeitgrenzen sind ueberholt. Alle als valide bestaetigten Befunde saemtlicher Review-Runden wurden bis Commit `261f0af` umgesetzt; die zugehoerige Fault-Injection-Matrix ist in `docs/FAULT-TESTS.md` festgehalten.
+
+
 **Datum:** 1. August 2026  
 **WebOverlay-Basis:** `defc55fa8b0e92bbd1492ac0a0d6205725509e2d` (`master`, Tag `v1.0.0`)  
 **CraftQueue-Basis:** `f39bc93820a451265f374f3d5f577ce450758522` (`main`)  

@@ -6,6 +6,14 @@ interface in HTML instead of an immediate-mode toolkit.
 A page can be a URL, or just a string of markup - **no web server needed** -
 and it can talk to the game in both directions.
 
+## Installation
+
+Extract the release zip over the SPT folder; it places
+`BepInEx/plugins/Anvil-WebOverlay/` with the library, `WebView2Loader.dll` and
+the license texts. One installation serves every mod that uses the library.
+Players only need it when a mod lists it as a dependency. The demo plugin is a
+separate zip and purely optional.
+
 ## For mod authors
 
 Reference `Anvil-WebOverlay.dll` and declare the dependency:
@@ -56,6 +64,43 @@ own release zip - it is a shared dependency the user installs once.
 Install the demo plugin to see a working panel: press **F10** in game, and
 **F11** for the transparent HUD demo.
 
+## API reference
+
+`WebOverlays` (static):
+
+| Member | Meaning |
+|---|---|
+| `Create(title, options)` | New overlay handle, or null when overlays are already known to be unusable. Asynchronous - see above. |
+| `IsAvailable` | Kicks off the browser start (side effect!) and reports whether overlays are still plausible. |
+| `RuntimeVersion` | The installed WebView2 runtime version, once known. |
+
+`OverlayOptions`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `Width`, `Height` | 0 | Pixels; 0 means 80% / 85% of the game window (HUDs: the whole game picture). |
+| `Frame` | true | Title bar with close button, recolored to a dark game tone. |
+| `CloseKeys` | Escape | Virtual-key codes that hide the overlay while it has the keyboard. |
+| `ContextMenu` | false | Allow the browser's right-click menu. |
+| `DevTools` | false | Allow F12 developer tools and browser accelerator keys. |
+| `Opacity` | 1.0 | Whole-window fade, 0.15-1.0. |
+| `Transparent` | false | Display-only click-through HUD (see below). |
+| `AllowedOrigins` | null | Extra origins allowed for navigation and messages. |
+
+`IWebOverlay`:
+
+| Member | Meaning |
+|---|---|
+| `Show()`, `Hide()`, `Toggle()` | Visibility. `IsVisible` reads the current state. |
+| `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
+| `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
+| `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
+| `MessageReceived` | The page called `postMessage`. Overlay thread. |
+| `KeyPressed` | A key pressed in the overlay that did not close it. Overlay thread. |
+| `Closed` | Fires on every hide or close - not only on destruction. Overlay thread. |
+| `Ready`, `Failed` | Latched creation outcome - see above for threading. |
+| `Dispose()` | Destroys the overlay window. |
+
 ## Security defaults
 
 The overlay is meant for pages the mod itself provides, and the defaults
@@ -70,11 +115,13 @@ enforce that:
   same origin still counts as the target, as in the classic origin model.
 - Popups are suppressed, permission prompts (camera, location, ...) are
   denied, `alert()`-style script dialogs are off, and the browser's password
-  saving and form autofill are disabled - the browser profile is shared by
-  every mod using the library (one per Windows user under
-  `%LOCALAPPDATA%\WebOverlay`), so nothing sensitive should be stored in it.
+  saving and form autofill are disabled on runtimes that support those
+  settings (2021 or newer; older ones keep their defaults) - the browser
+  profile is shared by every mod using the library (one per Windows user
+  under `%LOCALAPPDATA%\WebOverlay`), so nothing sensitive should be stored
+  in it.
 - Browser accelerator keys (print, find, refresh) are off unless the overlay
-  was created with `DevTools = true`.
+  was created with `DevTools = true` - same runtime caveat.
 
 ## Translucency and HUDs
 
@@ -161,9 +208,18 @@ shows a dark background after a Windows update, suspect the runtime first.
   `ICoreWebView2CompositionController`, a DirectComposition visual tree in a
   `WS_EX_NOREDIRECTIONBITMAP` window, and manual forwarding of all mouse input
   plus cursor handling. The interop fits this library's hand-built-vtable
-  approach; the work is roughly a week for the core and is planned as a second
-  overlay mode. Microsoft's `WebView2APISample` (ViewComponent.cpp) shows the
-  canonical native implementation.
+  approach and is planned as a second overlay mode. Microsoft's
+  `WebView2APISample` (ViewComponent.cpp) shows the canonical native
+  implementation.
+
+## Building
+
+The projects are classic net472 csproj files that reference BepInEx and Unity
+assemblies from an SPT installation: build with
+`dotnet build WebOverlay/WebOverlay.csproj -c Release -p:SptRoot=<your SPT folder>`
+(default `C:\SPT`). `scripts/New-ReleasePackage.ps1` produces the release zips
+including the license files, verified against a manifest allowlist.
+`docs/FAULT-TESTS.md` records the fault-injection matrix run for a release.
 
 ## Third-party components
 

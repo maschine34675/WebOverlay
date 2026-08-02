@@ -115,8 +115,8 @@ namespace WebOverlay
                 isVisible = false;
             }
             // During game shutdown a failure is expected, and notifying the
-            // consumer would trigger its fallback - for CraftQueue that meant
-            // a browser window popping up while quitting.
+            // consumer would trigger its fallback - picture a fallback browser
+            // window popping up while the game quits.
             if (!OverlayHost.Stopping)
                 Failed?.Invoke();
         }

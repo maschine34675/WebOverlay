@@ -13,8 +13,8 @@ namespace WebOverlay.Interop
     /// versioned interfaces (Controller2 and later) are reachable, but only via
     /// an explicit QueryInterface for that interface's IID plus an absolute slot
     /// counted through every inherited member in WebView2.h - and each such slot
-    /// must be proven by an observable effect (see the transparency probe notes
-    /// in the README) before it is trusted.
+    /// must be proven by an observable effect before it is trusted (see the
+    /// slot comments below for how existing ones were proven).
     /// </summary>
     internal static class WebView2Api
     {

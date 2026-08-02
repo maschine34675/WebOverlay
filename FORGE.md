@@ -45,6 +45,10 @@ The optional demo plugin shows both modes in game: **F10** an interactive panel,
 
 Full API documentation and the technical write-up (why raw COM vtables, why a chroma key) are in the README on GitHub.
 
+## About the name
+
+Anvil is the library branding of **maschine** (the author of CraftQueue and other mods): shared infrastructure gets a neutral name that other mods can depend on without carrying one modder's personal tag. Same author, same source account, same support.
+
 ## License
 
 MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed under BSD 3-Clause; the WebView2 runtime itself is not redistributed.

@@ -1,6 +1,7 @@
 # Regression-Review: WebOverlay-Fixes
 
-> **Historischer Bericht.** Bezieht sich auf einen aelteren Commit; die hier genannten Befunde, Hashes und Laufzeitgrenzen sind inzwischen ueberholt. Massgeblich ist der juengste Review-Bericht im Repository (aktuell `FOLLOW-UP-REVIEW-2026-08-01.md`).
+> **Historischer Bericht.** Bezieht sich auf einen aelteren Commit; Befunde, Hashes und Laufzeitgrenzen sind ueberholt. Alle als valide bestaetigten Befunde saemtlicher Review-Runden wurden bis Commit `261f0af` umgesetzt; die zugehoerige Fault-Injection-Matrix ist in `docs/FAULT-TESTS.md` festgehalten.
+
 
 
 **Datum:** 1. August 2026
