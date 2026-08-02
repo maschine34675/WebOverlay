@@ -52,3 +52,9 @@ Anvil is the library branding of **maschine** (the author of CraftQueue and othe
 ## License
 
 MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed under BSD 3-Clause; the WebView2 runtime itself is not redistributed.
+
+## Changelog v1.1.0 (for the Forge version field)
+
+```text
+- Windows now remember their position and size: toggling no longer recenters, and the spot survives restarts. A spot that ends up off-screen (monitor changes) falls back to the centered default. Mods can opt out or set their own storage key (RememberBounds / PersistenceKey).
+```

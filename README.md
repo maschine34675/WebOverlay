@@ -86,6 +86,8 @@ Install the demo plugin to see a working panel: press **F10** in game, and
 | `Opacity` | 1.0 | Whole-window fade, 0.15-1.0. |
 | `Transparent` | false | Display-only click-through HUD (see below). |
 | `AllowedOrigins` | null | Extra origins allowed for navigation and messages. |
+| `RememberBounds` | true | Reopen at the position and size the player left the window at, across sessions. |
+| `PersistenceKey` | assembly/title | Storage key for the remembered bounds. |
 
 `IWebOverlay`:
 
@@ -100,6 +102,12 @@ Install the demo plugin to see a working panel: press **F10** in game, and
 | `Closed` | Fires on every hide or close - not only on destruction. Overlay thread. |
 | `Ready`, `Failed` | Latched creation outcome - see above for threading. |
 | `Dispose()` | Destroys the overlay window. |
+
+Windows keep the spot the player gave them: toggling does not recenter, and
+the position and size survive restarts (`%LOCALAPPDATA%\WebOverlay\window-bounds.txt`).
+A remembered spot that is no longer on any screen falls back to the centered
+default, HUDs always follow the game window instead, and `RememberBounds =
+false` restores the old center-on-every-show behaviour.
 
 ## Security defaults
 

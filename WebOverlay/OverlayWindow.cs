@@ -29,6 +29,7 @@ namespace WebOverlay
         }
 
         private readonly string title;
+        private readonly string ownerName;
         private readonly OverlayOptions options;
 
         // Only pages from these origins may be navigated to or send messages.
@@ -65,12 +66,23 @@ namespace WebOverlay
         private bool htmlLoaded;
         private bool expectInlineNavigation;
         private bool closed;
+        private bool everPositioned;
         private int renderRecoveries;
         private int overflowDropped;
 
-        public OverlayWindow(string title, OverlayOptions options)
+        /// <summary>
+        /// Bounds are remembered per key. The default is namespaced with the
+        /// calling mod's assembly, so two mods titling their window the same
+        /// do not trade positions; an explicit PersistenceKey wins verbatim.
+        /// </summary>
+        private string persistenceKey => options.PersistenceKey ?? (ownerName + "/" + title);
+
+        private bool remembersBounds => options.RememberBounds && !options.Transparent;
+
+        public OverlayWindow(string title, string ownerName, OverlayOptions options)
         {
             this.title = title;
+            this.ownerName = ownerName;
             this.options = options;
             if (options.AllowedOrigins != null)
                 foreach (string origin in options.AllowedOrigins)
@@ -794,7 +806,14 @@ namespace WebOverlay
             desiredVisible = true;
             if (window == IntPtr.Zero || state == CreationState.Failed)
                 return;
-            positionOverGame();
+            // Repositioning on every Show is what reset the window each toggle.
+            // A panel keeps the spot the player gave it; only the first show,
+            // a spot that ended up off every screen, and HUDs (which follow
+            // the game window) position anew. RememberBounds off restores the
+            // old recenter-on-every-show behaviour, as its documentation says.
+            if (options.Transparent || !options.RememberBounds || !everPositioned || isOffScreen())
+                positionOverGame();
+            everPositioned = true;
             fitToClientArea();
             setControllerVisible(true);
             // A HUD must never take the keyboard from the game.
@@ -843,6 +862,34 @@ namespace WebOverlay
             SetWindowPos(window, IntPtr.Zero, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
             fitToClientArea();
             notifyPositionChanged();
+        }
+
+        private void saveBounds()
+        {
+            if (!remembersBounds || window == IntPtr.Zero)
+                return;
+            if (!GetWindowRect(window, out WebView2Api.RECT rect))
+                return;
+            BoundsStore.Save(persistenceKey, new BoundsStore.StoredBounds
+            {
+                X = rect.left,
+                Y = rect.top,
+                Width = rect.right - rect.left,
+                Height = rect.bottom - rect.top,
+            });
+        }
+
+        private bool isOffScreen()
+        {
+            if (window == IntPtr.Zero || !GetWindowRect(window, out WebView2Api.RECT rect))
+                return false;
+            return !isOnAnyScreen(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+        }
+
+        private static bool isOnAnyScreen(int x, int y, int width, int height)
+        {
+            var rect = new WebView2Api.RECT { left = x, top = y, right = x + width, bottom = y + height };
+            return MonitorFromRect(ref rect, MONITOR_DEFAULTTONULL) != IntPtr.Zero;
         }
 
         /// <summary>
@@ -1106,6 +1153,22 @@ namespace WebOverlay
                     case WM_MOVE:
                         notifyPositionChanged();
                         break;
+                    case WM_EXITSIZEMOVE:
+                        // The player finished dragging or resizing: that spot
+                        // is the one to reopen at.
+                        saveBounds();
+                        return IntPtr.Zero;
+                    case WM_GETMINMAXINFO:
+                        // The same floor the restore path clamps to, so a live
+                        // window can never be resized below what a later
+                        // session would accept.
+                        if (options.Frame && !options.Transparent && lParam != IntPtr.Zero)
+                        {
+                            Marshal.WriteInt32(lParam, 24, MinimumWidth);   // ptMinTrackSize.x
+                            Marshal.WriteInt32(lParam, 28, MinimumHeight);  // ptMinTrackSize.y
+                            return IntPtr.Zero;
+                        }
+                        break;
                     case WM_TIMER:
                         if (wParam.ToInt64() == TrackTimerId)
                         {
@@ -1158,6 +1221,24 @@ namespace WebOverlay
 
         private void getBounds(out int x, out int y, out int width, out int height)
         {
+            // The remembered spot wins - unless it is no longer on any screen
+            // (monitor unplugged, resolution changed), then the default takes
+            // over so the window cannot get lost. A sub-minimum stored size is
+            // clamped rather than rejected: throwing away the position because
+            // the size was small would reset exactly the window the player
+            // customized most.
+            if (remembersBounds
+                && BoundsStore.TryGet(persistenceKey, out BoundsStore.StoredBounds stored)
+                && stored.Width > 0 && stored.Height > 0
+                && isOnAnyScreen(stored.X, stored.Y, stored.Width, stored.Height))
+            {
+                x = stored.X;
+                y = stored.Y;
+                width = Math.Max(stored.Width, MinimumWidth);
+                height = Math.Max(stored.Height, MinimumHeight);
+                return;
+            }
+
             width = options.Width;
             height = options.Height;
 
@@ -1244,6 +1325,11 @@ namespace WebOverlay
         private const uint WM_KEYDOWN = 0x0100;
         private const uint WM_SYSKEYDOWN = 0x0104;
         private const uint WM_NCDESTROY = 0x0082;
+        private const uint WM_EXITSIZEMOVE = 0x0232;
+        private const uint WM_GETMINMAXINFO = 0x0024;
+        private const uint MONITOR_DEFAULTTONULL = 0;
+        private const int MinimumWidth = 200;
+        private const int MinimumHeight = 150;
         private const int TrackTimerId = 1;
         private const uint TrackIntervalMilliseconds = 500;
         private const int OutboxLimit = 100;
@@ -1294,6 +1380,9 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern bool GetWindowRect(IntPtr hwnd, out WebView2Api.RECT rect);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromRect(ref WebView2Api.RECT rect, uint flags);
 
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateSolidBrush(uint color);

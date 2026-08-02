@@ -31,15 +31,29 @@ namespace WebOverlay
         /// Creates an overlay. Returns null when overlays are unavailable, in
         /// which case the caller should use its own fallback.
         /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         public static IWebOverlay Create(string title, OverlayOptions options = null)
         {
             if (!OverlayHost.EnsureStarted())
                 return null;
 
+            // NoInlining keeps GetCallingAssembly honest: the caller's name
+            // namespaces the default persistence key, so equal titles from
+            // different mods do not trade window positions.
+            string ownerName;
+            try
+            {
+                ownerName = System.Reflection.Assembly.GetCallingAssembly().GetName().Name;
+            }
+            catch
+            {
+                ownerName = "unknown";
+            }
+
             // A private copy: the overlay reads its options for its whole
             // lifetime, and a caller mutating or reusing the object must not
             // half-transform a live overlay.
-            var handle = new OverlayHandle(title ?? "Overlay", snapshot(options));
+            var handle = new OverlayHandle(title ?? "Overlay", ownerName, snapshot(options));
             return handle.Start() ? handle : null;
         }
 
@@ -58,6 +72,8 @@ namespace WebOverlay
                 Opacity = options.Opacity,
                 Transparent = options.Transparent,
                 AllowedOrigins = options.AllowedOrigins == null ? null : (string[])options.AllowedOrigins.Clone(),
+                RememberBounds = options.RememberBounds,
+                PersistenceKey = options.PersistenceKey,
             };
         }
     }
@@ -123,6 +139,23 @@ namespace WebOverlay
         /// foreign page never reaches the message bridge.
         /// </summary>
         public string[] AllowedOrigins { get; set; }
+
+        /// <summary>
+        /// Remember the window's position and size across sessions (stored in
+        /// `%LOCALAPPDATA%\WebOverlay\window-bounds.txt`) and keep them while
+        /// toggling. On by default. HUDs never persist - they follow the game
+        /// window. A remembered spot that is no longer on any screen falls
+        /// back to the centered default.
+        /// </summary>
+        public bool RememberBounds { get; set; } = true;
+
+        /// <summary>
+        /// The key the bounds are stored under; defaults to
+        /// "&lt;calling assembly&gt;/&lt;title&gt;". Set it when the title changes
+        /// between sessions, or when several overlays share a title but
+        /// should remember separate spots.
+        /// </summary>
+        public string PersistenceKey { get; set; }
     }
 
     /// <summary>A single overlay window.</summary>
@@ -187,9 +220,9 @@ namespace WebOverlay
         private readonly OverlayWindow window;
         private int disposed;
 
-        public OverlayHandle(string title, OverlayOptions options)
+        public OverlayHandle(string title, string ownerName, OverlayOptions options)
         {
-            window = new OverlayWindow(title, options);
+            window = new OverlayWindow(title, ownerName, options);
             window.MessageReceived = message => MessageReceived?.Invoke(message);
             window.KeyPressed = key => KeyPressed?.Invoke(key);
             window.Closed = () => Closed?.Invoke();
