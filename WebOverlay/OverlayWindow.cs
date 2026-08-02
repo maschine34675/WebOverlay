@@ -108,7 +108,7 @@ namespace WebOverlay
             if (state == CreationState.Failed)
                 return;
             state = CreationState.Failed;
-            OverlayHost.LogWarning("WebOverlay: " + reason);
+            OverlayHost.LogWarning(reason);
             if (window != IntPtr.Zero && isVisible)
             {
                 ShowWindow(window, SW_HIDE);
@@ -234,7 +234,7 @@ namespace WebOverlay
                     fail("the close keys could not register on a frameless overlay.");
                     return;
                 }
-                OverlayHost.LogWarning("WebOverlay: the close keys could not register; use the close button.");
+                OverlayHost.LogWarning("the close keys could not register; use the close button.");
             }
             fitToClientArea();
 
@@ -379,7 +379,7 @@ namespace WebOverlay
                 string source = readString(args, WebView2Api.MessageArgs_GetSource);
                 if (!isMessageAllowed(source))
                 {
-                    OverlayHost.LogWarning("WebOverlay: dropped a message from " + (source ?? "<unknown>") + ".");
+                    OverlayHost.LogWarning("dropped a message from " + (source ?? "<unknown>") + ".");
                     return WebView2Api.S_OK;
                 }
 
@@ -441,7 +441,7 @@ namespace WebOverlay
                     }
                     else if (outbox.Count > 0)
                     {
-                        OverlayHost.LogWarning("WebOverlay: dropped " + outbox.Count
+                        OverlayHost.LogWarning("dropped " + outbox.Count
                             + " buffered send(s); the page ended up somewhere else than the mod's target.");
                         outbox.Clear();
                     }
@@ -490,7 +490,7 @@ namespace WebOverlay
                         // Bounded, so a page that kills its renderer on load
                         // cannot loop forever.
                         renderRecoveries++;
-                        OverlayHost.LogWarning("WebOverlay: the page's renderer failed (kind " + kind
+                        OverlayHost.LogWarning("the page's renderer failed (kind " + kind
                             + "); reloading (attempt " + renderRecoveries + ").");
                         startPendingNavigation();
                     }
@@ -503,7 +503,7 @@ namespace WebOverlay
                 }
                 else
                 {
-                    OverlayHost.LogWarning("WebOverlay: a browser subprocess failed (kind " + kind + ").");
+                    OverlayHost.LogWarning("a browser subprocess failed (kind " + kind + ").");
                 }
                 return WebView2Api.S_OK;
             });
@@ -520,7 +520,7 @@ namespace WebOverlay
             string uri = readString(args, WebView2Api.NavArgs_GetUri);
             if (!isNavigationAllowed(uri, topLevel))
             {
-                OverlayHost.LogWarning("WebOverlay: blocked navigation to " + (uri ?? "<unknown>") + ".");
+                OverlayHost.LogWarning("blocked navigation to " + (uri ?? "<unknown>") + ".");
                 WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.NavArgs_PutCancel)(args, 1);
                 return WebView2Api.S_OK;
             }
@@ -679,7 +679,7 @@ namespace WebOverlay
         {
             if (hr == WebView2Api.S_OK)
                 return;
-            OverlayHost.LogWarning("WebOverlay: " + what + " was rejected, hr=0x" + hr.ToString("X8")
+            OverlayHost.LogWarning("" + what + " was rejected, hr=0x" + hr.ToString("X8")
                 + "; the page will not change" + (outbox.Count > 0 ? " and " + outbox.Count + " buffered send(s) were dropped" : "") + ".");
             outbox.Clear();
         }
@@ -715,7 +715,7 @@ namespace WebOverlay
             }
             if (!currentDocumentIsTarget())
             {
-                OverlayHost.LogWarning("WebOverlay: dropped a message; the page is not the mod's target document.");
+                OverlayHost.LogWarning("dropped a message; the page is not the mod's target document.");
                 return;
             }
             WebView2Api.Method<WebView2Api.StringDelegate>(webView, WebView2Api.WebView_PostWebMessageAsString)(
@@ -733,7 +733,7 @@ namespace WebOverlay
             }
             if (!currentDocumentIsTarget())
             {
-                OverlayHost.LogWarning("WebOverlay: dropped a script; the page is not the mod's target document.");
+                OverlayHost.LogWarning("dropped a script; the page is not the mod's target document.");
                 return;
             }
 
@@ -744,14 +744,14 @@ namespace WebOverlay
                 scriptCompletedCallback = new ComCallback(WebView2Api.IID_ExecuteScriptCompleted, (int hrScript, IntPtr resultJson) =>
                 {
                     if (hrScript != WebView2Api.S_OK)
-                        OverlayHost.LogWarning("WebOverlay: a script failed, hr=0x" + hrScript.ToString("X8") + ".");
+                        OverlayHost.LogWarning("a script failed, hr=0x" + hrScript.ToString("X8") + ".");
                     return WebView2Api.S_OK;
                 });
 
             int hr = WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(webView, WebView2Api.WebView_ExecuteScript)(
                 webView, script, scriptCompletedCallback.Pointer);
             if (hr != WebView2Api.S_OK)
-                OverlayHost.LogWarning("WebOverlay: ExecuteScript was rejected, hr=0x" + hr.ToString("X8") + ".");
+                OverlayHost.LogWarning("ExecuteScript was rejected, hr=0x" + hr.ToString("X8") + ".");
         }
 
         private void buffer(bool isScript, string payload)
@@ -763,7 +763,7 @@ namespace WebOverlay
             }
             overflowDropped++;
             if (overflowDropped == 1)
-                OverlayHost.LogWarning("WebOverlay: the outbox is full (" + OutboxLimit
+                OverlayHost.LogWarning("the outbox is full (" + OutboxLimit
                     + " entries); further sends are dropped until the page loads.");
         }
 
@@ -936,7 +936,7 @@ namespace WebOverlay
                 {
                     // Without the key brush the chroma key has nothing to key
                     // out - the HUD would be an opaque sheet. Fail instead.
-                    OverlayHost.LogWarning("WebOverlay: the HUD key brush could not be created.");
+                    OverlayHost.LogWarning("the HUD key brush could not be created.");
                     return false;
                 }
             }
@@ -954,7 +954,7 @@ namespace WebOverlay
             if (OverlayHost.RegisterClassEx(ref windowClass) == 0
                 && Marshal.GetLastWin32Error() != ERROR_CLASS_ALREADY_EXISTS)
             {
-                OverlayHost.LogWarning("WebOverlay: could not register the overlay window class.");
+                OverlayHost.LogWarning("could not register the overlay window class.");
                 return false;
             }
 
@@ -991,7 +991,7 @@ namespace WebOverlay
 
             if (window == IntPtr.Zero)
             {
-                OverlayHost.LogWarning("WebOverlay: could not create the overlay window, win32 error "
+                OverlayHost.LogWarning("could not create the overlay window, win32 error "
                     + Marshal.GetLastWin32Error() + ".");
                 return false;
             }
@@ -1009,7 +1009,7 @@ namespace WebOverlay
                 if (!SetLayeredWindowAttributes(window, TransparencyKey, alpha, flags))
                 {
                     // Same reasoning as the brush: no chroma key, no HUD.
-                    OverlayHost.LogWarning("WebOverlay: the HUD chroma key could not be applied, win32 error "
+                    OverlayHost.LogWarning("the HUD chroma key could not be applied, win32 error "
                         + Marshal.GetLastWin32Error() + ".");
                     return false;
                 }
@@ -1068,7 +1068,7 @@ namespace WebOverlay
             if (Marshal.QueryInterface(controller, ref iid, out IntPtr controller2) != WebView2Api.S_OK
                 || controller2 == IntPtr.Zero)
             {
-                OverlayHost.LogWarning("WebOverlay: this WebView2 runtime cannot make a HUD transparent; update it.");
+                OverlayHost.LogWarning("this WebView2 runtime cannot make a HUD transparent; update it.");
                 return false;
             }
 
@@ -1079,7 +1079,7 @@ namespace WebOverlay
                     controller2, WebView2Api.Controller2_PutDefaultBackgroundColor)(controller2, 0u);
                 if (hr != WebView2Api.S_OK)
                 {
-                    OverlayHost.LogWarning("WebOverlay: transparent background failed, hr=0x" + hr.ToString("X8") + ".");
+                    OverlayHost.LogWarning("transparent background failed, hr=0x" + hr.ToString("X8") + ".");
                     return false;
                 }
                 return true;

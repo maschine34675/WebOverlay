@@ -259,7 +259,7 @@ namespace WebOverlay
             }
             catch (Exception ex)
             {
-                OverlayHost.LogWarning("WebOverlay: an event handler threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+                OverlayHost.LogWarning("an event handler threw (" + ex.GetType().Name + ": " + ex.Message + ").");
             }
         }
 

@@ -34,7 +34,7 @@ Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\WebView2\WebView2L
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\WebView2\WebView2-LICENSE.txt') -Destination $pluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\WebView2\WebView2-NOTICE.txt') -Destination $pluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $pluginDirectory
-Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $stageRoot
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $pluginDirectory
 
 # The zip must contain exactly these files - never game or BepInEx assemblies.
 $expected = @(
@@ -43,7 +43,7 @@ $expected = @(
     'BepInEx\plugins\Anvil-WebOverlay\WebView2-LICENSE.txt',
     'BepInEx\plugins\Anvil-WebOverlay\WebView2-NOTICE.txt',
     'BepInEx\plugins\Anvil-WebOverlay\LICENSE',
-    'README.md'
+    'BepInEx\plugins\Anvil-WebOverlay\README.md'
 )
 $actual = Get-ChildItem -Recurse -File $stageRoot | ForEach-Object {
     $_.FullName.Substring($stageRoot.Length + 1)
@@ -71,9 +71,9 @@ if (Test-Path $demoArchive) { Remove-Item -Force $demoArchive }
 $demoPluginDirectory = Join-Path $demoStage 'BepInEx\plugins\Anvil-WebOverlayDemo'
 New-Item -ItemType Directory -Path $demoPluginDirectory -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "WebOverlay.Demo\bin\$Configuration\Anvil-WebOverlayDemo.dll") -Destination $demoPluginDirectory
-Copy-Item -LiteralPath (Join-Path $repositoryRoot 'WebOverlay.Demo\DemoPlugin.cs') -Destination $demoStage
-Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $demoStage
-Set-Content -LiteralPath (Join-Path $demoStage 'README.txt') -Value @"
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'WebOverlay.Demo\DemoPlugin.cs') -Destination $demoPluginDirectory
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $demoPluginDirectory
+Set-Content -LiteralPath (Join-Path $demoPluginDirectory 'README.txt') -Value @"
 Anvil-WebOverlay demo plugin.
 
 Requires the Anvil-WebOverlay library (install its zip first).

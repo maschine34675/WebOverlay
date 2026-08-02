@@ -21,7 +21,7 @@ namespace WebOverlay
             OverlayHost.GameWindow = findGameWindow();
 
             if (OverlayHost.GameWindow == IntPtr.Zero)
-                this.Logger.LogWarning("WebOverlay: the game window was not found; overlays will be unparented.");
+                this.Logger.LogWarning("the game window was not found; overlays will be unparented.");
 
             this.Logger.LogInfo(Branding.PluginName + " " + Branding.PluginVersion + " ready.");
         }

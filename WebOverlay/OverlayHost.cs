@@ -154,7 +154,7 @@ namespace WebOverlay
             catch (Exception ex)
             {
                 startFailed = true;
-                LogWarning("WebOverlay: the overlay thread stopped (" + ex.GetType().Name + ": " + ex.Message + ").");
+                LogWarning("the overlay thread stopped (" + ex.GetType().Name + ": " + ex.Message + ").");
             }
             finally
             {
@@ -175,7 +175,7 @@ namespace WebOverlay
 
             if (RegisterClassEx(ref windowClass) == 0 && Marshal.GetLastWin32Error() != ERROR_CLASS_ALREADY_EXISTS)
             {
-                LogWarning("WebOverlay: could not register the dispatcher window class.");
+                LogWarning("could not register the dispatcher window class.");
                 return false;
             }
 
@@ -189,20 +189,20 @@ namespace WebOverlay
             string folder = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "";
             if (LoadLibrary(Path.Combine(folder, "WebView2Loader.dll")) == IntPtr.Zero)
             {
-                LogWarning("WebOverlay: WebView2Loader.dll was not found next to the plugin (" + folder + ").");
+                LogWarning("WebView2Loader.dll was not found next to the plugin (" + folder + ").");
                 return false;
             }
 
             if (WebView2Api.GetAvailableCoreWebView2BrowserVersionString(null, out IntPtr version) != WebView2Api.S_OK
                 || version == IntPtr.Zero)
             {
-                LogWarning("WebOverlay: no WebView2 runtime is installed; overlays are unavailable.");
+                LogWarning("no WebView2 runtime is installed; overlays are unavailable.");
                 return false;
             }
 
             RuntimeVersion = Marshal.PtrToStringUni(version);
             Marshal.FreeCoTaskMem(version);
-            LogInfo("WebOverlay: using WebView2 runtime " + RuntimeVersion + ".");
+            LogInfo("using WebView2 runtime " + RuntimeVersion + ".");
             return true;
         }
 
@@ -223,7 +223,7 @@ namespace WebOverlay
                 // shut itself down.
                 if (startFailed || stopping)
                 {
-                    LogWarning("WebOverlay: a late browser environment arrived after the timeout; discarding it.");
+                    LogWarning("a late browser environment arrived after the timeout; discarding it.");
                     return WebView2Api.S_OK;
                 }
 
@@ -234,7 +234,7 @@ namespace WebOverlay
                 }
                 else
                 {
-                    LogWarning("WebOverlay: the browser environment failed, hr=0x" + result.ToString("X8") + ".");
+                    LogWarning("the browser environment failed, hr=0x" + result.ToString("X8") + ".");
                 }
 
                 return WebView2Api.S_OK;
@@ -244,7 +244,7 @@ namespace WebOverlay
                 null, userData, IntPtr.Zero, environmentCallback.Pointer);
             if (hr != WebView2Api.S_OK)
             {
-                LogWarning("WebOverlay: could not request a browser environment, hr=0x" + hr.ToString("X8") + ".");
+                LogWarning("could not request a browser environment, hr=0x" + hr.ToString("X8") + ".");
                 return false;
             }
 
@@ -260,7 +260,7 @@ namespace WebOverlay
             }
 
             if (environment == IntPtr.Zero && !stopping)
-                LogWarning("WebOverlay: the browser environment did not start within 30 seconds.");
+                LogWarning("the browser environment did not start within 30 seconds.");
             return environment != IntPtr.Zero;
         }
 
@@ -274,7 +274,7 @@ namespace WebOverlay
                 }
                 catch (Exception ex)
                 {
-                    LogWarning("WebOverlay: an overlay action failed (" + ex.GetType().Name + ": " + ex.Message + ").");
+                    LogWarning("an overlay action failed (" + ex.GetType().Name + ": " + ex.Message + ").");
                 }
             }
         }
@@ -325,7 +325,7 @@ namespace WebOverlay
                 }
                 catch (Exception ex)
                 {
-                    LogWarning("WebOverlay: closing an overlay failed (" + ex.GetType().Name + ").");
+                    LogWarning("closing an overlay failed (" + ex.GetType().Name + ").");
                 }
             }
 
@@ -339,7 +339,7 @@ namespace WebOverlay
             }
             catch (Exception ex)
             {
-                LogWarning("WebOverlay: releasing the environment failed (" + ex.GetType().Name + ").");
+                LogWarning("releasing the environment failed (" + ex.GetType().Name + ").");
             }
 
             // environmentCallback is deliberately never disposed: if the
@@ -358,7 +358,7 @@ namespace WebOverlay
             }
             catch (Exception ex)
             {
-                LogWarning("WebOverlay: closing the dispatcher failed (" + ex.GetType().Name + ").");
+                LogWarning("closing the dispatcher failed (" + ex.GetType().Name + ").");
             }
         }
 
