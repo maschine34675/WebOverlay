@@ -14,8 +14,11 @@
     <OutputPath>bin\$(Configuration)\</OutputPath>
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
-    <SptRoot Condition="'$(SptRoot)' == ''">C:\SPT</SptRoot>
-    <DeployToSpt Condition="'$(DeployToSpt)' == ''">false</DeployToSpt>
+    <!-- Relative to the working copy: <Install>\Development\WebOverlay\WebOverlay\ -> <Install>.
+         The build then works on any machine regardless of the drive letter.
+         Overridable with /p:SptRoot=... -->
+    <SptRoot Condition="'$(SptRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..</SptRoot>
+    <DeployToSpt Condition="'$(DeployToSpt)' == ''">true</DeployToSpt>
   </PropertyGroup>
 
   <ItemGroup>
@@ -54,12 +57,16 @@
 
   <Target Name="DeployToSpt" AfterTargets="Build" Condition="'$(DeployToSpt)' == 'true'">
     <Error Condition="'$(SptRoot)' == ''" Text="Set SptRoot when DeployToSpt=true." />
+    <!-- Only deploy into a real SPT install: a clone outside one must never
+         scatter BepInEx folders into arbitrary parent directories. -->
+    <Message Condition="!Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" Importance="high"
+             Text="Skipping deploy: $(SptRoot) is not an SPT installation (BepInEx\core\BepInEx.dll not found). Set /p:SptRoot=&lt;your SPT folder&gt;." />
     <PropertyGroup>
       <PluginDirectory>$(SptRoot)\BepInEx\plugins\$(AssemblyName)</PluginDirectory>
     </PropertyGroup>
-    <MakeDir Directories="$(PluginDirectory)" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDirectory)" />
-    <Copy SourceFiles="..\ThirdParty\WebView2\WebView2Loader.dll" DestinationFolder="$(PluginDirectory)" />
-    <Copy SourceFiles="..\ThirdParty\WebView2\WebView2-LICENSE.txt;..\ThirdParty\WebView2\WebView2-NOTICE.txt;..\LICENSE" DestinationFolder="$(PluginDirectory)" />
+    <MakeDir Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" Directories="$(PluginDirectory)" />
+    <Copy Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDirectory)" />
+    <Copy Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" SourceFiles="..\ThirdParty\WebView2\WebView2Loader.dll" DestinationFolder="$(PluginDirectory)" />
+    <Copy Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" SourceFiles="..\ThirdParty\WebView2\WebView2-LICENSE.txt;..\ThirdParty\WebView2\WebView2-NOTICE.txt;..\LICENSE" DestinationFolder="$(PluginDirectory)" />
   </Target>
 </Project>

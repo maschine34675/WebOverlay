@@ -14,7 +14,7 @@ namespace WebOverlay.Demo
     /// Press F10 to toggle it. The page pushes button presses to the game and
     /// the game pushes a live value back every second.
     /// </summary>
-    [BepInPlugin("com.anvil.weboverlay.demo", "Anvil-WebOverlayDemo", "1.0.0")]
+    [BepInPlugin("com.anvil.weboverlay.demo", "Anvil-WebOverlayDemo", Branding.PluginVersion)]
     [BepInDependency(Branding.PluginGuid)]
     public class DemoPlugin : BaseUnityPlugin
     {
