@@ -71,6 +71,7 @@ namespace WebOverlay
                 DevTools = options.DevTools,
                 Opacity = options.Opacity,
                 Transparent = options.Transparent,
+                Interactive = options.Interactive,
                 AllowedOrigins = options.AllowedOrigins == null ? null : (string[])options.AllowedOrigins.Clone(),
                 RememberBounds = options.RememberBounds,
                 PersistenceKey = options.PersistenceKey,
@@ -111,23 +112,26 @@ namespace WebOverlay
         public double Opacity { get; set; } = 1.0;
 
         /// <summary>
-        /// Display-only HUD mode. Pixels the page leaves unpainted show the
-        /// game; painted content floats over it. The window ignores the mouse
-        /// and never takes focus, so the game stays fully playable - which also
-        /// means <see cref="CloseKeys"/> cannot apply: hide the HUD from the
-        /// mod's own hotkey via <see cref="IWebOverlay.Hide"/> or Toggle.
-        /// Unless a size is set, the HUD covers the game's whole client area,
-        /// and <see cref="Frame"/> is ignored. A sized HUD sits at the game
-        /// picture's top-left corner - there is no placement option, so prefer
-        /// the full-size default and place elements with CSS.
+        /// HUD mode. Pixels the page leaves unpainted show the game; painted
+        /// content floats over it. Without <see cref="Interactive"/> the
+        /// window ignores the mouse and never takes focus, so the game stays
+        /// fully playable - which also means <see cref="CloseKeys"/> cannot
+        /// apply: hide the HUD from the mod's own hotkey via
+        /// <see cref="IWebOverlay.Hide"/> or Toggle. Unless a size is set, the
+        /// HUD covers the game's whole client area, and <see cref="Frame"/>
+        /// is ignored (<see cref="Opacity"/> too when composition hosted -
+        /// fade in the page's CSS instead; the chroma-key fallback still
+        /// applies it). A sized HUD sits at the game
+        /// picture's top-left corner - prefer the full-size default and place
+        /// elements with CSS.
         ///
-        /// Transparency is per pixel but binary: a pixel either shows the game
-        /// or shows page content. Semi-transparent page pixels blend towards
-        /// near-black instead of the game, and antialiased edges pick up a hint
-        /// of that - design HUD elements on their own solid-ish backgrounds.
-        /// rgb(3,1,3) is reserved as the transparency key; avoid painting it
-        /// (normally it just shows as near-black, but under software rendering
-        /// such pixels can vanish).
+        /// On Windows 8+ with a 2021+ WebView2 runtime the HUD is composition
+        /// hosted: transparency is TRUE per-pixel alpha - rgba() glass, soft
+        /// shadows and clean antialiasing all blend with the game. On older
+        /// systems it falls back to a chroma key, where transparency is
+        /// binary, semi-transparent pixels blend towards near-black, and
+        /// rgb(3,1,3) is reserved - design for solid-ish panels if those
+        /// systems matter to you.
         /// </summary>
         public bool Transparent { get; set; }
 
@@ -148,6 +152,19 @@ namespace WebOverlay
         /// back to the centered default.
         /// </summary>
         public bool RememberBounds { get; set; } = true;
+
+        /// <summary>
+        /// Makes a <see cref="Transparent"/> HUD receive mouse input: HTML
+        /// buttons, hovers and wheel scrolling work, forwarded to the page
+        /// while the game keeps the keyboard. Requires composition support
+        /// (Windows 8+ with a 2021+ WebView2 runtime) - creation fails
+        /// otherwise, reported through <see cref="IWebOverlay.Failed"/>.
+        /// The window then swallows mouse input over its WHOLE rectangle, so
+        /// size such an overlay to its content instead of the full screen.
+        /// Keyboard input is not forwarded (yet); <see cref="CloseKeys"/> do
+        /// not apply. Ignored without <see cref="Transparent"/>.
+        /// </summary>
+        public bool Interactive { get; set; }
 
         /// <summary>
         /// The key the bounds are stored under; defaults to

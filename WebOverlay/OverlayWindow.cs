@@ -47,6 +47,16 @@ namespace WebOverlay
         private IntPtr window;
         private IntPtr controller;
         private IntPtr webView;
+        private IntPtr compositionController;
+        private IntPtr dcompDevice;
+        private IntPtr dcompTarget;
+        private IntPtr dcompVisual;
+        private ComCallback compositionCompleted;
+        private ComCallback cursorChangedCallback;
+        private bool usesComposition;
+        private IntPtr currentCursor;
+        private bool trackingMouseLeave;
+        private int mouseButtonsDown;
         private ComCallback controllerCallback;
         private ComCallback keyCallback;
         private ComCallback messageCallback;
@@ -156,11 +166,31 @@ namespace WebOverlay
                 return false;
             }
 
+            // HUDs prefer composition hosting: true per-pixel alpha instead of
+            // the binary chroma key, and the only mode that can forward mouse
+            // input. Decided before the window exists because the two modes
+            // need different window styles. Display-only HUDs fall back to the
+            // proven chroma key when composition is unavailable; interactive
+            // ones cannot (a chroma-keyed window never receives per-pixel
+            // input), so they fail instead.
+            if (options.Transparent)
+            {
+                usesComposition = tryPrepareComposition();
+                if (!usesComposition && options.Interactive)
+                {
+                    fail("an interactive HUD needs composition support (Windows 8+ with a 2021+ WebView2 runtime).");
+                    return false;
+                }
+            }
+
             if (!createWindow())
             {
                 fail("the overlay window could not be created.");
                 return false;
             }
+
+            if (usesComposition)
+                return createComposedView();
 
             controllerCallback = new ComCallback(WebView2Api.IID_ControllerCompleted, (int result, IntPtr pointer) =>
             {
@@ -864,6 +894,82 @@ namespace WebOverlay
             notifyPositionChanged();
         }
 
+        /// <summary>
+        /// Translates a real mouse message into the browser's input call. The
+        /// event kinds mirror the WM codes and the virtual-key flags mirror
+        /// the MK_* flags in wParam, so the translation is nearly verbatim;
+        /// only the wheel needs work (screen coordinates, delta in the high
+        /// word) plus capture and leave bookkeeping.
+        /// </summary>
+        private void forwardMouse(uint message, IntPtr wParam, IntPtr lParam)
+        {
+            int virtualKeys = (int)((long)wParam & 0xFFFF);
+            uint mouseData = 0;
+            int x = (short)((long)lParam & 0xFFFF);
+            int y = (short)(((long)lParam >> 16) & 0xFFFF);
+
+            if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL)
+            {
+                mouseData = (uint)(short)(((long)wParam >> 16) & 0xFFFF);
+                // The wheel messages alone carry screen coordinates.
+                var point = new POINT { x = x, y = y };
+                ScreenToClient(window, ref point);
+                x = point.x;
+                y = point.y;
+            }
+            else if (message == WM_XBUTTONDOWN || message == WM_XBUTTONUP)
+            {
+                // Which X button lives in the high word.
+                mouseData = (uint)(((long)wParam >> 16) & 0xFFFF);
+            }
+
+            switch (message)
+            {
+                case WM_LBUTTONDOWN:
+                case WM_RBUTTONDOWN:
+                case WM_MBUTTONDOWN:
+                case WM_XBUTTONDOWN:
+                    // Capture, so a drag that leaves the window keeps
+                    // delivering until the button is released.
+                    if (mouseButtonsDown++ == 0)
+                        SetCapture(window);
+                    break;
+                case WM_LBUTTONUP:
+                case WM_RBUTTONUP:
+                case WM_MBUTTONUP:
+                case WM_XBUTTONUP:
+                    if (mouseButtonsDown > 0 && --mouseButtonsDown == 0)
+                        ReleaseCapture();
+                    break;
+                case WM_MOUSEMOVE:
+                    if (!trackingMouseLeave)
+                    {
+                        // Without this the browser never learns the cursor
+                        // left, and hover states stick.
+                        var track = new TRACKMOUSEEVENT
+                        {
+                            cbSize = Marshal.SizeOf(typeof(TRACKMOUSEEVENT)),
+                            dwFlags = TME_LEAVE,
+                            hwndTrack = window,
+                        };
+                        trackingMouseLeave = TrackMouseEvent(ref track);
+                    }
+                    break;
+            }
+
+            sendMouse((int)message, virtualKeys, mouseData, x, y);
+        }
+
+        private void sendMouse(int eventKind, int virtualKeys, uint mouseData, int x, int y)
+        {
+            if (compositionController == IntPtr.Zero)
+                return;
+            long point = (uint)x | ((long)y << 32);
+            WebView2Api.Method<WebView2Api.SendMouseInputDelegate>(
+                compositionController, WebView2Api.Composition_SendMouseInput)(
+                compositionController, eventKind, virtualKeys, mouseData, point);
+        }
+
         private void saveBounds()
         {
             if (!remembersBounds || window == IntPtr.Zero)
@@ -953,6 +1059,20 @@ namespace WebOverlay
             {
             }
 
+            try
+            {
+                if (compositionController != IntPtr.Zero)
+                {
+                    IntPtr toRelease = compositionController;
+                    compositionController = IntPtr.Zero;
+                    Marshal.Release(toRelease);
+                }
+            }
+            catch
+            {
+            }
+            releaseDComp();
+
             controllerCallback?.Dispose();
             keyCallback?.Dispose();
             messageCallback?.Dispose();
@@ -963,6 +1083,8 @@ namespace WebOverlay
             permissionCallback?.Dispose();
             processFailedCallback?.Dispose();
             scriptCompletedCallback?.Dispose();
+            compositionCompleted?.Dispose();
+            cursorChangedCallback?.Dispose();
             OverlayHost.Unregister(this);
             if (wasVisible)
                 Closed?.Invoke();
@@ -970,13 +1092,16 @@ namespace WebOverlay
 
         private bool createWindow()
         {
-            // HUD windows get their own class because the class carries the
-            // background brush, and theirs must be the transparency key: those
-            // are exactly the pixels the chroma key later removes. The brush is
-            // created once and owned by the class for the rest of the process;
-            // creating one per window would leak a GDI handle each time.
-            string className = options.Transparent ? HudWindowClassName : WindowClassName;
-            if (options.Transparent && hudBrush == IntPtr.Zero)
+            // Chroma-key HUD windows get their own class because the class
+            // carries the background brush, and theirs must be the
+            // transparency key: those are exactly the pixels the chroma key
+            // later removes. Composition windows have no redirection surface
+            // at all, so the brush - and the special class - are meaningless
+            // there. The brush is created once and owned by the class for the
+            // rest of the process; one per window would leak a GDI handle.
+            bool chromaKeyHud = options.Transparent && !usesComposition;
+            string className = chromaKeyHud ? HudWindowClassName : WindowClassName;
+            if (chromaKeyHud && hudBrush == IntPtr.Zero)
             {
                 hudBrush = CreateSolidBrush(TransparencyKey);
                 if (hudBrush == IntPtr.Zero)
@@ -993,7 +1118,7 @@ namespace WebOverlay
                 lpfnWndProc = Marshal.GetFunctionPointerForDelegate(classProc),
                 hInstance = OverlayHost.GetModuleHandle(null),
                 lpszClassName = className,
-                hbrBackground = options.Transparent
+                hbrBackground = chromaKeyHud
                     ? hudBrush
                     : (IntPtr)(COLOR_WINDOW + 1)
             };
@@ -1013,7 +1138,17 @@ namespace WebOverlay
 
             uint exStyle = WS_EX_TOOLWINDOW;
             byte alpha = opacityAsAlpha();
-            if (options.Transparent)
+            if (usesComposition)
+            {
+                // No redirection surface: the DComp visual is the only pixel
+                // source, which is what gives true per-pixel alpha. Interactive
+                // HUDs keep receiving mouse messages (no WS_EX_TRANSPARENT);
+                // display-only ones stay click-through. Neither takes focus.
+                exStyle |= WS_EX_NOREDIRECTIONBITMAP | WS_EX_NOACTIVATE;
+                if (!options.Interactive)
+                    exStyle |= WS_EX_TRANSPARENT;
+            }
+            else if (options.Transparent)
             {
                 // Layered for the chroma key; transparent and no-activate so the
                 // mouse and the keyboard never leave the game.
@@ -1048,7 +1183,7 @@ namespace WebOverlay
             if (options.Frame && !options.Transparent)
                 applyDarkFrame();
 
-            if (options.Transparent)
+            if (chromaKeyHud)
             {
                 uint flags = LWA_COLORKEY;
                 if (alpha < byte.MaxValue)
@@ -1101,6 +1236,195 @@ namespace WebOverlay
             if (opacity < 0.15)
                 opacity = 0.15;
             return (byte)Math.Round(opacity * byte.MaxValue);
+        }
+
+        /// <summary>
+        /// A composition HUD needs a DComp device (no D3D device required) and
+        /// an environment that can create composition controllers. Both checks
+        /// are synchronous and cheap, so the mode is known before any window
+        /// exists. The device is kept for the wiring later.
+        /// </summary>
+        private bool tryPrepareComposition()
+        {
+            try
+            {
+                if (DCompApi.DCompositionCreateDevice2(IntPtr.Zero, DCompApi.IID_DesktopDevice, out dcompDevice) != WebView2Api.S_OK
+                    || dcompDevice == IntPtr.Zero)
+                {
+                    OverlayHost.LogWarning("no DirectComposition device"
+                        + (options.Interactive ? "." : "; the HUD uses the chroma key instead."));
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is DllNotFoundException || ex is EntryPointNotFoundException)
+            {
+                // Missing dcomp.dll or a Windows too old to export the entry
+                // point - either way composition is simply not available here.
+                OverlayHost.LogWarning("DirectComposition is unavailable on this Windows"
+                    + (options.Interactive ? "." : "; the HUD uses the chroma key instead."));
+                return false;
+            }
+
+            Guid iid = WebView2Api.IID_Environment3;
+            if (Marshal.QueryInterface(OverlayHost.Environment, ref iid, out IntPtr environment3) != WebView2Api.S_OK
+                || environment3 == IntPtr.Zero)
+            {
+                OverlayHost.LogWarning("this WebView2 runtime cannot host composition"
+                    + (options.Interactive ? "." : "; the HUD uses the chroma key instead."));
+                releaseDComp();
+                return false;
+            }
+            Marshal.Release(environment3);
+            return true;
+        }
+
+        /// <summary>
+        /// The composed path: the browser draws into a DirectComposition
+        /// visual instead of child windows, which is what makes true
+        /// per-pixel alpha and input forwarding possible. The controller that
+        /// comes back also answers for ICoreWebView2Controller, so the whole
+        /// existing configuration path applies unchanged.
+        /// </summary>
+        private bool createComposedView()
+        {
+            Guid iid3 = WebView2Api.IID_Environment3;
+            if (Marshal.QueryInterface(OverlayHost.Environment, ref iid3, out IntPtr environment3) != WebView2Api.S_OK
+                || environment3 == IntPtr.Zero)
+            {
+                fail("the composition environment disappeared.");
+                return false;
+            }
+
+            compositionCompleted = new ComCallback(WebView2Api.IID_CompositionControllerCompleted, (int result, IntPtr pointer) =>
+            {
+                if (closed)
+                {
+                    // The delivered pointer is the COMPOSITION controller,
+                    // whose own vtable ends long before the plain controller's
+                    // Close slot - calling slot 24 on it would jump into
+                    // arbitrary memory. Close through the QI'd controller
+                    // interface, like the success path does.
+                    if (result == WebView2Api.S_OK && pointer != IntPtr.Zero)
+                    {
+                        Guid iidClose = WebView2Api.IID_Controller;
+                        if (Marshal.QueryInterface(pointer, ref iidClose, out IntPtr asController) == WebView2Api.S_OK
+                            && asController != IntPtr.Zero)
+                        {
+                            WebView2Api.Method<WebView2Api.NoArgsDelegate>(asController, WebView2Api.Controller_Close)(asController);
+                            Marshal.Release(asController);
+                        }
+                    }
+                    return WebView2Api.S_OK;
+                }
+                if (result != WebView2Api.S_OK || pointer == IntPtr.Zero)
+                {
+                    fail("the composed browser view failed, hr=0x" + result.ToString("X8") + ".");
+                    return WebView2Api.S_OK;
+                }
+
+                compositionController = pointer;
+                Marshal.AddRef(compositionController);
+
+                // The same object speaks the plain controller interface; the
+                // QI hands over its own reference, so no extra AddRef here.
+                Guid iidController = WebView2Api.IID_Controller;
+                if (Marshal.QueryInterface(compositionController, ref iidController, out controller) != WebView2Api.S_OK
+                    || controller == IntPtr.Zero)
+                {
+                    fail("the composed view does not answer as a controller.");
+                    return WebView2Api.S_OK;
+                }
+
+                try
+                {
+                    if (!wireVisualTree())
+                    {
+                        fail("the composition visual tree could not be wired.");
+                        return WebView2Api.S_OK;
+                    }
+                    subscribeToCursor();
+                    configure();
+                }
+                catch (Exception ex)
+                {
+                    fail("composed configuration threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+                }
+                return WebView2Api.S_OK;
+            });
+
+            int hr = WebView2Api.Method<WebView2Api.CreateControllerDelegate>(
+                environment3, WebView2Api.Environment3_CreateCompositionController)(
+                environment3, window, compositionCompleted.Pointer);
+            Marshal.Release(environment3);
+            if (hr != WebView2Api.S_OK)
+            {
+                fail("could not request a composed browser view, hr=0x" + hr.ToString("X8") + ".");
+                return false;
+            }
+            return true;
+        }
+
+        private bool wireVisualTree()
+        {
+            int hrTarget = WebView2Api.Method<DCompApi.CreateTargetForHwndDelegate>(
+                dcompDevice, DCompApi.Device_CreateTargetForHwnd)(dcompDevice, window, 1, out dcompTarget);
+            int hrVisual = WebView2Api.Method<WebView2Api.GetPointerDelegate>(
+                dcompDevice, DCompApi.Device_CreateVisual)(dcompDevice, out dcompVisual);
+            if (hrTarget != WebView2Api.S_OK || hrVisual != WebView2Api.S_OK
+                || dcompTarget == IntPtr.Zero || dcompVisual == IntPtr.Zero)
+                return false;
+
+            int hrRoot = WebView2Api.Method<WebView2Api.PutPointerDelegate>(
+                compositionController, WebView2Api.Composition_PutRootVisualTarget)(compositionController, dcompVisual);
+            int hrSetRoot = WebView2Api.Method<WebView2Api.PutPointerDelegate>(
+                dcompTarget, DCompApi.Target_SetRoot)(dcompTarget, dcompVisual);
+            int hrCommit = WebView2Api.Method<WebView2Api.NoArgsDelegate>(dcompDevice, DCompApi.Device_Commit)(dcompDevice);
+            return hrRoot == WebView2Api.S_OK && hrSetRoot == WebView2Api.S_OK && hrCommit == WebView2Api.S_OK;
+        }
+
+        /// <summary>
+        /// In visual hosting the browser cannot set the mouse cursor itself;
+        /// it announces what it wants and the window applies it on WM_SETCURSOR.
+        /// </summary>
+        private void subscribeToCursor()
+        {
+            if (!options.Interactive)
+                return;
+            cursorChangedCallback = new ComCallback(WebView2Api.IID_CursorChanged, (IntPtr sender, IntPtr args) =>
+            {
+                WebView2Api.Method<WebView2Api.GetUIntDelegate>(
+                    compositionController, WebView2Api.Composition_GetSystemCursorId)(compositionController, out uint cursorId);
+                currentCursor = LoadCursor(IntPtr.Zero, (IntPtr)cursorId);
+                return WebView2Api.S_OK;
+            });
+            WebView2Api.Method<WebView2Api.AddEventDelegate>(
+                compositionController, WebView2Api.Composition_AddCursorChanged)(
+                compositionController, cursorChangedCallback.Pointer, out _);
+        }
+
+        private void releaseDComp()
+        {
+            try
+            {
+                if (dcompVisual != IntPtr.Zero) { Marshal.Release(dcompVisual); dcompVisual = IntPtr.Zero; }
+            }
+            catch
+            {
+            }
+            try
+            {
+                if (dcompTarget != IntPtr.Zero) { Marshal.Release(dcompTarget); dcompTarget = IntPtr.Zero; }
+            }
+            catch
+            {
+            }
+            try
+            {
+                if (dcompDevice != IntPtr.Zero) { Marshal.Release(dcompDevice); dcompDevice = IntPtr.Zero; }
+            }
+            catch
+            {
+            }
         }
 
         /// <summary>
@@ -1174,6 +1498,60 @@ namespace WebOverlay
                         {
                             followGameWindow();
                             return IntPtr.Zero;
+                        }
+                        break;
+                    case WM_MOUSEMOVE:
+                    case WM_LBUTTONDOWN:
+                    case WM_LBUTTONUP:
+                    case WM_RBUTTONDOWN:
+                    case WM_RBUTTONUP:
+                    case WM_MBUTTONDOWN:
+                    case WM_MBUTTONUP:
+                    case WM_MOUSEWHEEL:
+                    case WM_MOUSEHWHEEL:
+                        if (usesComposition && options.Interactive)
+                        {
+                            forwardMouse(message, wParam, lParam);
+                            return IntPtr.Zero;
+                        }
+                        break;
+                    case WM_XBUTTONDOWN:
+                    case WM_XBUTTONUP:
+                        if (usesComposition && options.Interactive)
+                        {
+                            forwardMouse(message, wParam, lParam);
+                            // MSDN: X-button messages report handled as TRUE.
+                            return (IntPtr)1;
+                        }
+                        break;
+                    case WM_MOUSELEAVE:
+                        if (usesComposition && options.Interactive)
+                        {
+                            trackingMouseLeave = false;
+                            sendMouse(WebView2Api.MouseEventLeave, 0, 0, 0, 0);
+                            return IntPtr.Zero;
+                        }
+                        break;
+                    case WM_CAPTURECHANGED:
+                        // Windows can revoke capture without a button-up
+                        // (Alt-Tab, another SetCapture, WM_CANCELMODE). The
+                        // counter must resynchronize or it stays offset for
+                        // the window's remaining lifetime, and the page needs
+                        // a leave so its pressed/hover state resets too.
+                        if (usesComposition && options.Interactive
+                            && lParam != window && mouseButtonsDown > 0)
+                        {
+                            mouseButtonsDown = 0;
+                            sendMouse(WebView2Api.MouseEventLeave, 0, 0, 0, 0);
+                        }
+                        break;
+                    case WM_SETCURSOR:
+                        if (usesComposition && options.Interactive)
+                        {
+                            // Visual hosting cannot set the cursor itself; the
+                            // browser announced its wish via CursorChanged.
+                            SetCursor(currentCursor != IntPtr.Zero ? currentCursor : LoadCursor(IntPtr.Zero, (IntPtr)IDC_ARROW));
+                            return (IntPtr)1;
                         }
                         break;
                     case WM_KEYDOWN:
@@ -1327,6 +1705,23 @@ namespace WebOverlay
         private const uint WM_NCDESTROY = 0x0082;
         private const uint WM_EXITSIZEMOVE = 0x0232;
         private const uint WM_GETMINMAXINFO = 0x0024;
+        private const uint WM_MOUSEMOVE = 0x0200;
+        private const uint WM_LBUTTONDOWN = 0x0201;
+        private const uint WM_LBUTTONUP = 0x0202;
+        private const uint WM_RBUTTONDOWN = 0x0204;
+        private const uint WM_RBUTTONUP = 0x0205;
+        private const uint WM_MBUTTONDOWN = 0x0207;
+        private const uint WM_MBUTTONUP = 0x0208;
+        private const uint WM_MOUSEWHEEL = 0x020A;
+        private const uint WM_MOUSEHWHEEL = 0x020E;
+        private const uint WM_XBUTTONDOWN = 0x020B;
+        private const uint WM_XBUTTONUP = 0x020C;
+        private const uint WM_CAPTURECHANGED = 0x0215;
+        private const uint WM_MOUSELEAVE = 0x02A3;
+        private const uint WM_SETCURSOR = 0x0020;
+        private const uint WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
+        private const uint TME_LEAVE = 0x00000002;
+        private const int IDC_ARROW = 32512;
         private const uint MONITOR_DEFAULTTONULL = 0;
         private const int MinimumWidth = 200;
         private const int MinimumHeight = 150;
@@ -1383,6 +1778,33 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern IntPtr MonitorFromRect(ref WebView2Api.RECT rect, uint flags);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct TRACKMOUSEEVENT
+        {
+            public int cbSize;
+            public uint dwFlags;
+            public IntPtr hwndTrack;
+            public uint dwHoverTime;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT track);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetCapture(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetCursor(IntPtr cursor);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr LoadCursor(IntPtr instance, IntPtr cursorName);
+
+        [DllImport("user32.dll")]
+        private static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
 
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateSolidBrush(uint color);

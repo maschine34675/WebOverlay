@@ -46,6 +46,7 @@
     <Compile Include="BoundsStore.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Interop\ComCallback.cs" />
+    <Compile Include="Interop\DCompApi.cs" />
     <Compile Include="Interop\WebView2Api.cs" />
     <Compile Include="OverlayHost.cs" />
     <Compile Include="OverlayWindow.cs" />

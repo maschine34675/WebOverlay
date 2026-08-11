@@ -61,8 +61,9 @@ When another mod ships alongside this library, reference it with
 `<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your
 own release zip - it is a shared dependency the user installs once.
 
-Install the demo plugin to see a working panel: press **F10** in game, and
-**F11** for the transparent HUD demo.
+Install the demo plugin to see a working panel: press **F10** in game,
+**F11** for the transparent HUD demo, and **F8** for the interactive glass
+panel.
 
 ## API reference
 
@@ -84,7 +85,8 @@ Install the demo plugin to see a working panel: press **F10** in game, and
 | `ContextMenu` | false | Allow the browser's right-click menu. |
 | `DevTools` | false | Allow F12 developer tools and browser accelerator keys. |
 | `Opacity` | 1.0 | Whole-window fade, 0.15-1.0. |
-| `Transparent` | false | Display-only click-through HUD (see below). |
+| `Transparent` | false | HUD: unpainted pixels show the game (see below). |
+| `Interactive` | false | The HUD receives mouse input - clickable glass (see below). |
 | `AllowedOrigins` | null | Extra origins allowed for navigation and messages. |
 | `RememberBounds` | true | Reopen at the position and size the player left the window at, across sessions. |
 | `PersistenceKey` | assembly/title | Storage key for the remembered bounds. |
@@ -138,26 +140,29 @@ Two options in `OverlayOptions` control how much of the game shows through:
 - **`Opacity`** (0.15 to 1.0) fades the whole window - content included -
   evenly. The overlay stays a normal interactive window; this suits panels that
   should not completely cover the game.
-- **`Transparent`** turns the overlay into a display-only HUD. Pixels the page
-  leaves unpainted show the game; painted content floats over it. The window
-  ignores the mouse and never takes focus, so the game stays fully playable.
-  Unless a size is set the HUD covers the game's whole picture, and the page
-  decides where on it something appears (a sized HUD sits at the picture's
-  top-left corner - prefer the full-size default and place elements with CSS).
-  Both can be combined for a faded HUD.
+- **`Transparent`** turns the overlay into a HUD. Pixels the page leaves
+  unpainted show the game; painted content floats over it. Without
+  `Interactive` the window ignores the mouse and never takes focus, so the
+  game stays fully playable. Unless a size is set the HUD covers the game's
+  whole picture, and the page decides where on it something appears (a sized
+  HUD sits at the picture's top-left corner).
+- **`Interactive`** (on a `Transparent` overlay) forwards mouse input to the
+  page: HTML buttons, hover states and wheel scrolling work while the game
+  keeps the keyboard. The window swallows mouse input over its whole
+  rectangle, so size an interactive overlay to its content. `CloseKeys` do
+  not apply (no keyboard); hide it from the mod's own hotkey. Wheel scrolling
+  over the unfocused overlay relies on Windows' "scroll inactive windows"
+  setting (default on in Windows 10/11).
 
-HUD rules that follow from how it works (chroma key, see below):
+On Windows 8+ with a 2021+ WebView2 runtime, HUDs are **composition hosted**:
+transparency is true per-pixel alpha, so `rgba()` glass, soft shadows and
+clean antialiasing all blend with the game (`Opacity` is ignored there - fade
+in the page's CSS instead). On older systems a display-only HUD falls back to
+a **chroma key** with these rules; an interactive one fails instead:
 
-- **Interaction:** none - clicks go to the game everywhere, and `CloseKeys`
-  cannot apply. Hide the HUD from the mod's own hotkey (`Hide`/`Toggle`).
-- **Per-pixel transparency is binary.** A pixel either shows the game or shows
-  page content. Semi-transparent page pixels blend towards near-black rather
-  than the game, and antialiased edges pick up a hint of that - design HUD
-  elements on solid dark panels (see the demo's HUD page), not as glass.
-- `rgb(3,1,3)` is the reserved transparency key. A page pixel of exactly that
-  color normally just shows as near-black (page pixels are not keyed on the
-  GPU path), but avoid it anyway: under software rendering such pixels can
-  land on the keyed surface and vanish.
+- Per-pixel transparency is binary: semi-transparent page pixels blend towards
+  near-black rather than the game - solid dark panels are the safe look.
+- `rgb(3,1,3)` is the reserved transparency key; avoid painting it.
 
 ## Requirements and limits
 
@@ -210,15 +215,8 @@ shows a dark background after a Windows update, suspect the runtime first.
 
 ## Roadmap
 
-- **True per-pixel alpha with interaction** (glass panels, soft shadows over
-  the game, clickable HUD elements) is possible but is a different hosting
-  model: composition hosting via `ICoreWebView2Environment3` /
-  `ICoreWebView2CompositionController`, a DirectComposition visual tree in a
-  `WS_EX_NOREDIRECTIONBITMAP` window, and manual forwarding of all mouse input
-  plus cursor handling. The interop fits this library's hand-built-vtable
-  approach and is planned as a second overlay mode. Microsoft's
-  `WebView2APISample` (ViewComponent.cpp) shows the canonical native
-  implementation.
+- Keyboard forwarding for interactive HUDs (text fields in glass panels).
+- Touch/pen input via `SendPointerInput`.
 
 ## Building
 

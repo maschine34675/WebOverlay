@@ -33,9 +33,31 @@ namespace WebOverlay.Interop
         public static readonly Guid IID_ProcessFailed = new Guid("79e0aea4-990b-42d9-aa1d-0fcc2e5bc7f1");
         public static readonly Guid IID_Settings3 = new Guid("fdb5ab74-af33-4854-84f0-0a631deb5eba");
         public static readonly Guid IID_Settings4 = new Guid("cb56846c-4168-4d53-b04f-03b6d6796ff2");
+        public static readonly Guid IID_Environment3 = new Guid("80a22ae3-be7c-4ce2-afe1-5a50056cdeeb");
+        public static readonly Guid IID_CompositionControllerCompleted = new Guid("02fab84b-1428-4fb7-ad45-1b2e64736184");
+        public static readonly Guid IID_Controller = new Guid("4d00c0d1-9434-4eb6-8078-8697a560334f");
+        public static readonly Guid IID_CursorChanged = new Guid("9da43ccc-26e1-4dad-b56c-d8961c94c571");
 
         // ICoreWebView2Environment
         public const int Environment_CreateController = 3;
+
+        // ICoreWebView2Environment3 - via QueryInterface(IID_Environment3).
+        // Slots counted through Environment v1 (3-7) and Environment2 (8);
+        // proven by the composition probe.
+        public const int Environment3_CreateCompositionController = 9;
+
+        // ICoreWebView2CompositionController - IUnknown-rooted (NOT derived
+        // from ICoreWebView2Controller; the same object answers a QI for that
+        // interface separately). Proven by the composition probe.
+        public const int Composition_PutRootVisualTarget = 4;
+        public const int Composition_SendMouseInput = 5;
+        public const int Composition_GetSystemCursorId = 8;
+        public const int Composition_AddCursorChanged = 9;
+
+        // COREWEBVIEW2_MOUSE_EVENT_KIND mirrors the WM_MOUSE* message codes,
+        // and COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS mirrors the MK_* flags in
+        // wParam - the window procedure can forward both nearly verbatim.
+        public const int MouseEventLeave = 0x02A3;
 
         // ICoreWebView2Controller
         public const int Controller_PutIsVisible = 4;
@@ -148,6 +170,16 @@ namespace WebOverlay.Interop
         /// </summary>
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int PutColorDelegate(IntPtr self, uint color);
+
+        /// <summary>
+        /// POINT by value is one 8-byte register on x64: packed as a long with
+        /// x in the low and y in the high half. Proven by the probe's clicks.
+        /// </summary>
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate int SendMouseInputDelegate(IntPtr self, int eventKind, int virtualKeys, uint mouseData, long point);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate int PutPointerDelegate(IntPtr self, IntPtr value);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int GetPointerDelegate(IntPtr self, out IntPtr value);

@@ -41,7 +41,7 @@ overlay.Post("live value");                    // mod -> page
 
 ## Demo
 
-The optional demo plugin shows both modes in game: **F10** an interactive panel, **F11** a transparent click-through HUD with live values. Source included - it is the reference for how to use the library.
+The optional demo plugin shows the modes in game: **F10** an interactive panel, **F11** a transparent click-through glass HUD with live values, **F8** an interactive glass panel with working buttons. Source included - it is the reference for how to use the library.
 
 Full API documentation and the technical write-up (why raw COM vtables, why a chroma key) are in the README on GitHub.
 
@@ -52,6 +52,14 @@ Anvil is the library branding of **maschine** (the author of CraftQueue and othe
 ## License
 
 MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed under BSD 3-Clause; the WebView2 runtime itself is not redistributed.
+
+## Changelog v1.2.0 (for the Forge version field)
+
+```text
+- HUDs are now composition hosted (Windows 8+, 2021+ WebView2): true per-pixel alpha - rgba() glass, soft shadows and clean antialiasing blend with the game. Older systems keep the chroma-key fallback.
+- New Interactive option: a transparent HUD can receive mouse input - HTML buttons, hovers and wheel scrolling work while the game keeps the keyboard.
+- Demo: F11 shows the glass HUD, F8 an interactive glass panel.
+```
 
 ## Changelog v1.1.0 (for the Forge version field)
 

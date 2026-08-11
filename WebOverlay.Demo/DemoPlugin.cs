@@ -20,8 +20,10 @@ namespace WebOverlay.Demo
     {
         private ConfigEntry<KeyboardShortcut> toggleKey;
         private ConfigEntry<KeyboardShortcut> hudKey;
+        private ConfigEntry<KeyboardShortcut> glassKey;
         private IWebOverlay overlay;
         private IWebOverlay hud;
+        private IWebOverlay glass;
         private readonly Queue<string> fromPage = new Queue<string>();
         private float nextPush;
 
@@ -31,6 +33,8 @@ namespace WebOverlay.Demo
                 "Shows the WebOverlay demo panel.");
             hudKey = this.Config.Bind("Demo", "Toggle HUD", new KeyboardShortcut(KeyCode.F11),
                 "Shows the transparent HUD demo. Click-through: the game stays fully playable.");
+            glassKey = this.Config.Bind("Demo", "Toggle glass panel", new KeyboardShortcut(KeyCode.F8),
+                "Shows the interactive glass panel demo: real transparency AND clickable HTML.");
         }
 
         private void Update()
@@ -39,9 +43,57 @@ namespace WebOverlay.Demo
                 toggle();
             if (hudKey.Value.IsDown())
                 toggleHud();
+            if (glassKey.Value.IsDown())
+                toggleGlass();
 
             drainPageMessages();
             pushLiveValue();
+        }
+
+        private void toggleGlass()
+        {
+            if (glass != null)
+            {
+                glass.Toggle();
+                return;
+            }
+
+            if (!WebOverlayPlugin.IsDisplayModeSupported)
+            {
+                this.Logger.LogWarning("Exclusive fullscreen cannot show an overlay; use borderless windowed.");
+                return;
+            }
+
+            // Interactive glass: sized to its content, because the window
+            // swallows mouse input over its whole rectangle.
+            glass = WebOverlays.Create("WebOverlay glass demo", new OverlayOptions
+            {
+                Transparent = true,
+                Interactive = true,
+                Width = 360,
+                Height = 240,
+            });
+
+            if (glass == null)
+            {
+                this.Logger.LogWarning("Overlays are unavailable - is the WebView2 runtime installed?");
+                return;
+            }
+
+            var created = glass;
+            glass.MessageReceived += message =>
+            {
+                lock (fromPage)
+                    fromPage.Enqueue(message);
+            };
+            glass.Failed += () =>
+            {
+                this.Logger.LogWarning("The glass demo failed (needs Windows 8+ and a 2021+ WebView2 runtime).");
+                created.Dispose();
+                if (ReferenceEquals(glass, created))
+                    glass = null;
+            };
+            created.LoadHtml(GlassPage);
         }
 
         private void toggleHud()
@@ -163,6 +215,7 @@ namespace WebOverlay.Demo
         {
             overlay?.Dispose();
             hud?.Dispose();
+            glass?.Dispose();
         }
 
         private const string Page = @"<!doctype html>
@@ -188,23 +241,25 @@ namespace WebOverlay.Demo
   });
 </script>";
 
-        // Everything the page does not paint shows the game. Elements sit on
-        // solid dark panels: semi-transparent pixels would blend towards the
-        // near-black transparency key rather than the game, so panels are the
-        // look that works, glass is not.
+        // Everything the page does not paint shows the game. With composition
+        // hosting this is true per-pixel alpha: rgba() glass and soft shadows
+        // blend with the game. (On the chroma-key fallback - pre-Windows-8 or
+        // ancient runtimes - semi-transparent pixels blend towards near-black
+        // instead; solid panels would be the safe look there.)
         private const string HudPage = @"<!doctype html>
 <meta charset='utf-8'>
 <style>
   body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; overflow:hidden; }
-  .panel { position:absolute; background:#14150f; border:1px solid #3a3b30;
-           border-radius:6px; color:#d0cdbd; padding:10px 16px; }
+  .panel { position:absolute; background:rgba(16,17,13,0.72); border:1px solid rgba(194,173,109,0.35);
+           border-radius:8px; color:#d0cdbd; padding:10px 16px;
+           box-shadow:0 4px 18px rgba(0,0,0,0.45); }
   #top { top:16px; left:50%; transform:translateX(-50%);
          font-weight:650; letter-spacing:.12em; color:#c2ad6d; }
   #corner { right:16px; bottom:16px; text-align:right; }
-  #fps { font-size:1.6rem; color:#72ba80; }
+  #fps { font-size:1.6rem; color:#72ba80; text-shadow:0 1px 6px rgba(0,0,0,0.6); }
   .label { font-size:.7rem; color:#918e7e; text-transform:uppercase; letter-spacing:.1em; }
 </style>
-<div class='panel' id='top'>WEBOVERLAY HUD - CLICK-THROUGH</div>
+<div class='panel' id='top'>WEBOVERLAY HUD - CLICK-THROUGH GLASS</div>
 <div class='panel' id='corner'>
   <div class='label'>frames per second</div>
   <div id='fps'>-</div>
@@ -215,6 +270,32 @@ namespace WebOverlay.Demo
     if (value.startsWith('fps:'))
       document.getElementById('fps').textContent = value.slice(4);
   });
+</script>";
+
+        // Interactive glass: real transparency AND working buttons. The
+        // window swallows the mouse over its whole rectangle, so it is sized
+        // to its content instead of covering the screen.
+        private const string GlassPage = @"<!doctype html>
+<meta charset='utf-8'>
+<style>
+  body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; overflow:hidden; }
+  .card { position:absolute; inset:12px; background:rgba(16,17,13,0.66);
+          border:1px solid rgba(194,173,109,0.4); border-radius:10px;
+          box-shadow:0 6px 24px rgba(0,0,0,0.5); color:#d0cdbd; padding:16px; }
+  h1 { color:#c2ad6d; font-size:1rem; letter-spacing:.1em; margin:0 0 4px; }
+  p { color:#918e7e; font-size:.78rem; margin:0 0 14px; }
+  button { background:rgba(194,173,109,0.85); color:#191a17; border:0; border-radius:5px;
+           padding:8px 14px; font-weight:650; cursor:pointer; margin-right:8px; }
+  button:hover { background:#e0ca85; }
+</style>
+<div class='card'>
+  <h1>INTERACTIVE GLASS</h1>
+  <p>The game shows through this card - and the buttons still work.</p>
+  <button onclick=""say('glass one')"">Send to game</button>
+  <button onclick=""say('glass two')"">Send more</button>
+</div>
+<script>
+  function say(what) { window.chrome.webview.postMessage(what); }
 </script>";
     }
 }
