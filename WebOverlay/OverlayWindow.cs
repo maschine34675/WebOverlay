@@ -1142,11 +1142,14 @@ namespace WebOverlay
             {
                 // No redirection surface: the DComp visual is the only pixel
                 // source, which is what gives true per-pixel alpha. Interactive
-                // HUDs keep receiving mouse messages (no WS_EX_TRANSPARENT);
-                // display-only ones stay click-through. Neither takes focus.
+                // HUDs keep receiving mouse messages; display-only ones must be
+                // click-through - and WS_EX_TRANSPARENT only makes hit-testing
+                // skip a window when WS_EX_LAYERED is set too (measured: the
+                // composed HUD swallowed every click without it). Neither
+                // variant takes focus.
                 exStyle |= WS_EX_NOREDIRECTIONBITMAP | WS_EX_NOACTIVATE;
                 if (!options.Interactive)
-                    exStyle |= WS_EX_TRANSPARENT;
+                    exStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT;
             }
             else if (options.Transparent)
             {
@@ -1182,6 +1185,13 @@ namespace WebOverlay
 
             if (options.Frame && !options.Transparent)
                 applyDarkFrame();
+
+            if (usesComposition && !options.Interactive)
+            {
+                // A layered window shows nothing until its attributes are set;
+                // fully opaque here - the per-pixel alpha comes from DComp.
+                SetLayeredWindowAttributes(window, 0, byte.MaxValue, LWA_ALPHA);
+            }
 
             if (chromaKeyHud)
             {
