@@ -35,6 +35,10 @@
       <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <ProjectReference Include="..\WebOverlay\WebOverlay.csproj">
       <Private>false</Private>
     </ProjectReference>
@@ -45,6 +49,17 @@
   <ItemGroup>
     <Compile Include="DemoPlugin.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Three.js cube demo: page plus bundled library (MIT, see
+         web\three-LICENSE.txt), spliced together at runtime. -->
+    <EmbeddedResource Include="web\cube.html">
+      <LogicalName>WebOverlay.Demo.cube.html</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="web\three.min.js">
+      <LogicalName>WebOverlay.Demo.three.min.js</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

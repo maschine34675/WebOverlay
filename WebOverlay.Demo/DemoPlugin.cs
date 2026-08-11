@@ -2,6 +2,8 @@ using BepInEx;
 using BepInEx.Configuration;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using UnityEngine;
 using WebOverlay;
 
@@ -12,7 +14,9 @@ namespace WebOverlay.Demo
     /// server anywhere, that talks to the game in both directions.
     ///
     /// Press F10 to toggle it. The page pushes button presses to the game and
-    /// the game pushes a live value back every second.
+    /// the game pushes a live value back every second. F11 toggles the
+    /// click-through HUD, F8 the interactive glass panel, and F7 a Three.js
+    /// WebGL cube that follows the player camera.
     /// </summary>
     [BepInPlugin("com.anvil.weboverlay.demo", "Anvil-WebOverlayDemo", Branding.PluginVersion)]
     [BepInDependency(Branding.PluginGuid)]
@@ -21,9 +25,11 @@ namespace WebOverlay.Demo
         private ConfigEntry<KeyboardShortcut> toggleKey;
         private ConfigEntry<KeyboardShortcut> hudKey;
         private ConfigEntry<KeyboardShortcut> glassKey;
+        private ConfigEntry<KeyboardShortcut> cubeKey;
         private IWebOverlay overlay;
         private IWebOverlay hud;
         private IWebOverlay glass;
+        private IWebOverlay cube;
         private readonly Queue<string> fromPage = new Queue<string>();
         private float nextPush;
 
@@ -35,19 +41,141 @@ namespace WebOverlay.Demo
                 "Shows the transparent HUD demo. Click-through: the game stays fully playable.");
             glassKey = this.Config.Bind("Demo", "Toggle glass panel", new KeyboardShortcut(KeyCode.F8),
                 "Shows the interactive glass panel demo: real transparency AND clickable HTML.");
+            cubeKey = this.Config.Bind("Demo", "Toggle 3D cube", new KeyboardShortcut(KeyCode.F7),
+                "Shows the Three.js demo: a WebGL compass cube following the player camera.");
         }
 
         private void Update()
         {
-            if (toggleKey.Value.IsDown())
+            if (isPressed(toggleKey.Value))
                 toggle();
-            if (hudKey.Value.IsDown())
+            if (isPressed(hudKey.Value))
                 toggleHud();
-            if (glassKey.Value.IsDown())
+            if (isPressed(glassKey.Value))
                 toggleGlass();
+            if (isPressed(cubeKey.Value))
+                toggleCube();
 
             drainPageMessages();
             pushLiveValue();
+            pushCameraView();
+        }
+
+        /// <summary>
+        /// BepInEx's KeyboardShortcut.IsDown blocks while ANY unrelated key is
+        /// held, so a toggle would be swallowed whenever the player is walking.
+        /// Honor configured modifiers, ignore everything else.
+        /// </summary>
+        private static bool isPressed(KeyboardShortcut shortcut)
+        {
+            if (!Input.GetKeyDown(shortcut.MainKey))
+                return false;
+            foreach (KeyCode modifier in shortcut.Modifiers)
+                if (!Input.GetKey(modifier))
+                    return false;
+            return true;
+        }
+
+        private void toggleCube()
+        {
+            if (cube != null)
+            {
+                cube.Toggle();
+                return;
+            }
+
+            if (!WebOverlayPlugin.IsDisplayModeSupported)
+            {
+                this.Logger.LogWarning("Exclusive fullscreen cannot show an overlay; use borderless windowed.");
+                return;
+            }
+
+            string page = loadCubePage();
+            if (page == null)
+                return;
+
+            // Click-through like the F11 HUD; the WebGL canvas is just another
+            // thing the page paints.
+            cube = WebOverlays.Create("WebOverlay cube demo", new OverlayOptions
+            {
+                Transparent = true
+            });
+
+            if (cube == null)
+            {
+                this.Logger.LogWarning("Overlays are unavailable - is the WebView2 runtime installed?");
+                return;
+            }
+
+            var created = cube;
+            cube.Failed += () =>
+            {
+                this.Logger.LogWarning("The cube demo failed; see the WebOverlay log lines above.");
+                created.Dispose();
+                if (ReferenceEquals(cube, created))
+                    cube = null;
+            };
+            created.LoadHtml(page);
+        }
+
+        /// <summary>
+        /// The cube page ships as two embedded resources: the page itself and
+        /// the bundled three.min.js, spliced into it here. LoadHtml wants one
+        /// self-contained string, and at ~620 KB the result stays well under
+        /// NavigateToString's 2 MB ceiling.
+        /// </summary>
+        private string loadCubePage()
+        {
+            if (cubePage != null)
+                return cubePage;
+            try
+            {
+                string html = readResource("WebOverlay.Demo.cube.html");
+                string three = readResource("WebOverlay.Demo.three.min.js");
+                cubePage = html.Replace("/*!THREE_MIN_JS!*/", three);
+            }
+            catch (Exception ex)
+            {
+                this.Logger.LogWarning("Could not assemble the cube page: " + ex.Message);
+            }
+            return cubePage;
+        }
+
+        private static string cubePage;
+
+        private static string readResource(string name)
+        {
+            using (Stream stream = typeof(DemoPlugin).Assembly.GetManifestResourceStream(name))
+            {
+                if (stream == null)
+                    throw new FileNotFoundException("embedded resource " + name);
+                using (var reader = new StreamReader(stream, System.Text.Encoding.UTF8))
+                    return reader.ReadToEnd();
+            }
+        }
+
+        /// <summary>
+        /// Feeds the cube page one view sample per rendered frame - also a
+        /// live demonstration that per-frame Post traffic is cheap. Uses the
+        /// main camera only, so the demo needs no game-specific assemblies.
+        /// </summary>
+        private void pushCameraView()
+        {
+            // Through a local: the Failed handler nulls the field from the
+            // overlay thread, and Update must not race it.
+            IWebOverlay target = cube;
+            if (target == null || !target.IsVisible)
+                return;
+            Camera gameCamera = Camera.main;
+            if (gameCamera == null)
+                return;
+            Transform view = gameCamera.transform;
+            Vector3 angles = view.eulerAngles;
+            Vector3 position = view.position;
+            float pitch = angles.x > 180f ? angles.x - 360f : angles.x;
+            target.Post(string.Format(CultureInfo.InvariantCulture,
+                "view:{0:F2};{1:F2};{2:F2};{3:F2};{4:F2};{5:F3}",
+                angles.y, pitch, position.x, position.y, position.z, Time.time));
         }
 
         private void toggleGlass()
@@ -216,6 +344,7 @@ namespace WebOverlay.Demo
             overlay?.Dispose();
             hud?.Dispose();
             glass?.Dispose();
+            cube?.Dispose();
         }
 
         private const string Page = @"<!doctype html>

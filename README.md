@@ -62,8 +62,8 @@ When another mod ships alongside this library, reference it with
 own release zip - it is a shared dependency the user installs once.
 
 Install the demo plugin to see a working panel: press **F10** in game,
-**F11** for the transparent HUD demo, and **F8** for the interactive glass
-panel.
+**F11** for the transparent HUD demo, **F8** for the interactive glass
+panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 
 ## API reference
 
@@ -164,6 +164,36 @@ a **chroma key** with these rules; an interactive one fails instead:
   near-black rather than the game - solid dark panels are the safe look.
 - `rgb(3,1,3)` is the reserved transparency key; avoid painting it.
 
+## Performance
+
+Numbers from the library's empirical probe host (WebView2 runtime 151) on a
+machine that only has Windows' software rasterizer - one measured data
+point, not a guarantee for other hardware. The method: a page that echoes
+every message straight back, timed from `Post` to the answering
+`MessageReceived`.
+
+- **Round trip** (game → page → game): median 0.48 ms, 95th percentile
+  0.71 ms over 200 round trips.
+- **Throughput**: a burst of 1000 round trips finished in 104 ms - about
+  9,600 messages per second. One `Post` per rendered frame, as the demo's
+  cube HUD does, uses a fraction of that even at high refresh rates.
+- **Visible latency**: a message that changes what the page shows becomes
+  visible within one to two display frames.
+- The browser renders in its own process tree, so the page's layout,
+  painting and JavaScript never run on the game's thread; a `Post` costs the
+  game only assembling and queueing the string. The browser processes still
+  share the machine's CPU and GPU, though - budget a heavy page like any
+  program running alongside the game.
+
+### 3D content: WebGL
+
+Pages get Chromium's regular **WebGL2** (ANGLE over Direct3D 11), so
+libraries like Three.js just work - the demo's F7 cube is one, fed by
+per-frame `Post` messages. Even the probe machine's software rasterizer held
+~30 fps at 340×340; with a GPU present Chromium hardware-accelerates the
+same path. WebGPU is not exposed by the tested runtime (`navigator.gpu` is
+absent) - target WebGL.
+
 ## Requirements and limits
 
 - Needs the Microsoft WebView2 runtime, which current Windows 10 and 11
@@ -232,6 +262,9 @@ including the license files, verified against a manifest allowlist.
 `WebView2Loader.dll` belongs to the Microsoft WebView2 SDK and is redistributed
 under BSD 3-Clause; see `WebView2-LICENSE.txt` and `WebView2-NOTICE.txt`. The
 WebView2 runtime itself is not redistributed.
+
+The demo plugin embeds Three.js (r149, MIT) for its WebGL cube; see
+`WebOverlay.Demo/web/three-LICENSE.txt`, which also ships in the demo zip.
 
 ## License
 

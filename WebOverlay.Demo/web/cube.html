@@ -1,0 +1,202 @@
+<!doctype html>
+<meta charset='utf-8'>
+<!--
+  Three.js demo HUD: a WebGL compass cube coupled to the player camera.
+
+  The game posts "view:yaw;pitch;x;y;z;t" every frame (Unity degrees and
+  world meters, t = Time.time seconds). The cube counter-rotates the camera,
+  so it appears anchored to the world - the face you look at names your view
+  direction. Without a feed for 1.5 s it falls back to a slow free spin.
+
+  The placeholder comment in the first script block is replaced with the
+  bundled three.min.js (r149, the last UMD build) when the page is assembled,
+  because the overlay's LoadHtml needs one self-contained string and the
+  origin filter deliberately has no file:// exception.
+-->
+<style>
+  body { margin:0; overflow:hidden; font-family:'Segoe UI',system-ui,sans-serif; }
+  #stage { position:absolute; left:24px; bottom:24px; width:340px; }
+  #view { display:block; width:340px; height:340px; }
+  .panel { background:rgba(16,17,13,0.72); border:1px solid rgba(194,173,109,0.35);
+           border-radius:8px; color:#d0cdbd; padding:8px 12px;
+           box-shadow:0 4px 18px rgba(0,0,0,0.45); }
+  #title { font-weight:650; letter-spacing:.12em; color:#c2ad6d; font-size:.8rem;
+           margin-bottom:6px; }
+  .row { display:flex; justify-content:space-between; font-size:.8rem; margin:2px 0; }
+  .label { color:#918e7e; text-transform:uppercase; letter-spacing:.1em; font-size:.68rem; }
+  .value { color:#d0cdbd; font-variant-numeric:tabular-nums; }
+  #heading { color:#72ba80; font-weight:650; }
+  #tech { margin-top:6px; padding-top:6px; border-top:1px solid rgba(194,173,109,0.2);
+          font-size:.66rem; color:#918e7e; line-height:1.5; }
+</style>
+<div id='stage'>
+  <canvas id='view' width='340' height='340'></canvas>
+  <div class='panel'>
+    <div id='title'>WEBOVERLAY 3D &mdash; THREE.JS CUBE</div>
+    <div class='row'><span class='label'>heading</span><span class='value' id='heading'>-</span></div>
+    <div class='row'><span class='label'>position</span><span class='value' id='position'>-</span></div>
+    <div class='row'><span class='label'>speed</span><span class='value' id='speed'>-</span></div>
+    <div class='row'><span class='label'>feed</span><span class='value' id='feed'>free spin</span></div>
+    <div id='tech'>-</div>
+  </div>
+</div>
+<script>/*!THREE_MIN_JS!*/</script>
+<script>
+(function () {
+  'use strict';
+  const D2R = Math.PI / 180;
+  const state = {
+    webgl: false, webgl2: false, renderer: '', error: '',
+    webgpu: !!navigator.gpu,
+    frames: 0, fps: 0, feedPerSecond: 0, face: '',
+    yaw: 0, pitch: 0,
+  };
+  const el = id => document.getElementById(id);
+
+  let renderer = null;
+  try {
+    renderer = new THREE.WebGLRenderer({
+      canvas: el('view'), alpha: true, antialias: true,
+      powerPreference: 'high-performance',
+    });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(340, 340, false);
+    renderer.setClearColor(0x000000, 0);
+    state.webgl = true;
+    state.webgl2 = renderer.capabilities.isWebGL2;
+    const gl = renderer.getContext();
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    state.renderer = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+                                : gl.getParameter(gl.RENDERER));
+  } catch (e) {
+    state.error = String(e);
+    el('tech').textContent = 'WebGL unavailable: ' + state.error;
+  }
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 50);
+  camera.position.set(0, 0, 5.4);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffe9b0, 0.9);
+  key.position.set(2.5, 3, 4);
+  scene.add(key);
+
+  function faceTexture(label) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const g = c.getContext('2d');
+    g.fillStyle = 'rgba(23,24,22,0.92)'; g.fillRect(0, 0, 256, 256);
+    g.strokeStyle = 'rgba(194,173,109,0.8)'; g.lineWidth = 10;
+    g.strokeRect(12, 12, 232, 232);
+    g.fillStyle = '#c2ad6d'; g.font = "650 118px 'Segoe UI',sans-serif";
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(label, 128, 134);
+    return new THREE.CanvasTexture(c);
+  }
+
+  // The face pointing at the viewer names the view direction. With the cube
+  // holding the inverse camera rotation that works out to (verified by the
+  // probe's orientation checks): +X=W -X=E +Y=down -Y=up +Z=N -Z=S.
+  // BoxGeometry material order is +X -X +Y -Y +Z -Z.
+  const faceNames = ['W', 'E', 'DOWN', 'UP', 'N', 'S'];
+  const faceGlyphs = ['W', 'E', '▼', '▲', 'N', 'S'];
+  const materials = faceGlyphs.map(glyph => new THREE.MeshStandardMaterial({
+    map: faceTexture(glyph), metalness: 0.1, roughness: 0.6,
+    transparent: true, opacity: 0.94,
+  }));
+  const cube = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), materials);
+  cube.add(new THREE.LineSegments(
+    new THREE.EdgesGeometry(cube.geometry),
+    new THREE.LineBasicMaterial({ color: 0xc2ad6d })));
+  scene.add(cube);
+
+  const feed = { has: false, wall: 0, t: 0, x: 0, y: 0, z: 0, count: 0 };
+  let speed = 0;
+
+  function onView(yaw, pitch, x, y, z, t) {
+    // Unity is left-handed with clockwise-positive yaw and down-positive
+    // pitch; both angles flip sign in three.js. Inverting the resulting
+    // camera rotation anchors the cube to the world.
+    cube.quaternion.setFromEuler(new THREE.Euler(-pitch * D2R, -yaw * D2R, 0, 'YXZ')).invert();
+    state.yaw = yaw; state.pitch = pitch;
+    if (!feed.has) {
+      feed.t = t; feed.x = x; feed.y = y; feed.z = z;
+    } else if (t > feed.t) {
+      // Only advance the baseline on accepted samples: t is float32 game
+      // time, and after many hours its resolution drops below a frame, so
+      // equal-t messages must accumulate into the next sample instead of
+      // being dropped. A sample faster than anything in the game is a
+      // camera cut or teleport, not movement - restart from the new spot.
+      const meters = Math.sqrt((x - feed.x) ** 2 + (y - feed.y) ** 2 + (z - feed.z) ** 2);
+      const sample = meters / (t - feed.t);
+      speed = sample < 50 ? speed * 0.8 + sample * 0.2 : 0;
+      feed.t = t; feed.x = x; feed.y = y; feed.z = z;
+    }
+    feed.has = true; feed.wall = performance.now();
+    feed.count++;
+
+    const compass = ((yaw % 360) + 360) % 360;
+    const arc = ['N','NE','E','SE','S','SW','W','NW'][Math.round(compass / 45) % 8];
+    el('heading').textContent = arc + ' ' + compass.toFixed(0) + '°';
+    el('position').textContent = x.toFixed(1) + '  ' + y.toFixed(1) + '  ' + z.toFixed(1);
+    el('speed').textContent = speed.toFixed(1) + ' m/s';
+  }
+
+  function visibleFace() {
+    let best = '', bestZ = -2;
+    const v = new THREE.Vector3();
+    [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].forEach((axis, i) => {
+      v.set(axis[0], axis[1], axis[2]).applyQuaternion(cube.quaternion);
+      if (v.z > bestZ) { bestZ = v.z; best = faceNames[i]; }
+    });
+    return best;
+  }
+
+  window.chrome.webview.addEventListener('message', e => {
+    const text = String(e.data);
+    if (text.startsWith('view:')) {
+      const p = text.slice(5).split(';').map(parseFloat);
+      if (p.length >= 6 && p.every(isFinite))
+        onView(p[0], p[1], p[2], p[3], p[4], p[5]);
+    } else if (text === 'probe:state') {
+      state.face = visibleFace();
+      const r = el('view').getBoundingClientRect();
+      state.rect = [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+      window.chrome.webview.postMessage('cube:' + JSON.stringify(state));
+    }
+  });
+
+  let lastFrame = performance.now();
+  let windowStart = lastFrame, windowFrames = 0, windowFeed = 0;
+  function animate(now) {
+    requestAnimationFrame(animate);
+    if (!renderer)
+      return;
+    const dt = Math.min(0.1, (now - lastFrame) / 1000);
+    lastFrame = now;
+
+    if (!feed.has || now - feed.wall > 1500) {
+      feed.has = false;
+      speed = 0;
+      cube.rotation.y += 0.5 * dt;
+      cube.rotation.x += 0.21 * dt;
+      el('feed').textContent = 'free spin';
+    }
+
+    renderer.render(scene, camera);
+    state.frames++;
+    windowFrames++;
+    if (now - windowStart >= 1000) {
+      state.fps = Math.round(windowFrames * 1000 / (now - windowStart));
+      state.feedPerSecond = Math.round((feed.count - windowFeed) * 1000 / (now - windowStart));
+      windowFrames = 0; windowFeed = feed.count; windowStart = now;
+      if (feed.has)
+        el('feed').textContent = state.feedPerSecond + ' msg/s';
+      el('tech').textContent = state.fps + ' fps • '
+        + (state.webgl2 ? 'WebGL2' : 'WebGL1') + ' • ' + state.renderer
+        + ' • WebGPU ' + (state.webgpu ? 'available' : 'n/a');
+    }
+  }
+  requestAnimationFrame(animate);
+})();
+</script>

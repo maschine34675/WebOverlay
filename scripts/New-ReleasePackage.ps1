@@ -72,13 +72,37 @@ $demoPluginDirectory = Join-Path $demoStage 'BepInEx\plugins\Anvil-WebOverlayDem
 New-Item -ItemType Directory -Path $demoPluginDirectory -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "WebOverlay.Demo\bin\$Configuration\Anvil-WebOverlayDemo.dll") -Destination $demoPluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'WebOverlay.Demo\DemoPlugin.cs') -Destination $demoPluginDirectory
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'WebOverlay.Demo\web\cube.html') -Destination $demoPluginDirectory
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'WebOverlay.Demo\web\three-LICENSE.txt') -Destination $demoPluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination $demoPluginDirectory
 Set-Content -LiteralPath (Join-Path $demoPluginDirectory 'README.txt') -Value @"
 Anvil-WebOverlay demo plugin.
 
 Requires the Anvil-WebOverlay library (install its zip first).
-In game: F10 toggles an interactive panel, F11 a transparent click-through HUD.
-DemoPlugin.cs is the reference source for using the library from a mod.
+In game: F10 toggles an interactive panel, F11 a transparent click-through
+HUD, F8 an interactive glass panel, F7 a Three.js WebGL cube following the
+player camera.
+DemoPlugin.cs is the reference source for using the library from a mod;
+cube.html is the Three.js page (the DLL embeds it together with three.min.js,
+which is Three.js r149 under the MIT license in three-LICENSE.txt).
 "@
+# The demo zip gets the same manifest guarantee as the library zip.
+$demoExpected = @(
+    'BepInEx\plugins\Anvil-WebOverlayDemo\Anvil-WebOverlayDemo.dll',
+    'BepInEx\plugins\Anvil-WebOverlayDemo\DemoPlugin.cs',
+    'BepInEx\plugins\Anvil-WebOverlayDemo\cube.html',
+    'BepInEx\plugins\Anvil-WebOverlayDemo\three-LICENSE.txt',
+    'BepInEx\plugins\Anvil-WebOverlayDemo\LICENSE',
+    'BepInEx\plugins\Anvil-WebOverlayDemo\README.txt'
+)
+$demoActual = Get-ChildItem -Recurse -File $demoStage | ForEach-Object {
+    $_.FullName.Substring($demoStage.Length + 1)
+}
+$demoUnexpected = @($demoActual | Where-Object { $demoExpected -notcontains $_ })
+$demoMissing = @($demoExpected | Where-Object { $demoActual -notcontains $_ })
+if ($demoUnexpected.Count -gt 0 -or $demoMissing.Count -gt 0) {
+    throw "Demo package manifest mismatch. Unexpected: $($demoUnexpected -join ', '). Missing: $($demoMissing -join ', ')."
+}
+
 Compress-Archive -Path (Join-Path $demoStage '*') -DestinationPath $demoArchive -CompressionLevel Optimal
 Write-Host "Created $demoArchive"
