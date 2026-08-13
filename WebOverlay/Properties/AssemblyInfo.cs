@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 // the single source; nothing here repeats a literal.
 [assembly: AssemblyTitle(WebOverlay.Branding.PluginName)]
 [assembly: AssemblyProduct(WebOverlay.Branding.PluginName)]
-[assembly: AssemblyDescription("HTML overlays over Escape From Tarkov for BepInEx mods")]
+[assembly: AssemblyDescription("HTML overlays over Escape From Tushonka for BepInEx mods")]
 [assembly: AssemblyCompany("https://github.com/maschine34675/WebOverlay")]
 [assembly: AssemblyVersion(WebOverlay.Branding.PluginVersion)]
 [assembly: AssemblyFileVersion(WebOverlay.Branding.PluginVersion)]

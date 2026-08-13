@@ -10,7 +10,7 @@
 
 # Anvil-WebOverlay
 
-A shared library that lets BepInEx mods show **web pages in windows over Escape From Tarkov** - interactive panels, and fully click-through transparent HUDs - written in plain HTML instead of an immediate-mode toolkit.
+A shared library that lets BepInEx mods show **web pages in windows over Escape From Tushonka** - interactive panels, and fully click-through transparent HUDs - written in plain HTML instead of an immediate-mode toolkit.
 
 **For players:** you only need this installed when another mod lists it as a dependency. Extract the zip over your SPT folder, done. One installation serves every mod that uses it - a single shared browser, not one per mod.
 

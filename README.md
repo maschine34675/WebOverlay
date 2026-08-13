@@ -1,6 +1,6 @@
 # WebOverlay
 
-Show web pages in windows over Escape From Tarkov, so a mod can build its user
+Show web pages in windows over Escape From Tushonka, so a mod can build its user
 interface in HTML instead of an immediate-mode toolkit.
 
 A page can be a URL, or just a string of markup - **no web server needed** -
