@@ -212,6 +212,18 @@ absent) - target WebGL.
 
 ## How it works, and why it looks like this
 
+- **The bundled `WebView2Loader.dll` is a bootstrapper, not the browser.** It is
+  160 KB that locates the WebView2 runtime already installed on the machine,
+  loads its client DLL and forwards to it; every browser feature comes from that
+  runtime. The runtime itself is a full Chromium build of several hundred
+  megabytes which Microsoft distributes rather than letting apps ship it: it is
+  in-box on Windows 11, was rolled out to Windows 10 through Microsoft Edge, and
+  updates itself through the Edge updater, not through this library. That is
+  also why the loader's own version matters so little - it is version-agnostic
+  by design and only skips runtimes below its minimum. Which features exist is
+  decided per interface at `QueryInterface` time, so an older runtime does not
+  fail to load; individual capabilities simply fall back, exactly as HUD
+  transparency does when composition support is missing.
 - **One browser for the whole game.** Every WebView2 environment starts its own
   browser process tree and wants its user-data folder to itself, so the library
   keeps a single environment and gives out as many overlay windows as mods ask
