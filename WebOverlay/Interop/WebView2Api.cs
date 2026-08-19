@@ -34,6 +34,7 @@ namespace WebOverlay.Interop
         public static readonly Guid IID_Settings3 = new Guid("fdb5ab74-af33-4854-84f0-0a631deb5eba");
         public static readonly Guid IID_Settings4 = new Guid("cb56846c-4168-4d53-b04f-03b6d6796ff2");
         public static readonly Guid IID_Environment3 = new Guid("80a22ae3-be7c-4ce2-afe1-5a50056cdeeb");
+        public static readonly Guid IID_WebView2_3 = new Guid("a0d6df20-3b92-416d-aa0c-437a9c727857");
         public static readonly Guid IID_CompositionControllerCompleted = new Guid("02fab84b-1428-4fb7-ad45-1b2e64736184");
         public static readonly Guid IID_Controller = new Guid("4d00c0d1-9434-4eb6-8078-8697a560334f");
         public static readonly Guid IID_CursorChanged = new Guid("9da43ccc-26e1-4dad-b56c-d8961c94c571");
@@ -105,6 +106,17 @@ namespace WebOverlay.Interop
         public const int Settings3_PutAreBrowserAcceleratorKeysEnabled = 24;
         public const int Settings4_PutIsPasswordAutosaveEnabled = 26;
         public const int Settings4_PutIsGeneralAutofillEnabled = 28;
+
+        // ICoreWebView2_3 - only after QueryInterface(IID_WebView2_3). Slot
+        // counted through ICoreWebView2 (3-60) and ICoreWebView2_2 (61-67);
+        // proven by the probe, where a page served from a mapped folder
+        // rendered and reported the mapped origin.
+        public const int WebView2_3_SetVirtualHostNameToFolderMapping = 71;
+
+        // COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND. DENY_CORS is the safe one:
+        // the mapped folder serves the page's own origin, and a cross-origin
+        // document cannot pull anything out of it.
+        public const int HostResourceAccessDenyCors = 2;
 
         // ICoreWebView2AcceleratorKeyPressedEventArgs
         public const int KeyArgs_GetKeyEventKind = 3;
@@ -189,6 +201,12 @@ namespace WebOverlay.Interop
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int ExecuteScriptDelegate(IntPtr self, [MarshalAs(UnmanagedType.LPWStr)] string script, IntPtr handler);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate int SetVirtualHostMappingDelegate(IntPtr self,
+            [MarshalAs(UnmanagedType.LPWStr)] string hostName,
+            [MarshalAs(UnmanagedType.LPWStr)] string folderPath,
+            int accessKind);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int AddEventDelegate(IntPtr self, IntPtr handler, out long token);

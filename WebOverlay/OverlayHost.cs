@@ -35,8 +35,43 @@ namespace WebOverlay
         private static volatile bool startFailed;
         private static volatile bool acceptingWork;
 
+        // Events a consumer asked to receive on the game's main thread. The
+        // core stays free of Unity: it only holds the queue, and whoever owns
+        // the main thread - the library plugin, from its Update - drains it.
+        // Without such a pump (the probe host, any non-Unity use) nothing
+        // registers, and events keep their normal threading.
+        private static readonly ConcurrentQueue<Action> mainThreadWork = new ConcurrentQueue<Action>();
+        private static volatile bool mainThreadPumpAvailable;
+        private static int mainThreadQueued;
+        private static int mainThreadWarned;
+        private static int mainThreadOverflowWarned;
+
+        // A frozen or missing pump must not grow the queue without bound. The
+        // cap is far above one frame's worth of events at any sane rate.
+        private const int MainThreadQueueLimit = 4096;
+
         internal static Action<string> LogInfo = _ => { };
         internal static Action<string> LogWarning = _ => { };
+
+        /// <summary>
+        /// Why the shared start failed, so an overlay created afterwards can
+        /// tell its consumer something more useful than "no environment".
+        /// </summary>
+        internal static OverlayFailure StartFailure { get; private set; } = OverlayFailure.Unknown;
+
+        /// <summary>
+        /// The sentence behind <see cref="StartFailure"/>. An overlay failing
+        /// for want of the shared environment reports this rather than its own
+        /// "no environment", which names the symptom instead of the cause.
+        /// </summary>
+        internal static string StartFailureMessage { get; private set; }
+
+        private static void startFailure(OverlayFailure kind, string reason)
+        {
+            StartFailure = kind;
+            StartFailureMessage = reason;
+            LogWarning(reason);
+        }
 
         internal static string RuntimeVersion { get; private set; }
 
@@ -80,6 +115,70 @@ namespace WebOverlay
         }
 
         internal static IntPtr Environment => environment;
+
+        /// <summary>
+        /// Offers one event for delivery on the game's main thread. Returns
+        /// false when nobody is pumping, which is the caller's cue to invoke it
+        /// itself - queuing into a queue nobody drains would simply lose the
+        /// event.
+        /// </summary>
+        internal static bool DispatchToMainThread(Action action)
+        {
+            if (action == null || !mainThreadPumpAvailable)
+            {
+                if (action != null && Interlocked.Exchange(ref mainThreadWarned, 1) == 0)
+                    LogWarning("no main-thread pump is running, so events stay on the overlay thread"
+                        + " (DispatchOnMainThread works inside the game only).");
+                return false;
+            }
+
+            // During shutdown the game is past caring, and a queued handler
+            // could start a fallback while everything is being torn down.
+            if (stopping)
+                return true;
+
+            if (Interlocked.Increment(ref mainThreadQueued) > MainThreadQueueLimit)
+            {
+                Interlocked.Decrement(ref mainThreadQueued);
+                if (Interlocked.Exchange(ref mainThreadOverflowWarned, 1) == 0)
+                    LogWarning("the main-thread event queue is full (" + MainThreadQueueLimit
+                        + "); events are being dropped - is the game's frame loop stalled?");
+                return true;
+            }
+
+            mainThreadWork.Enqueue(action);
+            return true;
+        }
+
+        /// <summary>
+        /// Whether main-thread delivery is possible; set by whoever pumps.
+        /// Turning it off leaves queued events undelivered on purpose - that
+        /// only happens as the game shuts down.
+        /// </summary>
+        internal static bool MainThreadPumpAvailable
+        {
+            get => mainThreadPumpAvailable;
+            set => mainThreadPumpAvailable = value;
+        }
+
+        /// <summary>Delivers queued events. Call this from the main thread only.</summary>
+        internal static void PumpMainThread()
+        {
+            while (mainThreadWork.TryDequeue(out Action action))
+            {
+                Interlocked.Decrement(ref mainThreadQueued);
+                if (stopping)
+                    continue;
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    LogWarning("a main-thread event failed (" + ex.GetType().Name + ": " + ex.Message + ").");
+                }
+            }
+        }
 
         /// <summary>The game is quitting; failures are expected, not news.</summary>
         internal static bool Stopping => stopping;
@@ -189,14 +288,16 @@ namespace WebOverlay
             string folder = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "";
             if (LoadLibrary(Path.Combine(folder, "WebView2Loader.dll")) == IntPtr.Zero)
             {
-                LogWarning("WebView2Loader.dll was not found next to the plugin (" + folder + ").");
+                startFailure(OverlayFailure.LibraryIncomplete,
+                    "WebView2Loader.dll was not found next to the plugin (" + folder + ").");
                 return false;
             }
 
             if (WebView2Api.GetAvailableCoreWebView2BrowserVersionString(null, out IntPtr version) != WebView2Api.S_OK
                 || version == IntPtr.Zero)
             {
-                LogWarning("no WebView2 runtime is installed; overlays are unavailable.");
+                startFailure(OverlayFailure.RuntimeMissing,
+                    "no WebView2 runtime is installed; overlays are unavailable.");
                 return false;
             }
 
@@ -234,7 +335,8 @@ namespace WebOverlay
                 }
                 else
                 {
-                    LogWarning("the browser environment failed, hr=0x" + result.ToString("X8") + ".");
+                    startFailure(OverlayFailure.EnvironmentFailed,
+                        "the browser environment failed, hr=0x" + result.ToString("X8") + ".");
                 }
 
                 return WebView2Api.S_OK;
@@ -244,7 +346,8 @@ namespace WebOverlay
                 null, userData, IntPtr.Zero, environmentCallback.Pointer);
             if (hr != WebView2Api.S_OK)
             {
-                LogWarning("could not request a browser environment, hr=0x" + hr.ToString("X8") + ".");
+                startFailure(OverlayFailure.EnvironmentFailed,
+                    "could not request a browser environment, hr=0x" + hr.ToString("X8") + ".");
                 return false;
             }
 
@@ -260,7 +363,10 @@ namespace WebOverlay
             }
 
             if (environment == IntPtr.Zero && !stopping)
-                LogWarning("the browser environment did not start within 30 seconds.");
+            {
+                startFailure(OverlayFailure.EnvironmentFailed,
+                    "the browser environment did not start within 30 seconds.");
+            }
             return environment != IntPtr.Zero;
         }
 

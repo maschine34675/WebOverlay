@@ -1,5 +1,10 @@
 # Answers to the consumer API wishlist
 
+**Status:** entries 1, 2, 3 and the `PageLoaded`/`IsPageLoaded` half of 9 are
+implemented in v1.4.0, each as described below and each verified by the probe
+host (`vhost`, `dispatch`, `failure-kind` modes). Entries 4, 5, 6 and 7 are
+still open; 8 and the throwing half of 9 stay declined for the reasons given.
+
 Written 2026-08-19 against `CONSUMER-API-WISHLIST.md`. Each entry gets a
 verdict, the reason, and - where the answer is "yes" - what the implementation
 actually costs, including the interop facts needed for it.

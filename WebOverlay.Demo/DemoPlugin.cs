@@ -110,7 +110,7 @@ namespace WebOverlay.Demo
             var created = cube;
             cube.Failed += () =>
             {
-                this.Logger.LogWarning("The cube demo failed; see the WebOverlay log lines above.");
+                this.Logger.LogWarning("The cube demo failed (" + created.Failure + "): " + created.FailureMessage);
                 created.Dispose();
                 if (ReferenceEquals(cube, created))
                     cube = null;
@@ -200,6 +200,11 @@ namespace WebOverlay.Demo
                 Interactive = true,
                 Width = 360,
                 Height = 240,
+                // The other threading style: with this the library raises
+                // this overlay's events from the game's own Update, so the
+                // handler below may touch game state directly - no queue, no
+                // drain. Costs up to one frame.
+                DispatchOnMainThread = true,
             });
 
             if (glass == null)
@@ -210,13 +215,10 @@ namespace WebOverlay.Demo
 
             var created = glass;
             glass.MessageReceived += message =>
-            {
-                lock (fromPage)
-                    fromPage.Enqueue(message);
-            };
+                this.Logger.LogInfo("The glass panel said: " + message);
             glass.Failed += () =>
             {
-                this.Logger.LogWarning("The glass demo failed (needs Windows 8+ and a 2021+ WebView2 runtime).");
+                this.Logger.LogWarning("The glass demo failed (" + created.Failure + "): " + created.FailureMessage);
                 created.Dispose();
                 if (ReferenceEquals(glass, created))
                     glass = null;
@@ -252,7 +254,7 @@ namespace WebOverlay.Demo
             var createdHud = hud;
             hud.Failed += () =>
             {
-                this.Logger.LogWarning("The demo HUD failed; see the WebOverlay log lines above.");
+                this.Logger.LogWarning("The demo HUD failed (" + createdHud.Failure + "): " + createdHud.FailureMessage);
                 createdHud.Dispose();
                 if (ReferenceEquals(hud, createdHud))
                     hud = null;
@@ -300,7 +302,7 @@ namespace WebOverlay.Demo
             var created = overlay;
             overlay.Failed += () =>
             {
-                this.Logger.LogWarning("The demo overlay failed; see the WebOverlay log lines above.");
+                this.Logger.LogWarning("The demo overlay failed (" + created.Failure + "): " + created.FailureMessage);
                 created.Dispose();
                 if (ReferenceEquals(overlay, created))
                     overlay = null;

@@ -50,12 +50,35 @@ and otherwise a handle whose browser is still starting: creation is
 asynchronous and never blocks Unity's thread. Failures that surface later -
 no WebView2 runtime, a browser that will not start, a dead browser process -
 raise the handle's **`Failed`** event; dispose the handle there and use your
-fallback. `Ready` fires once the view is fully set up, and messages or
-scripts sent before the page finished loading wait in a bounded outbox, so
-posting right after `Create` is fine. Events arrive on the overlay thread -
-except a latched `Ready`/`Failed` subscribed after the fact, which runs on the
-subscribing thread. Treat handlers as "any thread": queue what they learn and
-touch game state from `Update()`.
+fallback. **`Failure`** says which of those it was, so you can tell the user
+what to do about it, and `FailureMessage` carries the exact sentence:
+
+```csharp
+overlay.Failed += () =>
+{
+    switch (overlay.Failure)
+    {
+        case OverlayFailure.RuntimeMissing: /* "install the WebView2 runtime" */ break;
+        case OverlayFailure.CompositionUnavailable: /* "no glass HUD on this system" */ break;
+        case OverlayFailure.RendererCrashed: /* "the page died - reopen it" */ break;
+        default: /* overlay.FailureMessage has the details */ break;
+    }
+};
+```
+
+`Ready` fires once the view is fully set up; **`PageLoaded`** (and
+`IsPageLoaded`) fires once the page you targeted is live, on every navigation.
+Messages or scripts sent before that wait in a bounded outbox, so posting right
+after `Create` is fine - only a consumer that streams should hold off while
+`IsPageLoaded` is false rather than fill the outbox.
+
+Events arrive on the overlay thread - except a latched `Ready`/`Failed`
+subscribed after the fact, which runs on the subscribing thread. Either queue
+what a handler learns and touch game state from `Update()`, or set
+**`DispatchOnMainThread`** and skip that boilerplate: the library then delivers
+every event from its own `Update`, so handlers may touch Unity objects
+directly. The cost is up to one frame of delay, and events still queued when
+you `Dispose` the handle are dropped.
 
 When another mod ships alongside this library, reference it with
 `<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your
@@ -90,6 +113,8 @@ panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 | `AllowedOrigins` | null | Extra origins allowed for navigation and messages. |
 | `RememberBounds` | true | Reopen at the position and size the player left the window at, across sessions. |
 | `PersistenceKey` | assembly/title | Storage key for the remembered bounds. |
+| `DispatchOnMainThread` | false | Raise this overlay's events from the game's main thread (see below). |
+| `VirtualHosts` | null | Folders served as `https://<host>/`, so the page can load real files (see below). |
 
 `IWebOverlay`:
 
@@ -99,17 +124,67 @@ panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 | `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
 | `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
 | `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
+| `IsPageLoaded` | Whether the page you targeted has finished loading. |
+| `Failure`, `FailureMessage` | Why `Failed` fired, as a cause you can act on plus the exact sentence. |
 | `MessageReceived` | The page called `postMessage`. Overlay thread. |
 | `KeyPressed` | A key pressed in the overlay that did not close it. Overlay thread. |
 | `Closed` | Fires on every hide or close - not only on destruction. Overlay thread. |
+| `PageLoaded` | Your page is live; fires again on every navigation. Overlay thread. |
 | `Ready`, `Failed` | Latched creation outcome - see above for threading. |
 | `Dispose()` | Destroys the overlay window. |
+
+`OverlayFailure`: `RuntimeMissing` (no WebView2 runtime - the user installs
+it), `LibraryIncomplete` (`WebView2Loader.dll` missing next to this library -
+reinstall it), `EnvironmentFailed` (the shared browser did not start - no
+overlays this session), `WindowFailed` / `ViewFailed` (this overlay could not
+be built), `CompositionUnavailable` (transparency cannot be delivered here - a
+solid panel would still work), `RendererCrashed` (the browser or its renderer
+died after bounded reload attempts - creating it again may work).
+
+Every event above is delivered from the game's main thread instead when the
+overlay was created with `DispatchOnMainThread = true`.
 
 Windows keep the spot the player gave them: toggling does not recenter, and
 the position and size survive restarts (`%LOCALAPPDATA%\WebOverlay\window-bounds.txt`).
 A remembered spot that is no longer on any screen falls back to the centered
 default, HUDs always follow the game window instead, and `RememberBounds =
 false` restores the old center-on-every-show behaviour.
+
+## Pages with real files
+
+`LoadHtml` takes one self-contained string, which is enough for a panel but
+awkward once a UI has scripts, fonts or images - and the document itself is
+capped at 2 MB by the browser. `VirtualHosts` serves a folder of yours under a
+host name instead:
+
+```csharp
+var overlay = WebOverlays.Create("Studio", new OverlayOptions
+{
+    VirtualHosts = new[] { new VirtualHost("yourmod.assets", assetFolder) },
+});
+overlay.Navigate("https://yourmod.assets/index.html");
+```
+
+Navigating there, rather than pushing markup in with `LoadHtml`, is what makes
+the difference - the page then has a **real origin**, and with it:
+
+- assets load from disk as ordinary relative URLs, fonts included;
+- `localStorage` and `sessionStorage` work, isolated per host name, so your UI
+  can remember its own state;
+- no 2 MB document limit;
+- real file paths in the developer tools instead of one giant inline document.
+
+An **inline page has none of that**: `LoadHtml` documents run in an opaque
+origin, where `localStorage`, `sessionStorage` and `document.cookie` each throw
+`SecurityError` on first touch (measured). A page that reads `localStorage`
+without a `try`/`catch` therefore aborts the surrounding script and leaves a
+half-built UI with no visible error - if your page wants storage, give it a
+virtual host.
+
+The mapped folder is served read-only, and cross-origin requests to it are
+denied, so nothing outside your overlay can reach the files. The mapped origin
+is trusted for navigation and messages exactly like a `Navigate` target; pick a
+host name unique to your mod, since it is also the key its storage belongs to.
 
 ## Security defaults
 

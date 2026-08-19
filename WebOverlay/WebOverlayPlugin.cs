@@ -19,6 +19,9 @@ namespace WebOverlay
             OverlayHost.LogInfo = this.Logger.LogInfo;
             OverlayHost.LogWarning = this.Logger.LogWarning;
             OverlayHost.GameWindow = findGameWindow();
+            // This component's Update is the main thread, so from here on
+            // overlays created with DispatchOnMainThread can be served.
+            OverlayHost.MainThreadPumpAvailable = true;
 
             if (OverlayHost.GameWindow == IntPtr.Zero)
                 this.Logger.LogWarning("the game window was not found; overlays will be unparented.");
@@ -26,8 +29,21 @@ namespace WebOverlay
             this.Logger.LogInfo(Branding.PluginName + " " + Branding.PluginVersion + " ready.");
         }
 
+        /// <summary>
+        /// Delivers the events of overlays that asked for main-thread
+        /// dispatch. Nothing is queued unless a mod opted in, so this is an
+        /// empty dequeue attempt per frame otherwise.
+        /// </summary>
+        private void Update()
+        {
+            OverlayHost.PumpMainThread();
+        }
+
         private void OnDestroy()
         {
+            // Nothing may be handed to the main thread after this component
+            // stops running, or the events would queue up forever.
+            OverlayHost.MainThreadPumpAvailable = false;
             OverlayHost.Shutdown();
         }
 

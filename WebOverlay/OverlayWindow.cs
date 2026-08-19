@@ -117,19 +117,38 @@ namespace WebOverlay
         public Action<string> MessageReceived;
         public Action<int> KeyPressed;
         public Action Closed;
+        public Action PageLoaded;
         public Action Ready;
         public Action Failed;
 
         /// <summary>
+        /// Read from the consumer's thread, written here - both are single
+        /// writes of a word, and the volatile keeps the reader from seeing a
+        /// stale one.
+        /// </summary>
+        private volatile bool pageLoaded;
+
+        public bool IsPageLoaded => pageLoaded;
+
+        public OverlayFailure Failure { get; private set; } = OverlayFailure.Unknown;
+
+        public string FailureMessage { get; private set; }
+
+        /// <summary>
         /// Marks the overlay broken and tells the consumer, exactly once. The
         /// window is hidden rather than destroyed - the consumer still owns the
-        /// handle and disposes it.
+        /// handle and disposes it. The kind is what the consumer can act on;
+        /// the reason is the exact sentence, logged and readable from the
+        /// handle.
         /// </summary>
-        private void fail(string reason)
+        private void fail(OverlayFailure kind, string reason)
         {
             if (state == CreationState.Failed)
                 return;
             state = CreationState.Failed;
+            // Before anything can raise Failed: a handler reads these.
+            Failure = kind;
+            FailureMessage = reason;
             OverlayHost.LogWarning(reason);
             if (window != IntPtr.Zero && isVisible)
             {
@@ -153,7 +172,7 @@ namespace WebOverlay
             {
                 // Whatever went wrong, the consumer must hear a terminal state -
                 // a handle stuck in Creating answers nothing forever.
-                fail("creation threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+                fail(OverlayFailure.Unknown, "creation threw (" + ex.GetType().Name + ": " + ex.Message + ").");
                 return false;
             }
         }
@@ -162,7 +181,13 @@ namespace WebOverlay
         {
             if (OverlayHost.Environment == IntPtr.Zero)
             {
-                fail("no browser environment; the overlay cannot be created.");
+                // Naming the cause, not the symptom: the consumer's user can
+                // act on "no WebView2 runtime", never on "no environment".
+                fail(OverlayHost.StartFailure == OverlayFailure.Unknown
+                        ? OverlayFailure.EnvironmentFailed : OverlayHost.StartFailure,
+                    OverlayHost.StartFailureMessage == null
+                        ? "no browser environment; the overlay cannot be created."
+                        : "the overlay cannot be created: " + OverlayHost.StartFailureMessage);
                 return false;
             }
 
@@ -178,14 +203,14 @@ namespace WebOverlay
                 usesComposition = tryPrepareComposition();
                 if (!usesComposition && options.Interactive)
                 {
-                    fail("an interactive HUD needs composition support (Windows 8+ with a 2021+ WebView2 runtime).");
+                    fail(OverlayFailure.CompositionUnavailable, "an interactive HUD needs composition support (Windows 8+ with a 2021+ WebView2 runtime).");
                     return false;
                 }
             }
 
             if (!createWindow())
             {
-                fail("the overlay window could not be created.");
+                fail(OverlayFailure.WindowFailed, "the overlay window could not be created.");
                 return false;
             }
 
@@ -208,7 +233,7 @@ namespace WebOverlay
 
                 if (result != WebView2Api.S_OK || pointer == IntPtr.Zero)
                 {
-                    fail("the browser view failed, hr=0x" + result.ToString("X8") + ".");
+                    fail(OverlayFailure.ViewFailed, "the browser view failed, hr=0x" + result.ToString("X8") + ".");
                     return WebView2Api.S_OK;
                 }
 
@@ -222,7 +247,7 @@ namespace WebOverlay
                 {
                     // The ComCallback thunk would swallow this silently and
                     // leave the handle in Creating forever.
-                    fail("configuration threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+                    fail(OverlayFailure.ViewFailed, "configuration threw (" + ex.GetType().Name + ": " + ex.Message + ").");
                 }
                 return WebView2Api.S_OK;
             });
@@ -232,7 +257,7 @@ namespace WebOverlay
                 OverlayHost.Environment, window, controllerCallback.Pointer);
             if (hr != WebView2Api.S_OK)
             {
-                fail("could not request a browser view, hr=0x" + hr.ToString("X8") + ".");
+                fail(OverlayFailure.ViewFailed, "could not request a browser view, hr=0x" + hr.ToString("X8") + ".");
                 return false;
             }
 
@@ -245,7 +270,7 @@ namespace WebOverlay
                 controller, out webView);
             if (webView == IntPtr.Zero)
             {
-                fail("the browser view could not be obtained.");
+                fail(OverlayFailure.ViewFailed, "the browser view could not be obtained.");
                 return;
             }
 
@@ -255,7 +280,7 @@ namespace WebOverlay
             // working - that would be fail-open.
             if (!applySettings() || !subscribeToMessages() || !subscribeToNavigation())
             {
-                fail("a security-critical setting could not be applied.");
+                fail(OverlayFailure.ViewFailed, "a security-critical setting could not be applied.");
                 return;
             }
             if (options.Transparent && !applyTransparentBackground())
@@ -263,9 +288,13 @@ namespace WebOverlay
                 // Without a transparent background the "HUD" would be a white
                 // click-through sheet over the whole game. Staying invisible is
                 // the only safe failure.
-                fail("the HUD stays hidden because transparency is unavailable.");
+                fail(OverlayFailure.CompositionUnavailable, "the HUD stays hidden because transparency is unavailable.");
                 return;
             }
+            // Before any navigation: a page loaded first would already have
+            // failed to find its own files.
+            applyVirtualHosts();
+
             if (!subscribeToKeys())
             {
                 // A frameless interactive overlay whose close keys did not
@@ -273,7 +302,7 @@ namespace WebOverlay
                 // framed one still has its close button; a HUD never has focus.
                 if (!options.Frame && !options.Transparent)
                 {
-                    fail("the close keys could not register on a frameless overlay.");
+                    fail(OverlayFailure.ViewFailed, "the close keys could not register on a frameless overlay.");
                     return;
                 }
                 OverlayHost.LogWarning("the close keys could not register; use the close button.");
@@ -294,11 +323,96 @@ namespace WebOverlay
             Ready?.Invoke();
         }
 
+        /// <summary>
+        /// Serves the mod's own folders as `https://&lt;host&gt;/`, which is the
+        /// only way a page gets real files - and, when it navigates there
+        /// instead of being handed inline markup, a real origin with working
+        /// storage. Read-only and CORS-denied: nothing outside this overlay
+        /// reaches the folder.
+        ///
+        /// A bad mapping is a broken page, not a broken security boundary, so
+        /// it is logged and skipped rather than failing the overlay - the
+        /// consumer sees its own missing content.
+        /// </summary>
+        private void applyVirtualHosts()
+        {
+            if (options.VirtualHosts == null || options.VirtualHosts.Length == 0)
+                return;
+
+            Guid iid = WebView2Api.IID_WebView2_3;
+            if (Marshal.QueryInterface(webView, ref iid, out IntPtr webView3) != WebView2Api.S_OK
+                || webView3 == IntPtr.Zero)
+            {
+                OverlayHost.LogWarning("this WebView2 runtime cannot map folders to hosts;"
+                    + " the page will not find its files.");
+                return;
+            }
+
+            try
+            {
+                var mapping = WebView2Api.Method<WebView2Api.SetVirtualHostMappingDelegate>(
+                    webView3, WebView2Api.WebView2_3_SetVirtualHostNameToFolderMapping);
+                foreach (VirtualHost host in options.VirtualHosts)
+                {
+                    if (host == null || !isUsableHostName(host.Host))
+                    {
+                        OverlayHost.LogWarning("skipped a virtual host: the name must be a bare host"
+                            + " like \"yourmod.assets\" (got " + describe(host?.Host) + ").");
+                        continue;
+                    }
+                    if (string.IsNullOrEmpty(host.Folder) || !System.IO.Directory.Exists(host.Folder))
+                    {
+                        OverlayHost.LogWarning("skipped virtual host " + host.Host
+                            + ": the folder " + describe(host.Folder) + " does not exist.");
+                        continue;
+                    }
+
+                    int hr = mapping(webView3, host.Host, System.IO.Path.GetFullPath(host.Folder),
+                        WebView2Api.HostResourceAccessDenyCors);
+                    if (hr != WebView2Api.S_OK)
+                    {
+                        OverlayHost.LogWarning("mapping " + host.Host + " failed, hr=0x" + hr.ToString("X8") + ".");
+                        continue;
+                    }
+
+                    // The mod asked for this origin, exactly like a Navigate
+                    // target, so its page may load and talk to the mod.
+                    allowOrigin("https://" + host.Host);
+                }
+            }
+            finally
+            {
+                Marshal.Release(webView3);
+            }
+        }
+
+        /// <summary>
+        /// A host name only - no scheme, path, port or credentials. Anything
+        /// else would silently map nothing, or map something other than what
+        /// the caller wrote.
+        /// </summary>
+        private static bool isUsableHostName(string host)
+        {
+            if (string.IsNullOrEmpty(host))
+                return false;
+            foreach (char c in host)
+            {
+                if (char.IsLetterOrDigit(c) || c == '-' || c == '.')
+                    continue;
+                return false;
+            }
+            return host[0] != '.' && host[host.Length - 1] != '.';
+        }
+
+        private static string describe(string value) =>
+            value == null ? "<null>" : "\"" + value + "\"";
+
         private void startPendingNavigation()
         {
             if (pendingHtml != null)
             {
                 pageReady = false;
+                pageLoaded = false;
                 expectInlineNavigation = true;
                 checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                     webView, WebView2Api.WebView_NavigateToString)(webView, pendingHtml), "LoadHtml");
@@ -306,6 +420,7 @@ namespace WebOverlay
             else if (pendingUrl != null)
             {
                 pageReady = false;
+                pageLoaded = false;
                 checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                     webView, WebView2Api.WebView_Navigate)(webView, pendingUrl), "Navigate");
             }
@@ -480,6 +595,11 @@ namespace WebOverlay
                     if (currentDocumentIsTarget())
                     {
                         flushOutbox();
+                        // "The mod's own page is live", which is what a
+                        // consumer means by loaded - not merely "a document
+                        // finished", which a redirect elsewhere also is.
+                        pageLoaded = true;
+                        PageLoaded?.Invoke();
                     }
                     else if (outbox.Count > 0)
                     {
@@ -520,7 +640,7 @@ namespace WebOverlay
                         args, out kind);
                 if (kind == WebView2Api.ProcessFailedKindBrowserExited)
                 {
-                    fail("the browser process exited; the overlay is dead.");
+                    fail(OverlayFailure.RendererCrashed, "the browser process exited; the overlay is dead.");
                 }
                 else if (kind == WebView2Api.ProcessFailedKindRenderExited
                     || kind == WebView2Api.ProcessFailedKindRenderUnresponsive)
@@ -540,7 +660,7 @@ namespace WebOverlay
                     {
                         // A handle that stays "Ready" over a permanently dead
                         // page would never hand the consumer to its fallback.
-                        fail("the page's renderer keeps failing; the overlay is dead.");
+                        fail(OverlayFailure.RendererCrashed, "the page's renderer keeps failing; the overlay is dead.");
                     }
                 }
                 else
@@ -570,7 +690,10 @@ namespace WebOverlay
             // The document is about to change: sends must buffer until the new
             // page reports completion, or they would vanish into the old one.
             if (topLevel)
+            {
                 pageReady = false;
+                pageLoaded = false;
+            }
             return WebView2Api.S_OK;
         }
 
@@ -706,6 +829,7 @@ namespace WebOverlay
             if (webView == IntPtr.Zero)
                 return;
             pageReady = false;
+            pageLoaded = false;
             checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                 webView, WebView2Api.WebView_Navigate)(webView, url), "Navigate");
         }
@@ -738,6 +862,7 @@ namespace WebOverlay
             if (webView == IntPtr.Zero)
                 return;
             pageReady = false;
+            pageLoaded = false;
             expectInlineNavigation = true;
             checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                 webView, WebView2Api.WebView_NavigateToString)(webView, html), "LoadHtml");
@@ -1301,7 +1426,7 @@ namespace WebOverlay
             if (Marshal.QueryInterface(OverlayHost.Environment, ref iid3, out IntPtr environment3) != WebView2Api.S_OK
                 || environment3 == IntPtr.Zero)
             {
-                fail("the composition environment disappeared.");
+                fail(OverlayFailure.CompositionUnavailable, "the composition environment disappeared.");
                 return false;
             }
 
@@ -1328,7 +1453,7 @@ namespace WebOverlay
                 }
                 if (result != WebView2Api.S_OK || pointer == IntPtr.Zero)
                 {
-                    fail("the composed browser view failed, hr=0x" + result.ToString("X8") + ".");
+                    fail(OverlayFailure.ViewFailed, "the composed browser view failed, hr=0x" + result.ToString("X8") + ".");
                     return WebView2Api.S_OK;
                 }
 
@@ -1341,7 +1466,7 @@ namespace WebOverlay
                 if (Marshal.QueryInterface(compositionController, ref iidController, out controller) != WebView2Api.S_OK
                     || controller == IntPtr.Zero)
                 {
-                    fail("the composed view does not answer as a controller.");
+                    fail(OverlayFailure.ViewFailed, "the composed view does not answer as a controller.");
                     return WebView2Api.S_OK;
                 }
 
@@ -1349,7 +1474,7 @@ namespace WebOverlay
                 {
                     if (!wireVisualTree())
                     {
-                        fail("the composition visual tree could not be wired.");
+                        fail(OverlayFailure.CompositionUnavailable, "the composition visual tree could not be wired.");
                         return WebView2Api.S_OK;
                     }
                     subscribeToCursor();
@@ -1357,7 +1482,7 @@ namespace WebOverlay
                 }
                 catch (Exception ex)
                 {
-                    fail("composed configuration threw (" + ex.GetType().Name + ": " + ex.Message + ").");
+                    fail(OverlayFailure.ViewFailed, "composed configuration threw (" + ex.GetType().Name + ": " + ex.Message + ").");
                 }
                 return WebView2Api.S_OK;
             });
@@ -1368,7 +1493,7 @@ namespace WebOverlay
             Marshal.Release(environment3);
             if (hr != WebView2Api.S_OK)
             {
-                fail("could not request a composed browser view, hr=0x" + hr.ToString("X8") + ".");
+                fail(OverlayFailure.ViewFailed, "could not request a composed browser view, hr=0x" + hr.ToString("X8") + ".");
                 return false;
             }
             return true;

@@ -54,6 +54,15 @@ Anvil is the library branding of **maschine** (the author of CraftQueue and othe
 
 MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed under BSD 3-Clause; the WebView2 runtime itself is not redistributed.
 
+## Changelog v1.4.0 (for the Forge version field)
+
+```text
+- For mod authors: overlays can now serve a folder of real files as https://yourmod.assets/ - scripts, fonts and images load normally, and such a page also gets working localStorage (an inline page has none).
+- Failed now says why: a cause a mod can act on plus the exact message, so users get "install the WebView2 runtime" instead of a generic failure.
+- New PageLoaded event and IsPageLoaded for "my page is live", and an option to receive all events on the game's main thread.
+- Nothing changes for players; the demo is unchanged apart from showing the new API.
+```
+
 ## Changelog v1.3.0 (for the Forge version field)
 
 ```text
