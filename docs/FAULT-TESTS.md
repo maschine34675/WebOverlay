@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-16 were added for v1.3.0 and v1.4.0
+and re-run unchanged for v1.4.0; rows 10-18 were added for v1.3.0 to v1.5.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -26,6 +26,8 @@ and re-run unchanged for v1.4.0; rows 10-16 were added for v1.3.0 and v1.4.0
 | 14 | Rejected `LoadHtml` (over 2 MB) after a page was already live | the previous document stays the target: `IsPageLoaded` remains true and sends still reach it | PASS |
 | 15 | Main-thread dispatch with a pump | nothing is delivered until the pump runs, then on the pumping thread; late latched handlers likewise; nothing after `Dispose` | PASS |
 | 16 | Main-thread dispatch without a pump (non-Unity host) | events fall back to the overlay thread, with one warning | PASS |
+| 17 | `ExecuteScript` with results, including 200 in a burst and a script that cannot run | every caller answered exactly once with its own value, one-shot COM handlers freed, no crash | PASS |
+| 18 | Show/Hide/Show, redundant calls, then destruction | `VisibilityChanged` reports only real transitions and the final false | PASS |
 
 Not automated (manually covered in game during development, or accepted):
 
@@ -43,4 +45,4 @@ it from this table when re-running the matrix for a future release. Its modes
 map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
-`nav-reject`, `dispatch`.
+`nav-reject`, `dispatch`, `script-result`, `visibility`.

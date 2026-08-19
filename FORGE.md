@@ -54,6 +54,15 @@ Anvil is the library branding of **maschine** (the author of CraftQueue and othe
 
 MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed under BSD 3-Clause; the WebView2 runtime itself is not redistributed.
 
+## Changelog v1.5.0 (for the Forge version field)
+
+```text
+- For mod authors: ExecuteScript can now hand back what the script evaluated to, so a mod can read state out of its page without building a round trip by hand.
+- New VisibilityChanged event that reports only real show/hide changes - the existing Closed event also fires for a mod's own Hide and cannot tell the two apart.
+- Internal: one-shot browser callbacks are released once the browser is done with them.
+- Nothing changes for players.
+```
+
 ## Changelog v1.4.0 (for the Forge version field)
 
 ```text

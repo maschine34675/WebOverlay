@@ -44,10 +44,28 @@ namespace WebOverlay
         private readonly HashSet<string> unmappedOrigins = new HashSet<string>(StringComparer.Ordinal);
 
         // One FIFO for messages and scripts: their relative order is part of
-        // what the consumer expressed. Key=true means script. Cleared whenever
-        // the mod retargets the overlay - buffered items belonged to the old
-        // page and must not leak into the new one.
-        private readonly List<KeyValuePair<bool, string>> outbox = new List<KeyValuePair<bool, string>>();
+        // what the consumer expressed. Cleared whenever the mod retargets the
+        // overlay - buffered items belonged to the old page and must not leak
+        // into the new one.
+        private readonly List<Pending> outbox = new List<Pending>();
+
+        /// <summary>
+        /// A send waiting for the page. A script may carry the consumer's
+        /// result callback, which has to be answered either way: dropping it
+        /// silently would leave a caller waiting for a value that can never
+        /// arrive.
+        /// </summary>
+        private struct Pending
+        {
+            public bool IsScript;
+            public string Payload;
+            public Action<string> Result;
+        }
+
+        // One-shot completion handlers for scripts whose result the consumer
+        // wants. Kept until they fire so the browser never calls a collected
+        // delegate, and disposed right after so they do not accumulate.
+        private readonly List<ComCallback> pendingScripts = new List<ComCallback>();
 
         private IntPtr window;
         private IntPtr controller;
@@ -122,7 +140,21 @@ namespace WebOverlay
         public Action<string> MessageReceived;
         public Action<int> KeyPressed;
         public Action Closed;
+        public Action<bool> VisibilityChanged;
         public Action PageLoaded;
+
+        /// <summary>
+        /// Raises VisibilityChanged only for real transitions, so a consumer
+        /// can trust it as state rather than having to compare against its own
+        /// flag - which is what Closed, firing on every Hide, forces today.
+        /// </summary>
+        private void setVisible(bool value)
+        {
+            if (isVisible == value)
+                return;
+            isVisible = value;
+            VisibilityChanged?.Invoke(value);
+        }
         public Action Ready;
         public Action Failed;
 
@@ -158,7 +190,7 @@ namespace WebOverlay
             if (window != IntPtr.Zero && isVisible)
             {
                 ShowWindow(window, SW_HIDE);
-                isVisible = false;
+                setVisible(false);
             }
             // During game shutdown a failure is expected, and notifying the
             // consumer would trigger its fallback - picture a fallback browser
@@ -635,7 +667,7 @@ namespace WebOverlay
                     {
                         OverlayHost.LogWarning("dropped " + outbox.Count
                             + " buffered send(s); the page ended up somewhere else than the mod's target.");
-                        outbox.Clear();
+                        clearOutbox();
                     }
                 }
                 return WebView2Api.S_OK;
@@ -861,7 +893,7 @@ namespace WebOverlay
             htmlLoaded = false;
             expectInlineNavigation = false;
             // Anything still buffered was meant for the previous page.
-            outbox.Clear();
+            clearOutbox();
             // The mod asked for this page, so its origin becomes trusted.
             allowOrigin(url);
             if (webView == IntPtr.Zero)
@@ -888,7 +920,7 @@ namespace WebOverlay
                 return true;
             OverlayHost.LogWarning("" + what + " was rejected, hr=0x" + hr.ToString("X8")
                 + "; the page will not change" + (outbox.Count > 0 ? " and " + outbox.Count + " buffered send(s) were dropped" : "") + ".");
-            outbox.Clear();
+            clearOutbox();
             return false;
         }
 
@@ -938,7 +970,7 @@ namespace WebOverlay
             pendingHtml = html;
             pendingUrl = null;
             htmlLoaded = true;
-            outbox.Clear();
+            clearOutbox();
             if (webView == IntPtr.Zero)
                 return;
             pageReady = false;
@@ -972,49 +1004,121 @@ namespace WebOverlay
                 webView, message);
         }
 
-        public void ExecuteScript(string script)
+        public void ExecuteScript(string script, Action<string> result = null)
         {
             if (script == null)
+            {
+                answer(result, null);
                 return;
+            }
             if (webView == IntPtr.Zero || !pageReady)
             {
-                buffer(true, script);
+                buffer(true, script, result);
                 return;
             }
             if (!currentDocumentIsTarget())
             {
                 OverlayHost.LogWarning("dropped a script; the page is not the mod's target document.");
+                answer(result, null);
                 return;
             }
 
             // A real completion handler: passing null there is undocumented
             // behavior, and its error code is the only way a script failure
-            // ever becomes visible. One callback serves every call.
-            if (scriptCompletedCallback == null)
-                scriptCompletedCallback = new ComCallback(WebView2Api.IID_ExecuteScriptCompleted, (int hrScript, IntPtr resultJson) =>
+            // ever becomes visible. Without a result to deliver, one shared
+            // callback serves every call; with one, each call needs its own,
+            // or two overlapping scripts would resolve to the same consumer.
+            ComCallback callback;
+            if (result == null)
+            {
+                if (scriptCompletedCallback == null)
+                    scriptCompletedCallback = new ComCallback(WebView2Api.IID_ExecuteScriptCompleted, (int hrScript, IntPtr resultJson) =>
+                    {
+                        if (hrScript != WebView2Api.S_OK)
+                            OverlayHost.LogWarning("a script failed, hr=0x" + hrScript.ToString("X8") + ".");
+                        return WebView2Api.S_OK;
+                    });
+                callback = scriptCompletedCallback;
+            }
+            else
+            {
+                ComCallback[] slot = new ComCallback[1];
+                slot[0] = new ComCallback(WebView2Api.IID_ExecuteScriptCompleted, (int hrScript, IntPtr resultJson) =>
                 {
                     if (hrScript != WebView2Api.S_OK)
                         OverlayHost.LogWarning("a script failed, hr=0x" + hrScript.ToString("X8") + ".");
+                    // The string belongs to the browser for the length of this
+                    // call only, so it is copied before it goes anywhere.
+                    answer(result, hrScript == WebView2Api.S_OK && resultJson != IntPtr.Zero
+                        ? Marshal.PtrToStringUni(resultJson) : null);
+                    pendingScripts.Remove(slot[0]);
+                    slot[0].Dispose();
                     return WebView2Api.S_OK;
                 });
+                pendingScripts.Add(slot[0]);
+                callback = slot[0];
+            }
 
             int hr = WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(webView, WebView2Api.WebView_ExecuteScript)(
-                webView, script, scriptCompletedCallback.Pointer);
+                webView, script, callback.Pointer);
             if (hr != WebView2Api.S_OK)
+            {
                 OverlayHost.LogWarning("ExecuteScript was rejected, hr=0x" + hr.ToString("X8") + ".");
+                // Rejected calls never complete, so the handler has to be
+                // retired here or it would wait for a callback forever.
+                if (result != null && pendingScripts.Remove(callback))
+                {
+                    callback.Dispose();
+                    answer(result, null);
+                }
+            }
         }
 
-        private void buffer(bool isScript, string payload)
+        private void buffer(bool isScript, string payload, Action<string> result = null)
         {
             if (outbox.Count < OutboxLimit)
             {
-                outbox.Add(new KeyValuePair<bool, string>(isScript, payload));
+                outbox.Add(new Pending { IsScript = isScript, Payload = payload, Result = result });
                 return;
             }
             overflowDropped++;
             if (overflowDropped == 1)
                 OverlayHost.LogWarning("the outbox is full (" + OutboxLimit
                     + " entries); further sends are dropped until the page loads.");
+            answer(result, null);
+        }
+
+        /// <summary>
+        /// Hands a script result - or the absence of one - to the consumer.
+        /// Every path that gives up on a script has to come through here.
+        /// </summary>
+        private static void answer(Action<string> result, string value)
+        {
+            if (result == null)
+                return;
+            try
+            {
+                result(value);
+            }
+            catch (Exception ex)
+            {
+                OverlayHost.LogWarning("a script result handler threw ("
+                    + ex.GetType().Name + ": " + ex.Message + ").");
+            }
+        }
+
+        /// <summary>
+        /// Drops everything buffered, telling any waiting script caller that
+        /// no result is coming.
+        /// </summary>
+        private void clearOutbox()
+        {
+            if (outbox.Count == 0)
+                return;
+            var dropped = outbox.ToArray();
+            outbox.Clear();
+            foreach (Pending item in dropped)
+                answer(item.Result, null);
         }
 
         private void flushOutbox()
@@ -1023,12 +1127,12 @@ namespace WebOverlay
                 return;
             var items = outbox.ToArray();
             outbox.Clear();
-            foreach (KeyValuePair<bool, string> item in items)
+            foreach (Pending item in items)
             {
-                if (item.Key)
-                    ExecuteScript(item.Value);
+                if (item.IsScript)
+                    ExecuteScript(item.Payload, item.Result);
                 else
-                    PostMessageToPage(item.Value);
+                    PostMessageToPage(item.Payload);
             }
         }
 
@@ -1060,7 +1164,7 @@ namespace WebOverlay
                 SetForegroundWindow(window);
             else
                 SetTimer(window, TrackTimerId, TrackIntervalMilliseconds, IntPtr.Zero);
-            isVisible = true;
+            setVisible(true);
         }
 
         public void Hide()
@@ -1072,7 +1176,7 @@ namespace WebOverlay
                 KillTimer(window, TrackTimerId);
             setControllerVisible(false);
             ShowWindow(window, SW_HIDE);
-            isVisible = false;
+            setVisible(false);
             // Hand the keyboard back to the game, not to whatever sits behind.
             // A HUD never had it, so there is nothing to hand back.
             if (!options.Transparent
@@ -1293,9 +1397,18 @@ namespace WebOverlay
             scriptCompletedCallback?.Dispose();
             compositionCompleted?.Dispose();
             cursorChangedCallback?.Dispose();
+            // Completions that will never arrive now: hand the memory back and
+            // tell anyone waiting for a script result that none is coming.
+            foreach (ComCallback pending in pendingScripts.ToArray())
+                pending.Dispose();
+            pendingScripts.Clear();
+            clearOutbox();
             OverlayHost.Unregister(this);
             if (wasVisible)
+            {
                 Closed?.Invoke();
+                VisibilityChanged?.Invoke(false);
+            }
         }
 
         private bool createWindow()

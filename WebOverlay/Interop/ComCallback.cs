@@ -44,6 +44,12 @@ namespace WebOverlay.Interop
         private int references = 1;
         private int disposed;
 
+        /// <summary>
+        /// The COM object handed to native code. Zero once freed - which only
+        /// happens after both sides let go.
+        /// </summary>
+        public IntPtr Pointer;
+
         /// <summary>Completion handler shape: Invoke(HRESULT, result).</summary>
         public ComCallback(Guid interfaceId, Func<int, IntPtr, int> handler)
             : this(interfaceId)
@@ -77,8 +83,6 @@ namespace WebOverlay.Interop
             Pointer = Marshal.AllocHGlobal(IntPtr.Size);
             Marshal.WriteIntPtr(Pointer, vtable);
         }
-
-        public IntPtr Pointer { get; private set; }
 
         private void writeInvokeSlot()
         {
@@ -114,8 +118,29 @@ namespace WebOverlay.Interop
 
         private uint onRelease(IntPtr self)
         {
-            try { return (uint)Math.Max(0, Interlocked.Decrement(ref references)); }
-            catch { return 0; }
+            try
+            {
+                int count = Math.Max(0, Interlocked.Decrement(ref references));
+                // Plain COM: the last release frees the object - but only once
+                // the managed owner has let go too, because until then the
+                // handler is still registered somewhere. By contract nothing
+                // touches the pointer after a Release that returned zero, so
+                // this is the one moment freeing it is safe. Without it every
+                // one-shot completion handler would leak.
+                if (count == 0 && disposed != 0)
+                    freeMemory();
+                return (uint)count;
+            }
+            catch
+            {
+                return 0;
+            }
+            finally
+            {
+                // The delegates that native code is calling live on this
+                // instance, and the free above may have unrooted it.
+                GC.KeepAlive(this);
+            }
         }
 
         private int onCompletedThunk(IntPtr self, int errorCode, IntPtr result)
@@ -135,8 +160,9 @@ namespace WebOverlay.Interop
         /// when the native side holds no reference either - a completion that
         /// never arrived, or an event source that was not closed, still owns
         /// the pointer, and freeing memory native code can call is a process
-        /// crash. Such instances are deliberately leaked (and rooted, so their
-        /// delegates survive). Idempotent.
+        /// crash. Such an instance stays rooted here until native releases it,
+        /// which frees it then; one that is never released stays for the
+        /// process lifetime, which is the safe end of the trade. Idempotent.
         /// </summary>
         public void Dispose()
         {
@@ -150,16 +176,22 @@ namespace WebOverlay.Interop
                 return;
             }
 
-            if (Pointer != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(Pointer);
-                Pointer = IntPtr.Zero;
-            }
-            if (vtable != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(vtable);
-                vtable = IntPtr.Zero;
-            }
+            freeMemory();
+        }
+
+        private void freeMemory()
+        {
+            // Rooted only while native code could still call in; once the
+            // memory is gone there is nothing left to keep alive.
+            lock (leaked)
+                leaked.Remove(this);
+
+            IntPtr pointer = Interlocked.Exchange(ref Pointer, IntPtr.Zero);
+            if (pointer != IntPtr.Zero)
+                Marshal.FreeHGlobal(pointer);
+            IntPtr table = Interlocked.Exchange(ref vtable, IntPtr.Zero);
+            if (table != IntPtr.Zero)
+                Marshal.FreeHGlobal(table);
         }
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]

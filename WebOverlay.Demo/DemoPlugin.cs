@@ -14,7 +14,8 @@ namespace WebOverlay.Demo
     /// server anywhere, that talks to the game in both directions.
     ///
     /// Press F10 to toggle it. The page pushes button presses to the game and
-    /// the game pushes a live value back every second. F11 toggles the
+    /// the game pushes a live value back every second; the panel also shows
+    /// how to read a value back out of the page. F11 toggles the
     /// click-through HUD, F8 the interactive glass panel, and F7 a Three.js
     /// WebGL cube that follows the player camera.
     /// </summary>
@@ -306,6 +307,20 @@ namespace WebOverlay.Demo
                 created.Dispose();
                 if (ReferenceEquals(overlay, created))
                     overlay = null;
+            };
+
+            // State, not "something happened": this fires only when the panel
+            // really appears or disappears, unlike Closed, which also fires
+            // for the mod's own Hide.
+            created.VisibilityChanged += visible =>
+            {
+                this.Logger.LogDebug("The panel is now " + (visible ? "visible" : "hidden") + ".");
+                if (!visible)
+                    return;
+                // Reading state back out of the page: the result arrives as
+                // the JSON the script evaluated to.
+                created.ExecuteScript("document.getElementById('live').textContent",
+                    json => this.Logger.LogDebug("The panel's live line reads " + json + "."));
             };
 
             // Through the local: the latched Failed handler may already have

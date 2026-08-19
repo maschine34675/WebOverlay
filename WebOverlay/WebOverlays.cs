@@ -354,6 +354,20 @@ namespace WebOverlay
         /// <summary>Runs JavaScript in the page, for pushing live values.</summary>
         void ExecuteScript(string script);
 
+        /// <summary>
+        /// Runs JavaScript and hands back what it evaluated to, as the JSON the
+        /// browser produced ("42", "\"text\"", "null" for no value). The
+        /// callback is answered exactly once - with null when the script could
+        /// not run at all: no page, a page that is no longer the mod's target,
+        /// an overlay that closed, or a script the browser rejected. So a
+        /// caller waiting for a value is never left waiting forever.
+        ///
+        /// Threading follows the events: the overlay thread, or the game's
+        /// main thread with
+        /// <see cref="OverlayOptions.DispatchOnMainThread"/>.
+        /// </summary>
+        void ExecuteScript(string script, Action<string> result);
+
         /// <summary>Opens the browser developer tools, if enabled in the options.</summary>
         void OpenDevTools();
 
@@ -375,8 +389,23 @@ namespace WebOverlay
         /// </summary>
         event Action PageLoaded;
 
-        /// <summary>Raised whenever the overlay is hidden or closed.</summary>
+        /// <summary>
+        /// Raised whenever the overlay is hidden or closed. Note that this
+        /// includes the mod's own <see cref="Hide"/>, so it cannot tell "the
+        /// player closed it" from "we closed it" - use
+        /// <see cref="VisibilityChanged"/> for state, and expect this event to
+        /// narrow to real closes in a future major version.
+        /// </summary>
         event Action Closed;
+
+        /// <summary>
+        /// Raised when the overlay becomes visible or invisible, and only on
+        /// an actual change - so it can be trusted as state instead of being
+        /// reconciled against the consumer's own flag every frame. Fires false
+        /// when a failure hides the overlay, and once more when a visible
+        /// overlay is destroyed.
+        /// </summary>
+        event Action<bool> VisibilityChanged;
 
         /// <summary>
         /// Raised once the browser view is fully set up. Latched: a handler
@@ -414,6 +443,7 @@ namespace WebOverlay
             window.MessageReceived = message => raise(() => MessageReceived?.Invoke(message));
             window.KeyPressed = key => raise(() => KeyPressed?.Invoke(key));
             window.Closed = () => raise(() => Closed?.Invoke());
+            window.VisibilityChanged = visible => raise(() => VisibilityChanged?.Invoke(visible));
             window.PageLoaded = () => raise(() => PageLoaded?.Invoke());
             window.Ready = () => fire(ref readyHandlers, ref readyAlready);
             window.Failed = () => fire(ref failedHandlers, ref failedAlready);
@@ -443,6 +473,7 @@ namespace WebOverlay
         public event Action<string> MessageReceived;
         public event Action<int> KeyPressed;
         public event Action Closed;
+        public event Action<bool> VisibilityChanged;
         public event Action PageLoaded;
 
         // Ready and Failed are latched: creation runs on the overlay thread and
@@ -547,6 +578,23 @@ namespace WebOverlay
         public void Post(string message) => post(() => window.PostMessageToPage(message));
 
         public void ExecuteScript(string script) => post(() => window.ExecuteScript(script));
+
+        public void ExecuteScript(string script, Action<string> result)
+        {
+            if (result == null)
+            {
+                ExecuteScript(script);
+                return;
+            }
+            // The result travels the same way as every event, so a consumer
+            // that asked for main-thread delivery gets it here too.
+            if (disposed != 0)
+            {
+                raise(() => result(null));
+                return;
+            }
+            OverlayHost.Post(() => window.ExecuteScript(script, value => raise(() => result(value))));
+        }
 
         public void OpenDevTools() => post(() => window.OpenDevTools());
 

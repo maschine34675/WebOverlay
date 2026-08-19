@@ -125,12 +125,14 @@ panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 | `Show()`, `Hide()`, `Toggle()` | Visibility. `IsVisible` reads the current state. |
 | `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
 | `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
+| `ExecuteScript(script, result)` | Same, and hands back what the script evaluated to, as JSON. |
 | `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
 | `IsPageLoaded` | Whether the page you targeted has finished loading. |
 | `Failure`, `FailureMessage` | Why `Failed` fired, as a cause you can act on plus the exact sentence. |
 | `MessageReceived` | The page called `postMessage`. Overlay thread. |
 | `KeyPressed` | A key pressed in the overlay that did not close it. Overlay thread. |
 | `Closed` | Fires on every hide or close - not only on destruction. Overlay thread. |
+| `VisibilityChanged` | The overlay became visible or invisible; only on real changes. Overlay thread. |
 | `PageLoaded` | Your page is live; fires again on every navigation. Overlay thread. |
 | `Ready`, `Failed` | Latched creation outcome - see above for threading. |
 | `Dispose()` | Destroys the overlay window. |
@@ -145,6 +147,18 @@ died after bounded reload attempts - creating it again may work).
 
 Every event above is delivered from the game's main thread instead when the
 overlay was created with `DispatchOnMainThread = true`.
+
+`ExecuteScript(script, result)` answers the callback exactly once - with the
+JSON the script evaluated to, or `null` when it could not run at all (no page,
+a page that is no longer your target, an overlay that closed, a rejected
+call). A script that throws is reported by the browser as the JSON `"null"`,
+which is indistinguishable from a script that really evaluated to null.
+
+`VisibilityChanged` is the event to use for "is my overlay showing": it fires
+only on real transitions, including the `false` when a failure hides the
+overlay. `Closed` also fires for your own `Hide()`, so it cannot tell a player
+closing the window from the mod closing it; that will narrow in a future major
+version.
 
 Windows keep the spot the player gave them: toggling does not recenter, and
 the position and size survive restarts (`%LOCALAPPDATA%\WebOverlay\window-bounds.txt`).
