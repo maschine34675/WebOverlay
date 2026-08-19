@@ -360,7 +360,10 @@ namespace WebOverlay
         /// callback is answered exactly once - with null when the script could
         /// not run at all: no page, a page that is no longer the mod's target,
         /// an overlay that closed, or a script the browser rejected. So a
-        /// caller waiting for a value is never left waiting forever.
+        /// caller waiting for a value is never left waiting forever - the
+        /// answer arrives even after the handle was disposed. The one
+        /// exception is the game shutting down, where the library delivers
+        /// nothing at all rather than wake a fallback on the way out.
         ///
         /// Threading follows the events: the overlay thread, or the game's
         /// main thread with
@@ -468,6 +471,20 @@ namespace WebOverlay
             {
                 invokeIsolated(invoke);
             }
+        }
+
+        /// <summary>
+        /// Delivers a script result. Unlike an event, this is a promise made to
+        /// one caller, so it is handed over even after the handle was disposed:
+        /// whoever asked for the value is still waiting for it, and dropping it
+        /// would break the "answered exactly once" contract that makes the API
+        /// safe to await. Only a game that is shutting down swallows it, like
+        /// every other callback.
+        /// </summary>
+        private void raiseResult(Action invoke)
+        {
+            if (!dispatchOnMainThread || !OverlayHost.DispatchToMainThread(() => invokeIsolated(invoke)))
+                invokeIsolated(invoke);
         }
 
         public event Action<string> MessageReceived;
@@ -590,10 +607,10 @@ namespace WebOverlay
             // that asked for main-thread delivery gets it here too.
             if (disposed != 0)
             {
-                raise(() => result(null));
+                raiseResult(() => result(null));
                 return;
             }
-            OverlayHost.Post(() => window.ExecuteScript(script, value => raise(() => result(value))));
+            OverlayHost.Post(() => window.ExecuteScript(script, value => raiseResult(() => result(value))));
         }
 
         public void OpenDevTools() => post(() => window.OpenDevTools());

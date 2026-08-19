@@ -62,10 +62,26 @@ namespace WebOverlay
             public Action<string> Result;
         }
 
-        // One-shot completion handlers for scripts whose result the consumer
-        // wants. Kept until they fire so the browser never calls a collected
-        // delegate, and disposed right after so they do not accumulate.
-        private readonly List<ComCallback> pendingScripts = new List<ComCallback>();
+        // Scripts whose result a consumer is waiting for. Kept until they are
+        // answered so the browser never calls a collected delegate, and
+        // retired right after so they do not accumulate.
+        private readonly List<ScriptCall> pendingScripts = new List<ScriptCall>();
+
+        /// <summary>
+        /// One script in flight. The consumer callback lives here rather than
+        /// only inside the completion closure, because a close has to be able
+        /// to answer it: once the controller is gone the completion may never
+        /// arrive. Settling is once-only, so a completion that does arrive
+        /// afterwards finds the call already answered.
+        /// </summary>
+        private sealed class ScriptCall
+        {
+            public ComCallback Callback;
+            public Action<string> Result;
+            private int settled;
+
+            public bool Settle() => System.Threading.Interlocked.Exchange(ref settled, 1) == 0;
+        }
 
         private IntPtr window;
         private IntPtr controller;
@@ -148,12 +164,13 @@ namespace WebOverlay
         /// can trust it as state rather than having to compare against its own
         /// flag - which is what Closed, firing on every Hide, forces today.
         /// </summary>
-        private void setVisible(bool value)
+        private void setVisible(bool value, bool notify = true)
         {
             if (isVisible == value)
                 return;
             isVisible = value;
-            VisibilityChanged?.Invoke(value);
+            if (notify)
+                VisibilityChanged?.Invoke(value);
         }
         public Action Ready;
         public Action Failed;
@@ -187,14 +204,15 @@ namespace WebOverlay
             Failure = kind;
             FailureMessage = reason;
             OverlayHost.LogWarning(reason);
+            // During game shutdown a failure is expected, and notifying the
+            // consumer would trigger its fallback - picture a fallback browser
+            // window popping up while the game quits. That applies to the
+            // visibility change this hide causes just as much as to Failed.
             if (window != IntPtr.Zero && isVisible)
             {
                 ShowWindow(window, SW_HIDE);
-                setVisible(false);
+                setVisible(false, !OverlayHost.Stopping);
             }
-            // During game shutdown a failure is expected, and notifying the
-            // consumer would trigger its fallback - picture a fallback browser
-            // window popping up while the game quits.
             if (!OverlayHost.Stopping)
                 Failed?.Invoke();
         }
@@ -1042,21 +1060,22 @@ namespace WebOverlay
             }
             else
             {
-                ComCallback[] slot = new ComCallback[1];
-                slot[0] = new ComCallback(WebView2Api.IID_ExecuteScriptCompleted, (int hrScript, IntPtr resultJson) =>
+                var call = new ScriptCall { Result = result };
+                call.Callback = new ComCallback(WebView2Api.IID_ExecuteScriptCompleted, (int hrScript, IntPtr resultJson) =>
                 {
                     if (hrScript != WebView2Api.S_OK)
                         OverlayHost.LogWarning("a script failed, hr=0x" + hrScript.ToString("X8") + ".");
                     // The string belongs to the browser for the length of this
                     // call only, so it is copied before it goes anywhere.
-                    answer(result, hrScript == WebView2Api.S_OK && resultJson != IntPtr.Zero
-                        ? Marshal.PtrToStringUni(resultJson) : null);
-                    pendingScripts.Remove(slot[0]);
-                    slot[0].Dispose();
+                    if (call.Settle())
+                        answer(result, hrScript == WebView2Api.S_OK && resultJson != IntPtr.Zero
+                            ? Marshal.PtrToStringUni(resultJson) : null);
+                    pendingScripts.Remove(call);
+                    call.Callback.Dispose();
                     return WebView2Api.S_OK;
                 });
-                pendingScripts.Add(slot[0]);
-                callback = slot[0];
+                pendingScripts.Add(call);
+                callback = call.Callback;
             }
 
             int hr = WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(webView, WebView2Api.WebView_ExecuteScript)(
@@ -1066,10 +1085,13 @@ namespace WebOverlay
                 OverlayHost.LogWarning("ExecuteScript was rejected, hr=0x" + hr.ToString("X8") + ".");
                 // Rejected calls never complete, so the handler has to be
                 // retired here or it would wait for a callback forever.
-                if (result != null && pendingScripts.Remove(callback))
+                ScriptCall rejected = result == null ? null : pendingScripts.Find(c => c.Callback == callback);
+                if (rejected != null)
                 {
-                    callback.Dispose();
-                    answer(result, null);
+                    pendingScripts.Remove(rejected);
+                    rejected.Callback.Dispose();
+                    if (rejected.Settle())
+                        answer(result, null);
                 }
             }
         }
@@ -1397,17 +1419,26 @@ namespace WebOverlay
             scriptCompletedCallback?.Dispose();
             compositionCompleted?.Dispose();
             cursorChangedCallback?.Dispose();
-            // Completions that will never arrive now: hand the memory back and
-            // tell anyone waiting for a script result that none is coming.
-            foreach (ComCallback pending in pendingScripts.ToArray())
-                pending.Dispose();
+            // The controller is closed above, so a completion still owed to a
+            // caller will never arrive: hand the memory back and answer every
+            // waiting script with "no result" instead of leaving it hanging.
+            foreach (ScriptCall pending in pendingScripts.ToArray())
+            {
+                pending.Callback.Dispose();
+                if (pending.Settle())
+                    answer(pending.Result, null);
+            }
             pendingScripts.Clear();
             clearOutbox();
             OverlayHost.Unregister(this);
             if (wasVisible)
             {
                 Closed?.Invoke();
-                VisibilityChanged?.Invoke(false);
+                // Same reasoning as in fail(): during shutdown this would only
+                // wake a fallback while the game is going away. Closed keeps
+                // its long-standing behaviour, unchanged here.
+                if (!OverlayHost.Stopping)
+                    VisibilityChanged?.Invoke(false);
             }
         }
 

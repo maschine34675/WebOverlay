@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-18 were added for v1.3.0 to v1.5.0
+and re-run unchanged for v1.4.0; rows 10-21 were added for v1.3.0 to v1.5.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -28,6 +28,9 @@ and re-run unchanged for v1.4.0; rows 10-18 were added for v1.3.0 to v1.5.0
 | 16 | Main-thread dispatch without a pump (non-Unity host) | events fall back to the overlay thread, with one warning | PASS |
 | 17 | `ExecuteScript` with results, including 200 in a burst and a script that cannot run | every caller answered exactly once with its own value, one-shot COM handlers freed, no crash | PASS |
 | 18 | Show/Hide/Show, redundant calls, then destruction | `VisibilityChanged` reports only real transitions and the final false | PASS |
+| 19 | A script occupying the renderer for seconds, then `Dispose` before it completes | the close answers the caller with null, exactly once, and the late completion changes nothing | PASS |
+| 20 | `ExecuteScript` with a result, handle disposed before the main-thread pump runs | the result is still delivered - unlike an event, which is dropped on purpose - and a call on an already disposed handle is answered too | PASS |
+| 21 | Host shutdown with a visible overlay | no `VisibilityChanged`, so nothing wakes a consumer fallback while the game quits | PASS |
 
 Not automated (manually covered in game during development, or accepted):
 
@@ -45,4 +48,5 @@ it from this table when re-running the matrix for a future release. Its modes
 map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
-`nav-reject`, `dispatch`, `script-result`, `visibility`.
+`nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
+`shutdown-quiet`.

@@ -313,15 +313,15 @@ namespace WebOverlay.Demo
             // really appears or disappears, unlike Closed, which also fires
             // for the mod's own Hide.
             created.VisibilityChanged += visible =>
-            {
                 this.Logger.LogDebug("The panel is now " + (visible ? "visible" : "hidden") + ".");
-                if (!visible)
-                    return;
-                // Reading state back out of the page: the result arrives as
-                // the JSON the script evaluated to.
+
+            // Reading state back out of the page: the result arrives as the
+            // JSON the script evaluated to. Hooked to PageLoaded, because
+            // that is when the page exists - the overlay becomes visible
+            // before its first page has loaded.
+            created.PageLoaded += () =>
                 created.ExecuteScript("document.getElementById('live').textContent",
                     json => this.Logger.LogDebug("The panel's live line reads " + json + "."));
-            };
 
             // Through the local: the latched Failed handler may already have
             // run during the subscription and nulled the field.

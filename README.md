@@ -151,12 +151,17 @@ overlay was created with `DispatchOnMainThread = true`.
 `ExecuteScript(script, result)` answers the callback exactly once - with the
 JSON the script evaluated to, or `null` when it could not run at all (no page,
 a page that is no longer your target, an overlay that closed, a rejected
-call). A script that throws is reported by the browser as the JSON `"null"`,
-which is indistinguishable from a script that really evaluated to null.
+call). That holds even if you dispose the handle while the script is still
+running: closing the overlay answers whoever is waiting, rather than leaving
+them waiting forever. The one case where nothing is delivered is the game
+shutting down. A script that throws is reported by the browser as the JSON
+`"null"`, which is indistinguishable from a script that really evaluated to
+null.
 
 `VisibilityChanged` is the event to use for "is my overlay showing": it fires
 only on real transitions, including the `false` when a failure hides the
-overlay. `Closed` also fires for your own `Hide()`, so it cannot tell a player
+overlay - but not while the game is shutting down, where the library stays
+quiet so nothing starts a fallback on the way out. `Closed` also fires for your own `Hide()`, so it cannot tell a player
 closing the window from the mod closing it; that will narrow in a future major
 version.
 
