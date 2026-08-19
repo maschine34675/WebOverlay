@@ -1,9 +1,12 @@
 # Fault-injection matrix
 
-Executed against the built `Anvil-WebOverlay.dll` on 2026-08-01 (commit of the
-v1.0.0 release), driven by a standalone host outside the game (WebView2
-runtime 151.0.4129.59). Every scenario runs the real library code path; the
-probe verifies outcomes through the public API and the library's log lines.
+Executed against the built `Anvil-WebOverlay.dll`, driven by a standalone host
+outside the game. Every scenario runs the real library code path; the probe
+verifies outcomes through the public API and the library's log lines.
+
+Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
+and re-run unchanged for v1.4.0; rows 10-16 were added for v1.3.0 and v1.4.0
+(runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
 |---|---|---|---|
@@ -16,14 +19,28 @@ probe verifies outcomes through the public API and the library's log lines.
 | 7 | Composed glass HUD (library path): unpainted, solid and rgba() pixels over a backdrop | true alpha: backdrop shows through, solids stay, rgba blends arithmetically | PASS |
 | 8 | Interactive glass HUD: a real SendInput click on an HTML button | the click travels window proc -> SendMouseInput -> page button -> message | PASS |
 | 9 | Normal path: `Create` → `LoadHtml` → page renders, page→mod message | `Ready` fires, page paints (pixel-verified when the session compositor was alive), message passes the source filter | PASS |
+| 10 | WebGL: the demo's Three.js page in a composed HUD | context created, render loop advances, cube pixels on screen, transparency and click-through intact, camera-coupling orientation correct | PASS |
+| 11 | Web storage in an inline page | opaque origin: `localStorage`, `sessionStorage` and `document.cookie` all throw `SecurityError` - documented, not a defect | PASS |
+| 12 | Virtual host: folder mapped, page navigates to it | page and its sub-resources load from disk, origin is the mapped host, `localStorage` works there | PASS |
+| 13 | Virtual host mapping fails (missing folder) on a name that resolves publicly | overlay fails with `VirtualHostFailed`, nothing is loaded, and navigating anyway is refused by the origin filter - never a network page under the mod's own origin | PASS |
+| 14 | Rejected `LoadHtml` (over 2 MB) after a page was already live | the previous document stays the target: `IsPageLoaded` remains true and sends still reach it | PASS |
+| 15 | Main-thread dispatch with a pump | nothing is delivered until the pump runs, then on the pumping thread; late latched handlers likewise; nothing after `Dispose` | PASS |
+| 16 | Main-thread dispatch without a pump (non-Unity host) | events fall back to the overlay thread, with one warning | PASS |
 
 Not automated (manually covered in game during development, or accepted):
 
 - Renderer crash / unresponsive renderer (recovery + terminal `Failed` paths
   are code-reviewed; deliberately killing a renderer needs browser internals).
+- A failing browser-environment HRESULT (the classification and the "first
+  cause wins" rule are code-reviewed; the callback cannot be forced to fail
+  from outside).
 - Shutdown during environment start (guarded by `stopping` checks; exercised
   implicitly at every game exit).
 - Exclusive fullscreen (guarded by `WebOverlayPlugin.IsDisplayModeSupported`).
 
 The probe source lives outside the repository (a throwaway harness); re-create
-it from this table when re-running the matrix for a future release.
+it from this table when re-running the matrix for a future release. Its modes
+map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
+`fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
+`glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
+`nav-reject`, `dispatch`.

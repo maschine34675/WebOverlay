@@ -66,11 +66,18 @@ namespace WebOverlay
         /// </summary>
         internal static string StartFailureMessage { get; private set; }
 
+        /// <summary>
+        /// Records the first cause and keeps it: what follows a failed start
+        /// are its consequences - a timeout after a browser that already said
+        /// no - and the consumer needs the cause, not the last symptom.
+        /// </summary>
         private static void startFailure(OverlayFailure kind, string reason)
         {
+            LogWarning(reason);
+            if (StartFailure != OverlayFailure.Unknown)
+                return;
             StartFailure = kind;
             StartFailureMessage = reason;
-            LogWarning(reason);
         }
 
         internal static string RuntimeVersion { get; private set; }
@@ -253,7 +260,8 @@ namespace WebOverlay
             catch (Exception ex)
             {
                 startFailed = true;
-                LogWarning("the overlay thread stopped (" + ex.GetType().Name + ": " + ex.Message + ").");
+                startFailure(OverlayFailure.EnvironmentFailed,
+                    "the overlay thread stopped (" + ex.GetType().Name + ": " + ex.Message + ").");
             }
             finally
             {
@@ -274,12 +282,15 @@ namespace WebOverlay
 
             if (RegisterClassEx(ref windowClass) == 0 && Marshal.GetLastWin32Error() != ERROR_CLASS_ALREADY_EXISTS)
             {
-                LogWarning("could not register the dispatcher window class.");
+                startFailure(OverlayFailure.EnvironmentFailed,
+                    "could not register the dispatcher window class.");
                 return false;
             }
 
             dispatcherWindow = CreateWindowEx(0, "WebOverlayDispatcher", "WebOverlay", 0,
                 0, 0, 0, 0, HWND_MESSAGE, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
+            if (dispatcherWindow == IntPtr.Zero)
+                startFailure(OverlayFailure.EnvironmentFailed, "could not create the dispatcher window.");
             return dispatcherWindow != IntPtr.Zero;
         }
 
@@ -355,14 +366,20 @@ namespace WebOverlay
             // wait runs on the overlay thread, never on Unity's - and a
             // shutdown mid-wait ends it instead of holding the thread for the
             // full timeout.
+            // Also ends the moment the completion reports a failure: waiting
+            // out the full timeout after a definitive "no" would delay every
+            // consumer's fallback by half a minute and bury the real cause
+            // under a timeout message.
             var timer = System.Diagnostics.Stopwatch.StartNew();
-            while (environment == IntPtr.Zero && !stopping && timer.Elapsed.TotalSeconds < 30)
+            while (environment == IntPtr.Zero && !stopping
+                && StartFailure == OverlayFailure.Unknown
+                && timer.Elapsed.TotalSeconds < 30)
             {
                 pump();
                 Thread.Sleep(5);
             }
 
-            if (environment == IntPtr.Zero && !stopping)
+            if (environment == IntPtr.Zero && !stopping && StartFailure == OverlayFailure.Unknown)
             {
                 startFailure(OverlayFailure.EnvironmentFailed,
                     "the browser environment did not start within 30 seconds.");

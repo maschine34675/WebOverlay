@@ -38,6 +38,11 @@ namespace WebOverlay
         // is cancelled, so a foreign page never gains the message bridge.
         private readonly HashSet<string> allowedOrigins = new HashSet<string>(StringComparer.Ordinal);
 
+        // Origins the mod asked to have served from a local folder. Until the
+        // mapping is proven to be in place they are refused outright, so a
+        // failed mapping cannot quietly become a real request to the internet.
+        private readonly HashSet<string> unmappedOrigins = new HashSet<string>(StringComparer.Ordinal);
+
         // One FIFO for messages and scripts: their relative order is part of
         // what the consumer expressed. Key=true means script. Cleared whenever
         // the mod retargets the overlay - buffered items belonged to the old
@@ -292,8 +297,15 @@ namespace WebOverlay
                 return;
             }
             // Before any navigation: a page loaded first would already have
-            // failed to find its own files.
-            applyVirtualHosts();
+            // failed to find its own files. A mapping that did not take is
+            // terminal - the consumer's page cannot work, and continuing is
+            // what would send it to the network instead.
+            if (!applyVirtualHosts())
+            {
+                fail(OverlayFailure.VirtualHostFailed,
+                    "a virtual host folder could not be served; see the lines above.");
+                return;
+            }
 
             if (!subscribeToKeys())
             {
@@ -334,20 +346,33 @@ namespace WebOverlay
         /// it is logged and skipped rather than failing the overlay - the
         /// consumer sees its own missing content.
         /// </summary>
-        private void applyVirtualHosts()
+        private bool applyVirtualHosts()
         {
             if (options.VirtualHosts == null || options.VirtualHosts.Length == 0)
-                return;
+                return true;
+
+            // Every requested host is barred until its mapping is in place.
+            // Without this a failed mapping would turn the mod's own
+            // "https://yourmod.assets/index.html" into an ordinary internet
+            // navigation - a foreign page under an origin the mod trusts, with
+            // the message bridge open. The folder is what was asked for; the
+            // network never is.
+            foreach (VirtualHost requested in options.VirtualHosts)
+            {
+                string origin = requested == null ? null : originOf("https://" + requested.Host);
+                if (origin != null)
+                    unmappedOrigins.Add(origin);
+            }
 
             Guid iid = WebView2Api.IID_WebView2_3;
             if (Marshal.QueryInterface(webView, ref iid, out IntPtr webView3) != WebView2Api.S_OK
                 || webView3 == IntPtr.Zero)
             {
-                OverlayHost.LogWarning("this WebView2 runtime cannot map folders to hosts;"
-                    + " the page will not find its files.");
-                return;
+                OverlayHost.LogWarning("this WebView2 runtime cannot map folders to hosts.");
+                return false;
             }
 
+            bool allMapped = true;
             try
             {
                 var mapping = WebView2Api.Method<WebView2Api.SetVirtualHostMappingDelegate>(
@@ -356,14 +381,16 @@ namespace WebOverlay
                 {
                     if (host == null || !isUsableHostName(host.Host))
                     {
-                        OverlayHost.LogWarning("skipped a virtual host: the name must be a bare host"
+                        OverlayHost.LogWarning("a virtual host name must be a bare host"
                             + " like \"yourmod.assets\" (got " + describe(host?.Host) + ").");
+                        allMapped = false;
                         continue;
                     }
                     if (string.IsNullOrEmpty(host.Folder) || !System.IO.Directory.Exists(host.Folder))
                     {
-                        OverlayHost.LogWarning("skipped virtual host " + host.Host
+                        OverlayHost.LogWarning("virtual host " + host.Host
                             + ": the folder " + describe(host.Folder) + " does not exist.");
+                        allMapped = false;
                         continue;
                     }
 
@@ -372,11 +399,13 @@ namespace WebOverlay
                     if (hr != WebView2Api.S_OK)
                     {
                         OverlayHost.LogWarning("mapping " + host.Host + " failed, hr=0x" + hr.ToString("X8") + ".");
+                        allMapped = false;
                         continue;
                     }
 
-                    // The mod asked for this origin, exactly like a Navigate
-                    // target, so its page may load and talk to the mod.
+                    // Served from disk now, so the mod may load it and talk to
+                    // it - exactly like a Navigate target.
+                    unmappedOrigins.Remove(originOf("https://" + host.Host));
                     allowOrigin("https://" + host.Host);
                 }
             }
@@ -384,6 +413,7 @@ namespace WebOverlay
             {
                 Marshal.Release(webView3);
             }
+            return allMapped;
         }
 
         /// <summary>
@@ -759,7 +789,14 @@ namespace WebOverlay
                 return true;
             }
             string origin = originOf(uri);
-            return origin != null && allowedOrigins.Contains(origin);
+            if (origin == null)
+                return false;
+            // A host the mod wanted served from disk, whose mapping is not in
+            // place: this would fetch whatever the name resolves to on the
+            // network, under an origin the mod believes is its own folder.
+            if (unmappedOrigins.Contains(origin))
+                return false;
+            return allowedOrigins.Contains(origin);
         }
 
         /// <summary>
@@ -818,6 +855,7 @@ namespace WebOverlay
         {
             if (string.IsNullOrEmpty(url))
                 return;
+            TargetState previous = captureTarget();
             pendingUrl = url;
             pendingHtml = null;
             htmlLoaded = false;
@@ -830,8 +868,11 @@ namespace WebOverlay
                 return;
             pageReady = false;
             pageLoaded = false;
-            checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
-                webView, WebView2Api.WebView_Navigate)(webView, url), "Navigate");
+            if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                webView, WebView2Api.WebView_Navigate)(webView, url), "Navigate"))
+            {
+                restoreTarget(previous);
+            }
         }
 
         /// <summary>
@@ -841,13 +882,51 @@ namespace WebOverlay
         /// dropped - silently growing a queue nobody will ever flush would
         /// hide the defect from the consumer.
         /// </summary>
-        private void checkNavigationResult(int hr, string what)
+        private bool checkNavigationResult(int hr, string what)
         {
             if (hr == WebView2Api.S_OK)
-                return;
+                return true;
             OverlayHost.LogWarning("" + what + " was rejected, hr=0x" + hr.ToString("X8")
                 + "; the page will not change" + (outbox.Count > 0 ? " and " + outbox.Count + " buffered send(s) were dropped" : "") + ".");
             outbox.Clear();
+            return false;
+        }
+
+        /// <summary>
+        /// What the mod currently points the overlay at. A rejected navigation
+        /// leaves the old document on screen, so the bookkeeping has to go back
+        /// with it - otherwise the overlay would consider a page that never
+        /// loaded its target, and report "not loaded" for the rest of its life
+        /// while buffering every send into nothing.
+        /// </summary>
+        private struct TargetState
+        {
+            public string Url;
+            public string Html;
+            public bool HtmlLoaded;
+            public bool ExpectInline;
+            public bool PageReady;
+            public bool PageLoaded;
+        }
+
+        private TargetState captureTarget() => new TargetState
+        {
+            Url = pendingUrl,
+            Html = pendingHtml,
+            HtmlLoaded = htmlLoaded,
+            ExpectInline = expectInlineNavigation,
+            PageReady = pageReady,
+            PageLoaded = pageLoaded,
+        };
+
+        private void restoreTarget(TargetState previous)
+        {
+            pendingUrl = previous.Url;
+            pendingHtml = previous.Html;
+            htmlLoaded = previous.HtmlLoaded;
+            expectInlineNavigation = previous.ExpectInline;
+            pageReady = previous.PageReady;
+            pageLoaded = previous.PageLoaded;
         }
 
         /// <summary>Shows markup directly, so a mod needs no web server at all.</summary>
@@ -855,6 +934,7 @@ namespace WebOverlay
         {
             if (html == null)
                 return;
+            TargetState previous = captureTarget();
             pendingHtml = html;
             pendingUrl = null;
             htmlLoaded = true;
@@ -864,8 +944,11 @@ namespace WebOverlay
             pageReady = false;
             pageLoaded = false;
             expectInlineNavigation = true;
-            checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
-                webView, WebView2Api.WebView_NavigateToString)(webView, html), "LoadHtml");
+            if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                webView, WebView2Api.WebView_NavigateToString)(webView, html), "LoadHtml"))
+            {
+                restoreTarget(previous);
+            }
         }
 
         public void PostMessageToPage(string message)

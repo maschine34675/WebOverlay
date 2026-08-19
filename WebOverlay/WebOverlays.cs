@@ -145,6 +145,14 @@ namespace WebOverlay
         /// bounded reload attempts). Creating the overlay again may well work.
         /// </summary>
         RendererCrashed,
+
+        /// <summary>
+        /// A folder in <see cref="OverlayOptions.VirtualHosts"/> could not be
+        /// served - a missing folder, a malformed host name, or a runtime too
+        /// old to map folders at all. The overlay refuses to continue rather
+        /// than let the page's own host name reach the network.
+        /// </summary>
+        VirtualHostFailed,
     }
 
     /// <summary>
@@ -372,8 +380,12 @@ namespace WebOverlay
 
         /// <summary>
         /// Raised once the browser view is fully set up. Latched: a handler
-        /// subscribed after the fact runs immediately on the subscribing
-        /// thread, otherwise on the overlay thread - treat it as "any thread".
+        /// subscribed after the fact still runs - immediately, on the
+        /// subscribing thread - otherwise on the overlay thread; treat it as
+        /// "any thread". With
+        /// <see cref="OverlayOptions.DispatchOnMainThread"/> it is queued like
+        /// every other event instead, so even a late subscription is answered
+        /// from the game's next frame rather than inside the Add call.
         /// </summary>
         event Action Ready;
 
@@ -382,9 +394,10 @@ namespace WebOverlay
         /// browser process died, HUD transparency unavailable. The overlay
         /// stays hidden; dispose the handle and use a fallback.
         /// <see cref="Failure"/> and <see cref="FailureMessage"/> say why, and
-        /// are set before this fires. Latched like <see cref="Ready"/>: may run
-        /// on the overlay thread or, when subscribed after the fact, on the
-        /// subscribing thread.
+        /// are set before this fires. Latched exactly like
+        /// <see cref="Ready"/>, including how
+        /// <see cref="OverlayOptions.DispatchOnMainThread"/> changes when a
+        /// late subscription is answered.
         /// </summary>
         event Action Failed;
     }
@@ -434,8 +447,9 @@ namespace WebOverlay
 
         // Ready and Failed are latched: creation runs on the overlay thread and
         // can finish - or fail - before the consumer had a chance to subscribe.
-        // A handler added after the fact runs immediately on the adding thread;
-        // either way each handler runs exactly once.
+        // A handler added after the fact still runs - on the adding thread, or
+        // from the pump when this overlay dispatches to the main thread; either
+        // way each handler runs exactly once.
         private readonly object stateSync = new object();
         private Action readyHandlers;
         private Action failedHandlers;

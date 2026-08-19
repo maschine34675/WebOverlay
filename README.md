@@ -77,8 +77,10 @@ subscribed after the fact, which runs on the subscribing thread. Either queue
 what a handler learns and touch game state from `Update()`, or set
 **`DispatchOnMainThread`** and skip that boilerplate: the library then delivers
 every event from its own `Update`, so handlers may touch Unity objects
-directly. The cost is up to one frame of delay, and events still queued when
-you `Dispose` the handle are dropped.
+directly. The cost is up to one frame of delay - a late `Ready`/`Failed`
+subscription included, which then also arrives from the next frame instead of
+inside the `+=` - and events still queued when you `Dispose` the handle are
+dropped.
 
 When another mod ships alongside this library, reference it with
 `<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your
@@ -185,6 +187,13 @@ The mapped folder is served read-only, and cross-origin requests to it are
 denied, so nothing outside your overlay can reach the files. The mapped origin
 is trusted for navigation and messages exactly like a `Navigate` target; pick a
 host name unique to your mod, since it is also the key its storage belongs to.
+
+Mapping is all-or-nothing on purpose. If a folder is missing, a host name is
+malformed, or the runtime is too old to map folders at all, the overlay fails
+with `VirtualHostFailed` instead of starting, and navigation to that host stays
+refused. Otherwise a host name that happens to resolve would quietly fetch a
+real site from the internet under an origin your page - and this library's
+message bridge - treat as your own folder.
 
 ## Security defaults
 
