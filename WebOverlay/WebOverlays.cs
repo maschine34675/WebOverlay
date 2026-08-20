@@ -156,6 +156,26 @@ namespace WebOverlay
     }
 
     /// <summary>
+    /// A rectangle in the overlay's own pixels, measured from its top-left
+    /// corner. Used by <see cref="IWebOverlay.SetInteractiveRegions"/>.
+    /// </summary>
+    public struct OverlayRegion
+    {
+        public OverlayRegion(int x, int y, int width, int height)
+        {
+            X = x;
+            Y = y;
+            Width = width;
+            Height = height;
+        }
+
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+    }
+
+    /// <summary>
     /// Maps `https://&lt;Host&gt;/` to a local folder, so a page can load real
     /// files - scripts, fonts, images - instead of being one inlined string.
     /// See <see cref="OverlayOptions.VirtualHosts"/>.
@@ -405,6 +425,34 @@ namespace WebOverlay
 
         /// <summary>Opens the browser developer tools, if enabled in the options.</summary>
         void OpenDevTools();
+
+        /// <summary>
+        /// Moves or resizes the overlay. Any argument left null keeps its
+        /// current value. A window positioned this way is not written to the
+        /// remembered-bounds store - that belongs to the player - but it does
+        /// win over a remembered spot for the rest of the session.
+        /// </summary>
+        void SetBounds(int? x, int? y, int? width, int? height);
+
+        /// <summary>
+        /// Cuts the overlay down to these rectangles: it draws there and takes
+        /// the mouse there, and everything outside belongs to the game. Null
+        /// (the default) means the whole window. Rectangles are in the
+        /// overlay's own pixels.
+        ///
+        /// This is how an <see cref="OverlayOptions.Interactive"/> HUD can
+        /// cover the screen and still leave the game playable: give it the
+        /// rectangles it actually draws in. Both halves - picture and mouse -
+        /// come from the one mechanism Windows offers for this, so they cannot
+        /// be separated: whatever is cut away is cut away for both. Pad the
+        /// rectangles a little if your content has soft shadows.
+        ///
+        /// The page usually knows its own layout better than the mod does and
+        /// can say so directly with `overlay.setShape([element, ...])`, which
+        /// accepts elements or `{x, y, w, h}` objects, converts them to device
+        /// pixels, and should be called again when the layout changes.
+        /// </summary>
+        void SetShape(OverlayRegion[] regions);
 
         /// <summary>
         /// Raised when the page calls `window.chrome.webview.postMessage(...)`.
@@ -725,6 +773,31 @@ namespace WebOverlay
         }
 
         public void OpenDevTools() => post(() => window.OpenDevTools());
+
+        public void SetBounds(int? x, int? y, int? width, int? height) =>
+            post(() => window.SetBounds(x, y, width, height));
+
+        public void SetShape(OverlayRegion[] regions)
+        {
+            // Converted here, and copied: the overlay reads these on its own
+            // thread long after the caller moved on.
+            Interop.WebView2Api.RECT[] rects = null;
+            if (regions != null && regions.Length > 0)
+            {
+                rects = new Interop.WebView2Api.RECT[regions.Length];
+                for (int i = 0; i < regions.Length; i++)
+                {
+                    rects[i] = new Interop.WebView2Api.RECT
+                    {
+                        left = regions[i].X,
+                        top = regions[i].Y,
+                        right = regions[i].X + Math.Max(0, regions[i].Width),
+                        bottom = regions[i].Y + Math.Max(0, regions[i].Height),
+                    };
+                }
+            }
+            post(() => window.SetShape(rects));
+        }
 
         public void Dispose()
         {

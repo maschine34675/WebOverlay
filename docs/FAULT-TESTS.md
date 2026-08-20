@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-23 were added for v1.3.0 to v1.6.0
+and re-run unchanged for v1.4.0; rows 10-25 were added for v1.3.0 to v1.6.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -33,11 +33,16 @@ and re-run unchanged for v1.4.0; rows 10-23 were added for v1.3.0 to v1.6.0
 | 21 | Host shutdown with a visible overlay | no `VisibilityChanged`, so nothing wakes a consumer fallback while the game quits | PASS |
 | 22 | Named channels end to end: both directions of send, both directions of request, a promise answer, a channel nobody answers, a page that never answers | every request answered exactly once (null on timeout), payloads with quotes, newlines, backslashes and non-ASCII survive verbatim | PASS |
 | 23 | A page using `window.overlay` in its first script, and a page sending plain text and its own JSON | the shim is there before page script runs; non-envelope messages arrive at `MessageReceived` untouched and no protocol traffic leaks into it | PASS |
+| 24 | An interactive HUD shaped down to one rectangle, from the page and from the mod, then cleared | inside the shape it paints and takes real clicks; outside, the click reaches the window behind and nothing is painted; clearing restores both | PASS |
+| 25 | `SetBounds` with all four values and with two of them null | the window moves and resizes; null arguments keep what they were | PASS |
 
 Not automated (manually covered in game during development, or accepted):
 
 - Renderer crash / unresponsive renderer (recovery + terminal `Failed` paths
   are code-reviewed; deliberately killing a renderer needs browser internals).
+- Selective mouse transparency without clipping the picture: measured as
+  impossible on Windows, see `SetShape` in the README and entry 7 of
+  `docs/CONSUMER-API-WISHLIST-ANSWERS.md`.
 - A failing browser-environment HRESULT (the classification and the "first
   cause wins" rule are code-reviewed; the callback cannot be forced to fail
   from outside).
@@ -51,4 +56,4 @@ map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
 `nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
-`shutdown-quiet`, `channels`.
+`shutdown-quiet`, `channels`, `shape`, `bounds-api`.

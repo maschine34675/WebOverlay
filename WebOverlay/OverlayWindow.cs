@@ -62,6 +62,9 @@ namespace WebOverlay
             public Action<string> Result;
         }
 
+        // The shape the overlay is cut down to, or null for the whole window.
+        private WebView2Api.RECT[] shape;
+
         // Requests this overlay sent to the page and is still waiting on. A
         // page that never answers - no handler, a script error, a page that
         // navigated away mid-question - must not leave the mod hanging, so
@@ -1069,7 +1072,12 @@ namespace WebOverlay
 
             if (kind == ChannelProtocol.KindMessage)
             {
-                ChannelMessage?.Invoke(channel, payload);
+                // The library's own channels are handled here and never
+                // surface as consumer traffic.
+                if (channel == ChannelProtocol.ShapeChannel)
+                    setShape(parseRegions(payload));
+                else
+                    ChannelMessage?.Invoke(channel, payload);
                 return true;
             }
 
@@ -1098,6 +1106,107 @@ namespace WebOverlay
             else
                 RequestReceived(channel, payload, reply);
             return true;
+        }
+
+        /// <summary>
+        /// Cuts the overlay down to a set of rectangles: it draws there and
+        /// takes the mouse there, and everything outside belongs to the game.
+        /// Null restores the whole window.
+        ///
+        /// Both halves come from one mechanism on purpose, because Windows
+        /// offers no other. Answering the hit test with "not me" keeps the
+        /// picture but only passes clicks to windows of the same thread, which
+        /// the game never is - measured, the click reached nothing at all. A
+        /// window region does route clicks to whatever is behind, across
+        /// processes, but clips the picture to the same shape. So a caller
+        /// gets exactly one contract, and it is this one.
+        /// </summary>
+        public void SetShape(WebView2Api.RECT[] regions) => setShape(regions);
+
+        private void setShape(WebView2Api.RECT[] regions)
+        {
+            if (window == IntPtr.Zero)
+                return;
+            shape = regions != null && regions.Length > 0 ? regions : null;
+            if (shape == null)
+            {
+                // NULL hands the whole window back; the old region is freed by
+                // the system, which owns every region passed in here.
+                SetWindowRgn(window, IntPtr.Zero, true);
+                return;
+            }
+
+            IntPtr combined = CreateRectRgn(0, 0, 0, 0);
+            foreach (WebView2Api.RECT part in shape)
+            {
+                IntPtr piece = CreateRectRgn(part.left, part.top, part.right, part.bottom);
+                CombineRgn(combined, combined, piece, RGN_OR);
+                DeleteObject(piece);
+            }
+            // Ownership passes to the system with this call - never delete it.
+            if (SetWindowRgn(window, combined, true) == 0)
+            {
+                DeleteObject(combined);
+                OverlayHost.LogWarning("the overlay shape could not be applied.");
+            }
+        }
+
+        /// <summary>
+        /// "x,y,w,h;x,y,w,h" in device pixels, which is what the page shim
+        /// sends after scaling its CSS rectangles. Deliberately not JSON: this
+        /// is the library talking to its own shim, and a malformed list means
+        /// the regions are dropped rather than half applied.
+        /// </summary>
+        private static WebView2Api.RECT[] parseRegions(string payload)
+        {
+            if (string.IsNullOrEmpty(payload))
+                return null;
+            string[] parts = payload.Split(';');
+            var rects = new List<WebView2Api.RECT>(parts.Length);
+            foreach (string part in parts)
+            {
+                if (part.Length == 0)
+                    continue;
+                string[] numbers = part.Split(',');
+                if (numbers.Length != 4)
+                    return null;
+                var rect = new WebView2Api.RECT();
+                if (!int.TryParse(numbers[0], System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out rect.left)
+                    || !int.TryParse(numbers[1], System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out rect.top)
+                    || !int.TryParse(numbers[2], System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out int width)
+                    || !int.TryParse(numbers[3], System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out int height))
+                    return null;
+                rect.right = rect.left + Math.Max(0, width);
+                rect.bottom = rect.top + Math.Max(0, height);
+                rects.Add(rect);
+            }
+            return rects.Count == 0 ? null : rects.ToArray();
+        }
+
+        /// <summary>
+        /// Moves or resizes the overlay at runtime. Not remembered: the bounds
+        /// store is for the spot the player chose, and a mod resizing its own
+        /// window must not overwrite that. It does win over a remembered spot
+        /// for the rest of the session, though - the mod asked last.
+        /// </summary>
+        public void SetBounds(int? x, int? y, int? width, int? height)
+        {
+            if (window == IntPtr.Zero)
+                return;
+            if (!GetWindowRect(window, out WebView2Api.RECT current))
+                return;
+            int left = x ?? current.left;
+            int top = y ?? current.top;
+            int newWidth = Math.Max(MinimumWidth, width ?? (current.right - current.left));
+            int newHeight = Math.Max(MinimumHeight, height ?? (current.bottom - current.top));
+            everPositioned = true;
+            SetWindowPos(window, IntPtr.Zero, left, top, newWidth, newHeight,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+            fitToClientArea();
         }
 
         /// <summary>Sends a message to the page on a named channel.</summary>
@@ -2257,6 +2366,7 @@ namespace WebOverlay
         private const uint WM_NCDESTROY = 0x0082;
         private const uint WM_EXITSIZEMOVE = 0x0232;
         private const uint WM_GETMINMAXINFO = 0x0024;
+        private const int RGN_OR = 2;
         private const uint WM_MOUSEMOVE = 0x0200;
         private const uint WM_LBUTTONDOWN = 0x0201;
         private const uint WM_LBUTTONUP = 0x0202;
@@ -2357,6 +2467,18 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+
+        [DllImport("gdi32.dll")]
+        private static extern int CombineRgn(IntPtr destination, IntPtr first, IntPtr second, int mode);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowRgn(IntPtr window, IntPtr region, bool redraw);
 
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateSolidBrush(uint color);

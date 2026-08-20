@@ -22,6 +22,15 @@ namespace WebOverlay
     {
         public const int Version = 1;
 
+        /// <summary>
+        /// Channels under this prefix are the library talking to its own shim,
+        /// and never reach a consumer.
+        /// </summary>
+        public const string ReservedPrefix = "__wo.";
+
+        /// <summary>The rectangles an overlay is cut down to; see the shim.</summary>
+        public const string ShapeChannel = ReservedPrefix + "shape";
+
         public const string KindMessage = "m";
         public const string KindRequest = "q";
         public const string KindAnswer = "a";
@@ -51,6 +60,18 @@ namespace WebOverlay
       send({ __wo: 1, t: 'm', c: String(channel), p: text(payload) });
     },
     onRequest: function (channel, fn) { responders[channel] = fn; },
+    setShape: function (items) {
+      var scale = window.devicePixelRatio || 1, parts = [];
+      for (var i = 0; i < (items || []).length; i++) {
+        var r = items[i], box;
+        if (r && typeof r.getBoundingClientRect === 'function') box = r.getBoundingClientRect();
+        else if (r) box = { left: r.x, top: r.y, width: r.w, height: r.h };
+        else continue;
+        parts.push([Math.floor(box.left * scale), Math.floor(box.top * scale),
+                    Math.ceil(box.width * scale), Math.ceil(box.height * scale)].join(','));
+      }
+      send({ __wo: 1, t: 'm', c: '__wo.shape', p: parts.join(';') });
+    },
     request: function (channel, payload, timeoutMs) {
       return new Promise(function (resolve) {
         var id = next++;

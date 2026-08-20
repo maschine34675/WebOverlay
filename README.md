@@ -130,6 +130,8 @@ panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 | `OnRequest(channel, handler)` | Answer questions the page asks with `overlay.request(...)`; null removes the handler. |
 | `ExecuteScript(script, result)` | Same, and hands back what the script evaluated to, as JSON. |
 | `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
+| `SetBounds(x, y, w, h)` | Move or resize at runtime; null keeps a value. Not persisted. |
+| `SetShape(regions)` | Cut the overlay down to these rectangles - picture and mouse both (see below). |
 | `IsPageLoaded` | Whether the page you targeted has finished loading. |
 | `Failure`, `FailureMessage` | Why `Failed` fired, as a cause you can act on plus the exact sentence. |
 | `MessageReceived` | The page called `postMessage` with something that is not channel traffic. Overlay thread. |
@@ -206,6 +208,37 @@ anything that is not a well-formed envelope reaches `MessageReceived`
 verbatim, including a page's own JSON. The protocol reserves exactly one
 name - a top-level `__wo` key in a JSON message - and channel names beginning
 with `__wo.` belong to the library.
+
+## Shaping a HUD, and moving a window
+
+An `Interactive` HUD takes the mouse over its whole rectangle, which is fine
+for a small panel and useless for one that covers the screen. `SetShape` cuts
+the overlay down to the rectangles it actually uses:
+
+```csharp
+overlay.SetShape(new[] { new OverlayRegion(20, 20, 260, 120) });
+overlay.SetShape(null);                                  // whole window again
+```
+
+```js
+overlay.setShape([document.querySelector('#panel')]);    // elements or {x,y,w,h}
+```
+
+Inside those rectangles the overlay draws and takes the mouse; outside them
+the game gets the click and nothing is painted. **Both halves are the same
+mechanism and cannot be separated** - what is cut away is cut away for both -
+so pad the rectangles a little if your content has soft shadows, and call it
+again when the layout changes. Windows offers no way to keep the picture and
+give up only the mouse: answering the hit test with "not me" passes clicks
+only to windows of the same thread, which the game never is (measured: the
+click reaches nothing at all), and the mechanism that does route clicks across
+processes is the one used here, which clips.
+
+`SetBounds(x, y, width, height)` moves or resizes a window at runtime; any
+argument left null keeps its current value. It is not written to the
+remembered-bounds store - that belongs to the player - but it does win over a
+remembered spot for the rest of the session. HUDs follow the game picture, so
+this is for panels.
 
 ## Pages with real files
 

@@ -1,11 +1,17 @@
 # Answers to the consumer API wishlist
 
 **Status:** entries 1, 2, 3 and the `PageLoaded`/`IsPageLoaded` half of 9
-shipped in v1.4.0; entries 5 and 6 in v1.5.0; entry 4 in v1.6.0 - each as
-described below, each verified by the probe host (`vhost`, `dispatch`,
-`failure-kind`, `script-result`, `visibility`, `channels` modes). Entry 7
-(geometry, and the hit-test regions proposed instead) is still open; 8 and the
-throwing half of 9 stay declined for the reasons given.
+shipped in v1.4.0; entries 5 and 6 in v1.5.0; entries 4 and 7 in v1.6.0 - each
+verified by the probe host (`vhost`, `dispatch`, `failure-kind`,
+`script-result`, `visibility`, `channels`, `shape`, `bounds-api` modes).
+Entry 8 and the throwing half of 9 stay declined for the reasons given.
+
+**One correction to this document:** entry 7 below proposes hit-test regions
+as the better answer, keeping the picture and giving up only the mouse. That
+does not work, and the measurement is in the entry: `HTTRANSPARENT` passes a
+click only to windows of the same thread, which the game never is. What
+shipped instead is `SetShape`, which delivers the same use case honestly -
+picture and mouse together.
 
 Written 2026-08-19 against `CONSUMER-API-WISHLIST.md`. Each entry gets a
 verdict, the reason, and - where the answer is "yes" - what the implementation
@@ -176,14 +182,28 @@ a programmatic `SetBounds` is applied but never persisted (the store writes on
 `SetBounds` wins over a remembered spot for that session.
 
 The case that actually motivates it - an interactive HUD swallowing the mouse
-over its whole rectangle - deserves a better fix than resizing the window:
-**hit-test regions.** The window procedure answers `WM_NCHITTEST` with
-`HTTRANSPARENT` outside the rectangles the page declares as live, so clicks
-pass to the game everywhere else while the HUD keeps covering the screen and
-placing content with CSS. That is what a QuestMarkers-style overlay needs, and
-no "compact/wide toggle" ever gets it. It needs a probe first: whether
-`HTTRANSPARENT` routes correctly for the composed `WS_EX_NOREDIRECTIONBITMAP`
-window has not been measured.
+over its whole rectangle - deserves a better fix than resizing the window.
+**The hit-test regions proposed here do not deliver it, and that was measured
+rather than assumed** (`regions` probe, since replaced by `shape`):
+
+- `WM_NCHITTEST` returning `HTTRANSPARENT` is delivered and evaluated
+  correctly - the log shows the right decision for every point - but the click
+  then reaches *nothing*. That matches the documented rule: `HTTRANSPARENT`
+  passes the message to windows **of the same thread**, and the game is never
+  the same thread as the overlay.
+- `SetWindowRgn` does route clicks to whatever is behind, across processes -
+  but it clips the composed picture to the same region (measured: the block
+  outside the shape stopped being painted).
+
+So Windows offers picture-or-mouse, not both, and the honest feature is the
+one that says so: **`SetShape`** cuts the overlay down to a set of rectangles
+for picture and mouse together, driven either by the mod or by the page
+(`overlay.setShape([element, ...])`). For a HUD whose content *is* its
+interactive area - a panel with widgets - that is exactly the wanted result;
+for one that wants to paint outside what it can be clicked in, it is not
+achievable at all, and no API should pretend otherwise.
+
+`SetBounds` shipped as proposed, with the persistence rule above.
 
 ## 8. Storage namespace - refuted as stated
 
