@@ -307,6 +307,10 @@ enforce that:
   in it.
 - Browser accelerator keys (print, find, refresh) are off unless the overlay
   was created with `DevTools = true` - same runtime caveat.
+- One script of the library's own runs in every document, before the page's
+  scripts: it provides `window.overlay` for named channels. It only wraps the
+  message bridge the page already had, so it grants no new reach; the name
+  `overlay` and the `__wo` prefix are reserved for it.
 
 ## Translucency and HUDs
 
@@ -324,7 +328,8 @@ Two options in `OverlayOptions` control how much of the game shows through:
 - **`Interactive`** (on a `Transparent` overlay) forwards mouse input to the
   page: HTML buttons, hover states and wheel scrolling work while the game
   keeps the keyboard. The window swallows mouse input over its whole
-  rectangle, so size an interactive overlay to its content. `CloseKeys` do
+  rectangle, so either size an interactive overlay to its content or cut it
+  down with `SetShape` (see above). `CloseKeys` do
   not apply (no keyboard); hide it from the mod's own hotkey. Wheel scrolling
   over the unfocused overlay relies on Windows' "scroll inactive windows"
   setting (default on in Windows 10/11).
@@ -417,14 +422,21 @@ absent) - target WebGL.
   reached only via an explicit `QueryInterface` plus an absolute slot counted
   through every inherited member - and each such slot must be proven by an
   observable effect before it is trusted; see `Interop/WebView2Api.cs`.
-- **HUD transparency is a chroma key.** DWM applies `LWA_COLORKEY` to a window's
-  classic redirection surface, which Chromium's GPU compositing bypasses - so
-  keying the page's own pixels does not work (measured). What does work:
-  `DefaultBackgroundColor` alpha 0 makes the browser render nothing where the
-  page paints nothing, those pixels show the window's key-color background
-  brush, and the chroma key replaces exactly them with the game. Hit-testing
-  reads the same surface, which is why the whole HUD is click-through - and why
-  that cannot be selective in this mode.
+- **A HUD is composed, not drawn into its window.** The browser renders into a
+  DirectComposition visual instead of a child window
+  (`WS_EX_NOREDIRECTIONBITMAP`), which is what makes true per-pixel alpha and
+  forwarded mouse input possible at all. One trap worth knowing if you build
+  something similar: `WS_EX_TRANSPARENT` only takes a window out of hit-testing
+  when `WS_EX_LAYERED` is set as well, so a display-only HUD carries both -
+  learned from a release where it swallowed every click.
+- **The chroma key is what older systems fall back to.** DWM applies
+  `LWA_COLORKEY` to a window's classic redirection surface, which Chromium's
+  GPU compositing bypasses - so keying the page's own pixels does not work
+  (measured). What does work: `DefaultBackgroundColor` alpha 0 makes the
+  browser render nothing where the page paints nothing, those pixels show the
+  window's key-color background brush, and the chroma key replaces exactly
+  them with the game. Hit-testing reads the same surface, which is why such a
+  HUD is click-through everywhere and cannot be selective.
 
 One caution: WebView2 transparency has regressed before in runtime updates
 (opaque instead of transparent, runtime 145.x, fixed since). If a HUD suddenly
@@ -439,8 +451,11 @@ shows a dark background after a Windows update, suspect the runtime first.
 
 The projects are classic net472 csproj files that reference BepInEx and Unity
 assemblies from an SPT installation: build with
-`dotnet build WebOverlay/WebOverlay.csproj -c Release -p:SptRoot=<your SPT folder>`
-(default `C:\SPT`). `scripts/New-ReleasePackage.ps1` produces the release zips
+`dotnet build WebOverlay/WebOverlay.csproj -c Release -p:SptRoot=<your SPT folder>`.
+`SptRoot` defaults to three folders above the project, so a working copy that
+sits in `<your SPT folder>/Development/WebOverlay` needs no argument at all -
+and the build only copies its output into a folder that really is an SPT
+installation. `scripts/New-ReleasePackage.ps1` produces the release zips
 including the license files, verified against a manifest allowlist.
 `docs/FAULT-TESTS.md` records the fault-injection matrix run for a release.
 

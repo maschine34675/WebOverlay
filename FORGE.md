@@ -28,9 +28,11 @@ overlay.Post("live value");                    // mod -> page
 ## Features
 
 - **Panels**: movable, resizable windows with a dark game-toned title bar (or frameless), closable by keys you choose.
-- **Transparent HUDs**: pixels your page does not paint show the game; the window ignores mouse and keyboard entirely, so the game stays fully playable.
+- **Transparent HUDs**: pixels your page does not paint show the game, with true per-pixel alpha on Windows 8+ - and by default the window ignores mouse and keyboard entirely, so the game stays fully playable.
+- **Clickable glass**: a HUD can take mouse input instead, and can be cut down to the rectangles it actually draws in, so it covers the screen while the game stays clickable around it.
 - **Opacity**: fade the whole window; combine with the HUD for a faded HUD.
-- **Two-way messaging** between page and mod, plus `ExecuteScript`, inline HTML without any web server, and optional DevTools while building a page.
+- **Two-way messaging** between page and mod: plain strings, or named channels where either side can ask the other a question and await the answer. Plus `ExecuteScript` with its result, inline HTML without any web server, and optional DevTools while building a page.
+- **Pages with real files**: a mod can serve its own folder under its own host name, so scripts, fonts and images load normally and the page gets working browser storage.
 - **A real browser engine**: WebGL2 works, so Three.js scenes can run inside a HUD - the demo includes a 3D compass cube coupled to the player camera.
 - **Safe by default**: navigation is locked to origins the mod itself asked for, popups are suppressed, permission prompts denied, password saving and autofill disabled.
 - **One shared browser** for all mods, on its own thread - nothing blocks the game, and failures report through a `Failed` event instead of crashing anything.
@@ -42,9 +44,9 @@ overlay.Post("live value");                    // mod -> page
 
 ## Demo
 
-The optional demo plugin shows the modes in game: **F10** an interactive panel, **F11** a transparent click-through glass HUD with live values, **F8** an interactive glass panel with working buttons, **F7** a Three.js WebGL compass cube that follows the player camera. Source included - it is the reference for how to use the library.
+The optional demo plugin shows the modes in game: **F10** an interactive panel that reads a value back out of its page, **F11** a transparent click-through glass HUD with live values, **F8** an interactive glass panel whose buttons talk to the game over named channels and ask it for the current frame rate, **F7** a Three.js WebGL compass cube that follows the player camera. Source included - it is the reference for how to use the library.
 
-Full API documentation and the technical write-up (why raw COM vtables, why a chroma key) are in the README on GitHub.
+Full API documentation and the technical write-up (why raw COM vtables, why a composed visual instead of a child window) are in the README on GitHub.
 
 ## About the name
 
@@ -56,29 +58,17 @@ MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed u
 
 ## Changelog v1.6.0 (for the Forge version field)
 
-```text
-- For mod authors: pages get named channels and request/reply through window.overlay - both sides can now ask each other a question and await the answer, instead of inventing a prefix convention per mod. A request is always answered, with null on timeout, so neither side can hang the other.
-- The plain message API is unchanged: anything that is not channel traffic still arrives exactly as sent.
-- For mod authors: an interactive HUD can be cut down to the rectangles it actually uses, so it can cover the screen while the game stays clickable everywhere else, and windows can be moved or resized at runtime.
-- Demo: the F8 glass panel now uses channels and asks the game for its frame rate.
-```
-
-## Changelog v1.5.0 (for the Forge version field)
+Covers v1.4.0 to v1.6.0 in one entry, since the two versions in between were
+not published separately. Per-version wording is in the repository history.
 
 ```text
-- For mod authors: ExecuteScript can now hand back what the script evaluated to, so a mod can read state out of its page without building a round trip by hand.
-- New VisibilityChanged event that reports only real show/hide changes - the existing Closed event also fires for a mod's own Hide and cannot tell the two apart.
-- Internal: one-shot browser callbacks are released once the browser is done with them.
-- Nothing changes for players.
-```
+Nothing changes for players - this release is for the mods that use the library.
 
-## Changelog v1.4.0 (for the Forge version field)
-
-```text
-- For mod authors: overlays can now serve a folder of real files as https://yourmod.assets/ - scripts, fonts and images load normally, and such a page also gets working localStorage (an inline page has none).
-- Failed now says why: a cause a mod can act on plus the exact message, so users get "install the WebView2 runtime" instead of a generic failure.
-- New PageLoaded event and IsPageLoaded for "my page is live", and an option to receive all events on the game's main thread.
-- Nothing changes for players; the demo is unchanged apart from showing the new API.
+- Pages can be built like ordinary web apps: a mod can serve its own folder as https://yourmod.assets/, so scripts, fonts and images load normally and the page gets working storage.
+- Named channels with request/reply: page and mod can ask each other a question and await the answer, instead of every mod inventing its own convention. A question is always answered, so neither side can leave the other hanging.
+- A mod can read values back out of its page, and gets events for "my page is live" and for real visibility changes, plus the option to receive everything on the game's main thread.
+- Failures now say why, so a mod can tell you "install the WebView2 runtime" instead of showing a generic error.
+- Interactive HUDs can be cut down to the rectangles they actually use, so a HUD can cover the screen while the game stays clickable everywhere else; windows can also be moved and resized at runtime.
 ```
 
 ## Changelog v1.3.0 (for the Forge version field)
