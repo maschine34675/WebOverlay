@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-25 were added for v1.3.0 to v1.6.0
+and re-run unchanged for v1.4.0; rows 10-28 were added for v1.3.0 to v1.6.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -35,6 +35,9 @@ and re-run unchanged for v1.4.0; rows 10-25 were added for v1.3.0 to v1.6.0
 | 23 | A page using `window.overlay` in its first script, and a page sending plain text and its own JSON | the shim is there before page script runs; non-envelope messages arrive at `MessageReceived` untouched and no protocol traffic leaks into it | PASS |
 | 24 | An interactive HUD shaped down to one rectangle, from the page and from the mod, then cleared | inside the shape it paints and takes real clicks; outside, the click reaches the window behind and nothing is painted; clearing restores both | PASS |
 | 25 | `SetBounds` with all four values and with two of them null | the window moves and resizes; null arguments keep what they were | PASS |
+| 26 | A page sending a shape the library cannot read, while a shape is already set | the old shape stays - picture and mouse both - instead of falling back to the whole window | PASS |
+| 27 | A page sending on, and requesting from, a reserved `__wo.` channel | neither reaches the mod, and the request is answered with null rather than left open | PASS |
+| 28 | `SetShape` on a framed window | the region starts below the title bar, so the frame stays usable whatever the page asks for | PASS |
 
 Not automated (manually covered in game during development, or accepted):
 
@@ -56,4 +59,4 @@ map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
 `nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
-`shutdown-quiet`, `channels`, `shape`, `bounds-api`.
+`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`.

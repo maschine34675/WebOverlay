@@ -1070,14 +1070,18 @@ namespace WebOverlay
             if (!ChannelProtocol.TryParse(message, out string kind, out string channel, out string payload, out int id))
                 return false;
 
+            // The library's own channels are handled here and never surface as
+            // consumer traffic - the whole prefix, not just the names that
+            // exist today, because the README promises the prefix and a future
+            // internal channel must not start leaking into mods.
+            bool reserved = channel.StartsWith(ChannelProtocol.ReservedPrefix, StringComparison.Ordinal);
+
             if (kind == ChannelProtocol.KindMessage)
             {
-                // The library's own channels are handled here and never
-                // surface as consumer traffic.
-                if (channel == ChannelProtocol.ShapeChannel)
-                    setShape(parseRegions(payload));
-                else
+                if (!reserved)
                     ChannelMessage?.Invoke(channel, payload);
+                else if (channel == ChannelProtocol.ShapeChannel)
+                    applyShapeFromPage(payload);
                 return true;
             }
 
@@ -1095,6 +1099,13 @@ namespace WebOverlay
             // A question from the page. Answering exactly once matters on this
             // side too: the page is holding a promise open.
             int answered = 0;
+            if (reserved)
+            {
+                // No internal channel answers questions; say so at once rather
+                // than let the page wait out its own timeout.
+                OverlayHost.Post(() => PostMessageToPage(ChannelProtocol.Answer(channel, null, id)));
+                return true;
+            }
             Action<string> reply = value =>
             {
                 if (System.Threading.Interlocked.Exchange(ref answered, 1) != 0)
@@ -1127,40 +1138,81 @@ namespace WebOverlay
         {
             if (window == IntPtr.Zero)
                 return;
-            shape = regions != null && regions.Length > 0 ? regions : null;
-            if (shape == null)
+            WebView2Api.RECT[] wanted = regions != null && regions.Length > 0 ? regions : null;
+            if (wanted == null)
             {
                 // NULL hands the whole window back; the old region is freed by
                 // the system, which owns every region passed in here.
                 SetWindowRgn(window, IntPtr.Zero, true);
+                shape = null;
                 return;
             }
 
-            IntPtr combined = CreateRectRgn(0, 0, 0, 0);
-            foreach (WebView2Api.RECT part in shape)
+            // Callers - the page included - describe rectangles inside the
+            // page, while a window region is measured from the window's outer
+            // corner. On a framed overlay those differ by the caption and
+            // border, and using the wrong one would cut the title bar off.
+            var origin = new POINT { x = 0, y = 0 };
+            int offsetX = 0, offsetY = 0;
+            if (ClientToScreen(window, ref origin) && GetWindowRect(window, out WebView2Api.RECT bounds))
             {
-                IntPtr piece = CreateRectRgn(part.left, part.top, part.right, part.bottom);
+                offsetX = origin.x - bounds.left;
+                offsetY = origin.y - bounds.top;
+            }
+
+            IntPtr combined = CreateRectRgn(0, 0, 0, 0);
+            if (combined == IntPtr.Zero)
+            {
+                OverlayHost.LogWarning("the overlay shape could not be built; the shape is unchanged.");
+                return;
+            }
+            foreach (WebView2Api.RECT part in wanted)
+            {
+                IntPtr piece = CreateRectRgn(part.left + offsetX, part.top + offsetY,
+                    part.right + offsetX, part.bottom + offsetY);
+                if (piece == IntPtr.Zero)
+                    continue;
                 CombineRgn(combined, combined, piece, RGN_OR);
                 DeleteObject(piece);
             }
-            // Ownership passes to the system with this call - never delete it.
+            // Ownership passes to the system with this call - never delete it
+            // afterwards, and only believe the shape once it was accepted.
             if (SetWindowRgn(window, combined, true) == 0)
             {
                 DeleteObject(combined);
-                OverlayHost.LogWarning("the overlay shape could not be applied.");
+                OverlayHost.LogWarning("the overlay shape could not be applied; the shape is unchanged.");
+                return;
             }
+            shape = wanted;
+        }
+
+        /// <summary>
+        /// A shape the page sent. A list that cannot be read is ignored
+        /// outright: dropping it is not the same as clearing the shape, and
+        /// clearing it would hand a full-screen interactive HUD back the whole
+        /// mouse - the very thing the caller used a shape to avoid.
+        /// </summary>
+        private void applyShapeFromPage(string payload)
+        {
+            if (tryParseRegions(payload, out WebView2Api.RECT[] regions))
+                setShape(regions);
+            else
+                OverlayHost.LogWarning("ignored a malformed shape from the page ("
+                    + describe(payload) + "); the overlay keeps the shape it had.");
         }
 
         /// <summary>
         /// "x,y,w,h;x,y,w,h" in device pixels, which is what the page shim
         /// sends after scaling its CSS rectangles. Deliberately not JSON: this
-        /// is the library talking to its own shim, and a malformed list means
-        /// the regions are dropped rather than half applied.
+        /// is the library talking to its own shim. An empty payload is an
+        /// explicit "no shape"; anything unreadable is a failure, and the two
+        /// must not be confused.
         /// </summary>
-        private static WebView2Api.RECT[] parseRegions(string payload)
+        private static bool tryParseRegions(string payload, out WebView2Api.RECT[] regions)
         {
+            regions = null;
             if (string.IsNullOrEmpty(payload))
-                return null;
+                return true;
             string[] parts = payload.Split(';');
             var rects = new List<WebView2Api.RECT>(parts.Length);
             foreach (string part in parts)
@@ -1169,7 +1221,7 @@ namespace WebOverlay
                     continue;
                 string[] numbers = part.Split(',');
                 if (numbers.Length != 4)
-                    return null;
+                    return false;
                 var rect = new WebView2Api.RECT();
                 if (!int.TryParse(numbers[0], System.Globalization.NumberStyles.Integer,
                         System.Globalization.CultureInfo.InvariantCulture, out rect.left)
@@ -1179,12 +1231,13 @@ namespace WebOverlay
                         System.Globalization.CultureInfo.InvariantCulture, out int width)
                     || !int.TryParse(numbers[3], System.Globalization.NumberStyles.Integer,
                         System.Globalization.CultureInfo.InvariantCulture, out int height))
-                    return null;
+                    return false;
                 rect.right = rect.left + Math.Max(0, width);
                 rect.bottom = rect.top + Math.Max(0, height);
                 rects.Add(rect);
             }
-            return rects.Count == 0 ? null : rects.ToArray();
+            regions = rects.Count == 0 ? null : rects.ToArray();
+            return true;
         }
 
         /// <summary>
@@ -1193,6 +1246,7 @@ namespace WebOverlay
         /// window must not overwrite that. It does win over a remembered spot
         /// for the rest of the session, though - the mod asked last.
         /// </summary>
+        /// <summary>Screen coordinates of the overlay window.</summary>
         public void SetBounds(int? x, int? y, int? width, int? height)
         {
             if (window == IntPtr.Zero)

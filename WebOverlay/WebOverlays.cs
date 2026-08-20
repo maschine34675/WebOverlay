@@ -157,7 +157,7 @@ namespace WebOverlay
 
     /// <summary>
     /// A rectangle in the overlay's own pixels, measured from its top-left
-    /// corner. Used by <see cref="IWebOverlay.SetInteractiveRegions"/>.
+    /// corner. Used by <see cref="IWebOverlay.SetShape"/>.
     /// </summary>
     public struct OverlayRegion
     {
@@ -427,8 +427,8 @@ namespace WebOverlay
         void OpenDevTools();
 
         /// <summary>
-        /// Moves or resizes the overlay. Any argument left null keeps its
-        /// current value. A window positioned this way is not written to the
+        /// Moves or resizes the overlay, in screen coordinates. Any argument
+        /// left null keeps its current value. A window positioned this way is not written to the
         /// remembered-bounds store - that belongs to the player - but it does
         /// win over a remembered spot for the rest of the session.
         /// </summary>
@@ -437,8 +437,9 @@ namespace WebOverlay
         /// <summary>
         /// Cuts the overlay down to these rectangles: it draws there and takes
         /// the mouse there, and everything outside belongs to the game. Null
-        /// (the default) means the whole window. Rectangles are in the
-        /// overlay's own pixels.
+        /// (the default) means the whole window. Rectangles are measured from
+        /// the top-left of the page, so a framed overlay keeps its title bar
+        /// whatever shape is set.
         ///
         /// This is how an <see cref="OverlayOptions.Interactive"/> HUD can
         /// cover the screen and still leave the game playable: give it the

@@ -225,7 +225,10 @@ overlay.setShape([document.querySelector('#panel')]);    // elements or {x,y,w,h
 ```
 
 Inside those rectangles the overlay draws and takes the mouse; outside them
-the game gets the click and nothing is painted. **Both halves are the same
+the game gets the click and nothing is painted. Rectangles are measured from
+the top-left of the page, so a framed window keeps its title bar, and a shape
+the library cannot read is ignored rather than applied as "no shape" - losing
+a shape would hand a full-screen HUD back the whole mouse. **Both halves are the same
 mechanism and cannot be separated** - what is cut away is cut away for both -
 so pad the rectangles a little if your content has soft shadows, and call it
 again when the layout changes. Windows offers no way to keep the picture and
@@ -234,8 +237,8 @@ only to windows of the same thread, which the game never is (measured: the
 click reaches nothing at all), and the mechanism that does route clicks across
 processes is the one used here, which clips.
 
-`SetBounds(x, y, width, height)` moves or resizes a window at runtime; any
-argument left null keeps its current value. It is not written to the
+`SetBounds(x, y, width, height)` moves or resizes a window at runtime, in
+screen coordinates; any argument left null keeps its current value. It is not written to the
 remembered-bounds store - that belongs to the player - but it does win over a
 remembered spot for the rest of the session. HUDs follow the game picture, so
 this is for panels.
