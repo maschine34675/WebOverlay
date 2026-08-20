@@ -90,6 +90,9 @@ Install the demo plugin to see a working panel: press **F10** in game,
 **F11** for the transparent HUD demo, **F8** for the interactive glass
 panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 
+What changed between versions is in [CHANGELOG.md](CHANGELOG.md); this file
+describes the library as it is now.
+
 ## API reference
 
 `WebOverlays` (static):

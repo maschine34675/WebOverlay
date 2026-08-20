@@ -56,44 +56,8 @@ Anvil is the library branding of **maschine** (the author of CraftQueue and othe
 
 MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed under BSD 3-Clause; the WebView2 runtime itself is not redistributed.
 
-## Changelog v1.6.0 (for the Forge version field)
+## Changelog (for the Forge version field)
 
-Covers v1.4.0 to v1.6.0 in one entry, since the two versions in between were
-not published separately. Per-version wording is in the repository history.
-
-```text
-Nothing changes for players - this release is for the mods that use the library.
-
-- Pages can be built like ordinary web apps: a mod can serve its own folder as https://yourmod.assets/, so scripts, fonts and images load normally and the page gets working storage.
-- Named channels with request/reply: page and mod can ask each other a question and await the answer, instead of every mod inventing its own convention. A question is always answered, so neither side can leave the other hanging.
-- A mod can read values back out of its page, and gets events for "my page is live" and for real visibility changes, plus the option to receive everything on the game's main thread.
-- Failures now say why, so a mod can tell you "install the WebView2 runtime" instead of showing a generic error.
-- Interactive HUDs can be cut down to the rectangles they actually use, so a HUD can cover the screen while the game stays clickable everywhere else; windows can also be moved and resized at runtime.
-```
-
-## Changelog v1.3.0 (for the Forge version field)
-
-```text
-- Demo: F7 shows a Three.js WebGL compass cube coupled to the player camera - overlays run full WebGL2, so 3D HUDs are possible. The library itself is unchanged.
-- README now documents measured performance: ~0.5 ms message round trip, ~9,600 messages/s, visible changes within 1-2 display frames.
-```
-
-## Changelog v1.2.1 (for the Forge version field)
-
-```text
-- Fixed: the transparent display-only HUD had stopped being click-through in 1.2.0; it ignores the mouse again.
-```
-
-## Changelog v1.2.0 (for the Forge version field)
-
-```text
-- HUDs are now composition hosted (Windows 8+, 2021+ WebView2): true per-pixel alpha - rgba() glass, soft shadows and clean antialiasing blend with the game. Older systems keep the chroma-key fallback.
-- New Interactive option: a transparent HUD can receive mouse input - HTML buttons, hovers and wheel scrolling work while the game keeps the keyboard.
-- Demo: F11 shows the glass HUD, F8 an interactive glass panel.
-```
-
-## Changelog v1.1.0 (for the Forge version field)
-
-```text
-- Windows now remember their position and size: toggling no longer recenters, and the spot survives restarts. A spot that ends up off-screen (monitor changes) falls back to the centered default. Mods can opt out or set their own storage key (RememberBounds / PersistenceKey).
-```
+Version-specific text lives in `CHANGELOG.md`. Paste the `### Forge version
+notes` block of the version being uploaded; the entry for 1.6.0 covers 1.4.0
+to 1.6.0, because those were never uploaded separately.
