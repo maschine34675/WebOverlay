@@ -26,6 +26,7 @@ namespace WebOverlay.Interop
         public static readonly Guid IID_WebMessageReceived = new Guid("57213f19-00e6-49fa-8e07-898ea01ecbd2");
         public static readonly Guid IID_Controller2 = new Guid("c979903e-d4ca-4228-92eb-47ee3fa96eab");
         public static readonly Guid IID_ExecuteScriptCompleted = new Guid("49511172-cc67-4bca-9923-137112f4c4cc");
+        public static readonly Guid IID_AddScriptCompleted = new Guid("b99369f3-9b11-47b5-bc6f-8e7895fcea17");
         public static readonly Guid IID_NavigationStarting = new Guid("9adbe429-f36d-432b-9ddc-f8881fbd76e3");
         public static readonly Guid IID_NavigationCompleted = new Guid("d33a35bf-1c49-4f98-93ab-006e0533fe1c");
         public static readonly Guid IID_NewWindowRequested = new Guid("d4c185fe-c81c-4989-97af-2d3fa7ab5651");
@@ -85,6 +86,9 @@ namespace WebOverlay.Interop
         public const int WebView_AddFrameNavigationStarting = 17;
         public const int WebView_AddPermissionRequested = 23;
         public const int WebView_AddProcessFailed = 25;
+        // Same shape as ExecuteScript - script plus a completion handler -
+        // and, like it, a v1 member needing no QueryInterface.
+        public const int WebView_AddScriptToExecuteOnDocumentCreated = 27;
         public const int WebView_ExecuteScript = 29;
         public const int WebView_PostWebMessageAsJson = 32;
         public const int WebView_PostWebMessageAsString = 33;

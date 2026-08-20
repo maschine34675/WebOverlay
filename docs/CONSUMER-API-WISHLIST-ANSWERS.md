@@ -1,10 +1,10 @@
 # Answers to the consumer API wishlist
 
 **Status:** entries 1, 2, 3 and the `PageLoaded`/`IsPageLoaded` half of 9
-shipped in v1.4.0; entries 5 and 6 in v1.5.0 - each as described below, each
-verified by the probe host (`vhost`, `dispatch`, `failure-kind`,
-`script-result`, `visibility` modes). Entries 4 (the messaging shim) and 7
-(geometry, and the hit-test regions proposed instead) are still open; 8 and the
+shipped in v1.4.0; entries 5 and 6 in v1.5.0; entry 4 in v1.6.0 - each as
+described below, each verified by the probe host (`vhost`, `dispatch`,
+`failure-kind`, `script-result`, `visibility`, `channels` modes). Entry 7
+(geometry, and the hit-test regions proposed instead) is still open; 8 and the
 throwing half of 9 stay declined for the reasons given.
 
 Written 2026-08-19 against `CONSUMER-API-WISHLIST.md`. Each entry gets a

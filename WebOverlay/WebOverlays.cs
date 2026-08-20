@@ -351,6 +351,38 @@ namespace WebOverlay
         /// </summary>
         void Post(string message);
 
+        /// <summary>
+        /// Sends a string on a named channel, where it arrives at every
+        /// `window.overlay.on(channel, ...)` handler in the page. Saves both
+        /// sides the prefix-and-split every consumer wrote for itself.
+        /// </summary>
+        void Post(string channel, string payload);
+
+        /// <summary>
+        /// Asks the page a question and takes its answer, from the page's
+        /// `window.overlay.onRequest(channel, ...)` handler - which may return
+        /// a value or a promise. Answered exactly once: with the page's reply,
+        /// or with null if no answer arrives within five seconds, so a page
+        /// that cannot answer never hangs the mod.
+        /// </summary>
+        void Request(string channel, string payload, Action<string> answer);
+
+        /// <summary>
+        /// Asks the page a question with an explicit deadline in
+        /// milliseconds; see <see cref="Request(string, string, Action{string})"/>.
+        /// </summary>
+        void Request(string channel, string payload, Action<string> answer, int timeoutMilliseconds);
+
+        /// <summary>
+        /// Answers questions the page asks with `window.overlay.request(channel, ...)`.
+        /// One handler per channel; a null handler removes it, and a channel
+        /// without one is answered with null rather than left open. The
+        /// handler runs where the events run - the overlay thread, or the
+        /// game's main thread with
+        /// <see cref="OverlayOptions.DispatchOnMainThread"/>.
+        /// </summary>
+        void OnRequest(string channel, Func<string, string> handler);
+
         /// <summary>Runs JavaScript in the page, for pushing live values.</summary>
         void ExecuteScript(string script);
 
@@ -377,9 +409,16 @@ namespace WebOverlay
         /// <summary>
         /// Raised when the page calls `window.chrome.webview.postMessage(...)`.
         /// Runs on the overlay thread: hop to Unity's thread before touching
-        /// game state.
+        /// game state. Channel traffic does not appear here - it has its own
+        /// event - but anything else the page sends arrives verbatim.
         /// </summary>
         event Action<string> MessageReceived;
+
+        /// <summary>
+        /// Raised when the page calls `window.overlay.send(channel, payload)`.
+        /// Same threading as <see cref="MessageReceived"/>.
+        /// </summary>
+        event Action<string, string> ChannelMessage;
 
         /// <summary>Raised for keys pressed in the overlay that did not close it.</summary>
         event Action<int> KeyPressed;
@@ -444,6 +483,37 @@ namespace WebOverlay
             dispatchOnMainThread = options.DispatchOnMainThread;
             window = new OverlayWindow(title, ownerName, options);
             window.MessageReceived = message => raise(() => MessageReceived?.Invoke(message));
+            window.ChannelMessage = (channel, payload) => raise(() => ChannelMessage?.Invoke(channel, payload));
+            window.RequestReceived = (channel, payload, reply) =>
+            {
+                Func<string, string> handler;
+                lock (responders)
+                    responders.TryGetValue(channel, out handler);
+                if (handler == null)
+                {
+                    // Nobody answers this channel; say so rather than let the
+                    // page wait out its own timeout.
+                    reply(null);
+                    return;
+                }
+                // Like a script result, this is a promise to one caller - it
+                // is delivered even if the consumer has since disposed, and
+                // the page is answered whatever the handler does.
+                raiseResult(() =>
+                {
+                    string value = null;
+                    try
+                    {
+                        value = handler(payload);
+                    }
+                    catch (Exception ex)
+                    {
+                        OverlayHost.LogWarning("a request handler threw ("
+                            + ex.GetType().Name + ": " + ex.Message + ").");
+                    }
+                    reply(value);
+                });
+            };
             window.KeyPressed = key => raise(() => KeyPressed?.Invoke(key));
             window.Closed = () => raise(() => Closed?.Invoke());
             window.VisibilityChanged = visible => raise(() => VisibilityChanged?.Invoke(visible));
@@ -488,7 +558,13 @@ namespace WebOverlay
         }
 
         public event Action<string> MessageReceived;
+        public event Action<string, string> ChannelMessage;
         public event Action<int> KeyPressed;
+
+        // One responder per channel, set from the consumer's thread and read
+        // on the overlay thread.
+        private readonly System.Collections.Generic.Dictionary<string, Func<string, string>> responders =
+            new System.Collections.Generic.Dictionary<string, Func<string, string>>(StringComparer.Ordinal);
         public event Action Closed;
         public event Action<bool> VisibilityChanged;
         public event Action PageLoaded;
@@ -593,6 +669,41 @@ namespace WebOverlay
         public void LoadHtml(string html) => post(() => window.LoadHtml(html));
 
         public void Post(string message) => post(() => window.PostMessageToPage(message));
+
+        public void Post(string channel, string payload) => post(() => window.PostToChannel(channel, payload));
+
+        public void Request(string channel, string payload, Action<string> answer) =>
+            Request(channel, payload, answer, 5000);
+
+        public void Request(string channel, string payload, Action<string> answer, int timeoutMilliseconds)
+        {
+            if (answer == null)
+            {
+                // No answer wanted: that is just a message on a channel.
+                Post(channel, payload);
+                return;
+            }
+            if (disposed != 0)
+            {
+                raiseResult(() => answer(null));
+                return;
+            }
+            OverlayHost.Post(() => window.RequestFromPage(channel, payload,
+                value => raiseResult(() => answer(value)), timeoutMilliseconds));
+        }
+
+        public void OnRequest(string channel, Func<string, string> handler)
+        {
+            if (channel == null)
+                return;
+            lock (responders)
+            {
+                if (handler == null)
+                    responders.Remove(channel);
+                else
+                    responders[channel] = handler;
+            }
+        }
 
         public void ExecuteScript(string script) => post(() => window.ExecuteScript(script));
 

@@ -125,11 +125,15 @@ panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 | `Show()`, `Hide()`, `Toggle()` | Visibility. `IsVisible` reads the current state. |
 | `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
 | `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
+| `Post(channel, payload)` | Send on a named channel; arrives at the page's `overlay.on(channel, ...)`. |
+| `Request(channel, payload, answer)` | Ask the page a question; answered exactly once, `null` on timeout. |
+| `OnRequest(channel, handler)` | Answer questions the page asks with `overlay.request(...)`; null removes the handler. |
 | `ExecuteScript(script, result)` | Same, and hands back what the script evaluated to, as JSON. |
 | `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
 | `IsPageLoaded` | Whether the page you targeted has finished loading. |
 | `Failure`, `FailureMessage` | Why `Failed` fired, as a cause you can act on plus the exact sentence. |
-| `MessageReceived` | The page called `postMessage`. Overlay thread. |
+| `MessageReceived` | The page called `postMessage` with something that is not channel traffic. Overlay thread. |
+| `ChannelMessage` | The page called `overlay.send(channel, payload)`. Overlay thread. |
 | `KeyPressed` | A key pressed in the overlay that did not close it. Overlay thread. |
 | `Closed` | Fires on every hide or close - not only on destruction. Overlay thread. |
 | `VisibilityChanged` | The overlay became visible or invisible; only on real changes. Overlay thread. |
@@ -170,6 +174,38 @@ the position and size survive restarts (`%LOCALAPPDATA%\WebOverlay\window-bounds
 A remembered spot that is no longer on any screen falls back to the centered
 default, HUDs always follow the game window instead, and `RememberBounds =
 false` restores the old center-on-every-show behaviour.
+
+## Named channels and request/reply
+
+One untyped string in each direction works, but every mod ends up inventing
+the same `prefix:payload` convention and writing the page half by hand. The
+library provides it instead, as `window.overlay` - injected before any page
+script runs, on every document:
+
+```csharp
+overlay.Post("fps", "144");                        // mod -> page, on a channel
+overlay.ChannelMessage += (channel, payload) => { ... };  // page -> mod
+overlay.Request("zoom", "1.5", answer => { ... });        // mod asks, page answers
+overlay.OnRequest("stash", query => LookUp(query));       // page asks, mod answers
+```
+
+```js
+overlay.on('fps', value => show(value));           // mod -> page
+overlay.send('button', 'reload');                  // page -> mod
+overlay.onRequest('zoom', v => applyZoom(v));      // mod asks; may return a promise
+overlay.request('stash', 'ammo').then(json => ...) // page asks, resolves with the answer
+```
+
+A request is answered **exactly once**: with the other side's reply, with
+`null` when nothing answers that channel, and with `null` when the deadline
+(five seconds by default, `Request(..., timeoutMilliseconds)` to change it)
+passes. So neither side can hang the other, whatever the page does.
+
+The plain `Post` / `MessageReceived` pair is untouched and keeps working:
+anything that is not a well-formed envelope reaches `MessageReceived`
+verbatim, including a page's own JSON. The protocol reserves exactly one
+name - a top-level `__wo` key in a JSON message - and channel names beginning
+with `__wo.` belong to the library.
 
 ## Pages with real files
 

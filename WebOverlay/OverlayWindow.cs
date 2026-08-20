@@ -62,6 +62,21 @@ namespace WebOverlay
             public Action<string> Result;
         }
 
+        // Requests this overlay sent to the page and is still waiting on. A
+        // page that never answers - no handler, a script error, a page that
+        // navigated away mid-question - must not leave the mod hanging, so
+        // each one carries a deadline.
+        private readonly Dictionary<int, PendingRequest> pendingRequests = new Dictionary<int, PendingRequest>();
+        private static readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        private System.Threading.Timer requestTimer;
+        private int nextRequestId;
+
+        private struct PendingRequest
+        {
+            public Action<string> Answer;
+            public long DeadlineMilliseconds;
+        }
+
         // Scripts whose result a consumer is waiting for. Kept until they are
         // answered so the browser never calls a collected delegate, and
         // retired right after so they do not accumulate.
@@ -106,6 +121,7 @@ namespace WebOverlay
         private ComCallback permissionCallback;
         private ComCallback processFailedCallback;
         private ComCallback scriptCompletedCallback;
+        private ComCallback channelShimCallback;
         private string pendingUrl;
         private string pendingHtml;
         private bool desiredVisible = true;
@@ -154,6 +170,15 @@ namespace WebOverlay
         internal bool DesiredVisible => desiredVisible;
 
         public Action<string> MessageReceived;
+        public Action<string, string> ChannelMessage;
+
+        /// <summary>
+        /// The page asked the mod something: channel, payload, and the reply
+        /// to call exactly once. Left null, every request is answered with
+        /// nothing rather than left open.
+        /// </summary>
+        public Action<string, string, Action<string>> RequestReceived;
+
         public Action<int> KeyPressed;
         public Action Closed;
         public Action<bool> VisibilityChanged;
@@ -346,6 +371,8 @@ namespace WebOverlay
                 fail(OverlayFailure.CompositionUnavailable, "the HUD stays hidden because transparency is unavailable.");
                 return;
             }
+            injectChannelShim();
+
             // Before any navigation: a page loaded first would already have
             // failed to find its own files. A mapping that did not take is
             // terminal - the consumer's page cannot work, and continuing is
@@ -383,6 +410,31 @@ namespace WebOverlay
             // that throws must not be able to leave the overlay half-built.
             state = CreationState.Ready;
             Ready?.Invoke();
+        }
+
+        /// <summary>
+        /// Puts `window.overlay` into every document before its own scripts
+        /// run, which is the half of named channels a consumer cannot write
+        /// for itself. It only wraps the existing message bridge, so it hands
+        /// a page nothing it did not already have.
+        /// </summary>
+        private void injectChannelShim()
+        {
+            if (channelShimCallback == null)
+                channelShimCallback = new ComCallback(WebView2Api.IID_AddScriptCompleted, (int hr, IntPtr id) =>
+                {
+                    if (hr != WebView2Api.S_OK)
+                        OverlayHost.LogWarning("the channel shim was rejected, hr=0x" + hr.ToString("X8")
+                            + "; named channels will not work on this overlay.");
+                    return WebView2Api.S_OK;
+                });
+
+            int result = WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(
+                webView, WebView2Api.WebView_AddScriptToExecuteOnDocumentCreated)(
+                webView, ChannelProtocol.Shim, channelShimCallback.Pointer);
+            if (result != WebView2Api.S_OK)
+                OverlayHost.LogWarning("could not install the channel shim, hr=0x" + result.ToString("X8")
+                    + "; named channels will not work on this overlay.");
         }
 
         /// <summary>
@@ -607,7 +659,10 @@ namespace WebOverlay
         {
             messageCallback = new ComCallback(WebView2Api.IID_WebMessageReceived, (IntPtr sender, IntPtr args) =>
             {
-                if (args == IntPtr.Zero || MessageReceived == null)
+                // Not "no MessageReceived, nothing to do" any more: a
+                // consumer may use only channels, and answers to its own
+                // requests still have to find their way home.
+                if (args == IntPtr.Zero)
                     return WebView2Api.S_OK;
 
                 // The bridge only trusts pages the mod itself put there; after
@@ -627,7 +682,8 @@ namespace WebOverlay
 
                 string message = Marshal.PtrToStringUni(text);
                 Marshal.FreeCoTaskMem(text);
-                MessageReceived(message);
+                if (!routeChannelMessage(message))
+                    MessageReceived?.Invoke(message);
                 return WebView2Api.S_OK;
             });
 
@@ -999,6 +1055,129 @@ namespace WebOverlay
             {
                 restoreTarget(previous);
             }
+        }
+
+        /// <summary>
+        /// Takes anything that is a channel envelope; everything else is left
+        /// alone, so a page that never heard of channels keeps talking to
+        /// <see cref="MessageReceived"/> exactly as before.
+        /// </summary>
+        private bool routeChannelMessage(string message)
+        {
+            if (!ChannelProtocol.TryParse(message, out string kind, out string channel, out string payload, out int id))
+                return false;
+
+            if (kind == ChannelProtocol.KindMessage)
+            {
+                ChannelMessage?.Invoke(channel, payload);
+                return true;
+            }
+
+            if (kind == ChannelProtocol.KindAnswer)
+            {
+                if (pendingRequests.TryGetValue(id, out PendingRequest waiting))
+                {
+                    pendingRequests.Remove(id);
+                    stopRequestTimerIfIdle();
+                    answer(waiting.Answer, payload);
+                }
+                return true;
+            }
+
+            // A question from the page. Answering exactly once matters on this
+            // side too: the page is holding a promise open.
+            int answered = 0;
+            Action<string> reply = value =>
+            {
+                if (System.Threading.Interlocked.Exchange(ref answered, 1) != 0)
+                    return;
+                OverlayHost.Post(() => PostMessageToPage(ChannelProtocol.Answer(channel, value, id)));
+            };
+            if (RequestReceived == null)
+                reply(null);
+            else
+                RequestReceived(channel, payload, reply);
+            return true;
+        }
+
+        /// <summary>Sends a message to the page on a named channel.</summary>
+        public void PostToChannel(string channel, string payload)
+        {
+            if (channel == null)
+                return;
+            PostMessageToPage(ChannelProtocol.Message(channel, payload));
+        }
+
+        /// <summary>
+        /// Asks the page a question. The callback is answered exactly once:
+        /// with the page's reply, or with null once the deadline passes - a
+        /// page that cannot answer must not be able to hang the mod.
+        /// </summary>
+        public void RequestFromPage(string channel, string payload, Action<string> reply, int timeoutMilliseconds)
+        {
+            if (channel == null)
+            {
+                answer(reply, null);
+                return;
+            }
+            if (timeoutMilliseconds <= 0)
+                timeoutMilliseconds = 5000;
+
+            // Never zero: the envelope uses id 0 to mean "no id at all".
+            int id = ++nextRequestId;
+            if (id == 0)
+                id = ++nextRequestId;
+            pendingRequests[id] = new PendingRequest
+            {
+                Answer = reply,
+                DeadlineMilliseconds = clock.ElapsedMilliseconds + timeoutMilliseconds,
+            };
+            startRequestTimer();
+            PostMessageToPage(ChannelProtocol.Request(channel, payload, id));
+        }
+
+        private void startRequestTimer()
+        {
+            if (requestTimer != null)
+                return;
+            // Sweeps on the overlay thread, where the request map lives.
+            requestTimer = new System.Threading.Timer(
+                _ => OverlayHost.Post(expireRequests), null, 250, 250);
+        }
+
+        private void stopRequestTimerIfIdle()
+        {
+            if (pendingRequests.Count > 0 || requestTimer == null)
+                return;
+            requestTimer.Dispose();
+            requestTimer = null;
+        }
+
+        private void expireRequests()
+        {
+            if (pendingRequests.Count == 0)
+            {
+                stopRequestTimerIfIdle();
+                return;
+            }
+            long now = clock.ElapsedMilliseconds;
+            List<int> due = null;
+            foreach (KeyValuePair<int, PendingRequest> entry in pendingRequests)
+            {
+                if (entry.Value.DeadlineMilliseconds > now)
+                    continue;
+                due = due ?? new List<int>();
+                due.Add(entry.Key);
+            }
+            if (due == null)
+                return;
+            foreach (int id in due)
+            {
+                PendingRequest expired = pendingRequests[id];
+                pendingRequests.Remove(id);
+                answer(expired.Answer, null);
+            }
+            stopRequestTimerIfIdle();
         }
 
         public void PostMessageToPage(string message)
@@ -1417,6 +1596,7 @@ namespace WebOverlay
             permissionCallback?.Dispose();
             processFailedCallback?.Dispose();
             scriptCompletedCallback?.Dispose();
+            channelShimCallback?.Dispose();
             compositionCompleted?.Dispose();
             cursorChangedCallback?.Dispose();
             // The controller is closed above, so a completion still owed to a
@@ -1429,6 +1609,16 @@ namespace WebOverlay
                     answer(pending.Result, null);
             }
             pendingScripts.Clear();
+            // Questions the page can no longer answer, for the same reason.
+            if (requestTimer != null)
+            {
+                requestTimer.Dispose();
+                requestTimer = null;
+            }
+            var openRequests = new List<PendingRequest>(pendingRequests.Values);
+            pendingRequests.Clear();
+            foreach (PendingRequest open in openRequests)
+                answer(open.Answer, null);
             clearOutbox();
             OverlayHost.Unregister(this);
             if (wasVisible)

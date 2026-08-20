@@ -215,8 +215,21 @@ namespace WebOverlay.Demo
             }
 
             var created = glass;
-            glass.MessageReceived += message =>
-                this.Logger.LogInfo("The glass panel said: " + message);
+
+            // Named channels instead of one untyped string: the page says
+            // which channel it is talking on, and both sides can ask each
+            // other questions instead of only shouting.
+            created.ChannelMessage += (channel, payload) =>
+                this.Logger.LogInfo("The glass panel said on '" + channel + "': " + payload);
+
+            // The page may ask the game for a value and await the answer.
+            created.OnRequest("fps", _ =>
+                Mathf.RoundToInt(1f / Mathf.Max(0.0001f, Time.deltaTime)).ToString(CultureInfo.InvariantCulture));
+
+            // And the game may ask the page - here once its content exists.
+            created.PageLoaded += () =>
+                created.Request("headline", "", answer =>
+                    this.Logger.LogDebug("The glass panel calls itself " + (answer ?? "<no answer>") + "."));
             glass.Failed += () =>
             {
                 this.Logger.LogWarning("The glass demo failed (" + created.Failure + "): " + created.FailureMessage);
@@ -433,15 +446,25 @@ namespace WebOverlay.Demo
   button { background:rgba(194,173,109,0.85); color:#191a17; border:0; border-radius:5px;
            padding:8px 14px; font-weight:650; cursor:pointer; margin-right:8px; }
   button:hover { background:#e0ca85; }
+  #answer { margin-top:12px; font-size:.8rem; color:#72ba80; }
 </style>
 <div class='card'>
   <h1>INTERACTIVE GLASS</h1>
   <p>The game shows through this card - and the buttons still work.</p>
-  <button onclick=""say('glass one')"">Send to game</button>
-  <button onclick=""say('glass two')"">Send more</button>
+  <button onclick=""overlay.send('button', 'one')"">Send to game</button>
+  <button onclick=""askFps()"">Ask the game</button>
+  <div id='answer'></div>
 </div>
 <script>
-  function say(what) { window.chrome.webview.postMessage(what); }
+  // window.overlay is provided by the library, before this script runs.
+  overlay.onRequest('headline', function () {
+    return document.querySelector('h1').textContent;
+  });
+  function askFps() {
+    overlay.request('fps', '').then(function (value) {
+      document.getElementById('answer').textContent = 'the game says ' + value + ' fps';
+    });
+  }
 </script>";
     }
 }

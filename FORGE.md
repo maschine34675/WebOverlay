@@ -54,6 +54,14 @@ Anvil is the library branding of **maschine** (the author of CraftQueue and othe
 
 MIT. `WebView2Loader.dll` is part of the Microsoft WebView2 SDK, redistributed under BSD 3-Clause; the WebView2 runtime itself is not redistributed.
 
+## Changelog v1.6.0 (for the Forge version field)
+
+```text
+- For mod authors: pages get named channels and request/reply through window.overlay - both sides can now ask each other a question and await the answer, instead of inventing a prefix convention per mod. A request is always answered, with null on timeout, so neither side can hang the other.
+- The plain message API is unchanged: anything that is not channel traffic still arrives exactly as sent.
+- Demo: the F8 glass panel now uses channels and asks the game for its frame rate.
+```
+
 ## Changelog v1.5.0 (for the Forge version field)
 
 ```text
