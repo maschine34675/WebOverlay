@@ -25,6 +25,9 @@ library.
   case 1.8.0 did not cover - when a page the mod asked for was refused by the
   browser.
 - Fixed: a rare crash when the second browser had to be started more than once.
+- Fixed: a page that simply is not there - a typo in a file name - now says so
+  in the log instead of leaving the overlay to sit there looking slow.
+- Fixed: an overlay that has died no longer reports itself as showing a page.
 
 ### Fixed
 
@@ -55,6 +58,52 @@ library.
   `forgetPageState`, which does the opposite; `SetBounds` carried a second
   stray summary block in the same shape, from 1.6.0. Both merged into the
   member they describe.
+- A navigation that fails outright - a file missing behind a mapped folder, a
+  host that will not answer - produced no output whatsoever. A typo in a page
+  name was indistinguishable from a slow load: `IsPageLoaded` stayed false, the
+  outbox filled quietly, and nothing anywhere said why. It is now one warning
+  naming the page and the browser's own error status. Only a warning: the
+  target stands, because it still is the target, and the mod may fix the URL
+  and try again.
+- `fail()` left `pageReady` and `pageLoaded` set, so `IsPageLoaded` went on
+  claiming a page was live on an overlay that had just died - the one flag a
+  streaming consumer reads before sending. It now retires the page, answers
+  every script caller still waiting (they will never get a value now), and
+  refuses later sends with that same answer instead of buffering them into a
+  page that no longer exists.
+- A renderer crash left the scripts that were running in it unanswered until
+  the handle was disposed, although the reload starts a document that never saw
+  them. They are answered when the crash is handled.
+- A reload after a renderer crash that the browser refuses outright ends the
+  overlay with `RendererCrashed` instead of leaving it quietly blank with no
+  `Failed` and no further attempt. The same refusal on the creation path is
+  deliberately *not* a failure: the mod named a page the browser will not take,
+  which is a content bug in the mod rather than a broken window, and the next
+  `LoadHtml` loads fine. Failing there would destroy a working overlay over one
+  bad page. The difference is what there is to go back to - on the crash path
+  the page was live and now there is nothing.
+- `EventDispatch.Manual` could swallow an answer. Results travelled the event
+  queue, which is dropped when the handle is disposed - correct for events,
+  which are documented as droppable, and a broken promise for an answer, which
+  is documented as always arriving. Answers now have a queue of their own:
+  never dropped on overflow, drained first by `PumpEvents()`, and handed over
+  on the spot when the handle is disposed, since nobody pumps a handle they
+  have thrown away.
+- A `Create` and a `Dispose` posted in that order could arrive the other way
+  round, because commands and creations have had separate queues since 1.7.0
+  and commands are drained first. The overlay then built a window and a browser
+  view whose owner was already gone and whose close had been and gone. Creation
+  now stops when the handle is already closed.
+- A second browser that can never start was asked for again by every windowed
+  overlay, each time holding the creation queue for the full timeout. It is
+  now asked for at most three times, and the wait for it is ten seconds rather
+  than thirty - it is optional, and the browser it clones is already running.
+- The documentation for the latched `Ready` and `Failed` claimed a late
+  subscription runs inside the `+=`, carving out only `DispatchOnMainThread`.
+  With `EventDispatch.Manual` it waits for the consumer's own pump, which
+  matters to a soft-dependency gate deciding whether to fall back. Corrected
+  here, in the README, and in `docs/SOFT-DEPENDENCY.md`, along with the
+  threading sentences on `ExecuteScript` and `Request`.
 
 ### Repository
 
@@ -78,8 +127,16 @@ Nothing here changes the shipped DLL.
 
 ### Notes
 
-- Probe rows 40-41 cover both delivery fixes, each with its control case beside
-  it, so what the row measures is the rejection rather than the reload.
+- Probe rows 40-45. Rows 40-41 cover the delivery fixes, each with its control
+  case beside it, so what the row measures is the rejection rather than the
+  reload; 42-43 the reported navigation failure; 44-45 the answers a Manual
+  overlay owes across a disposal.
+- The error status on a failed navigation is read through a hand-bound vtable
+  slot, proven the way every other slot here was: the neighbouring slot returns
+  sequential navigation ids (2, then 3) while this one returns differing
+  statuses - `UNKNOWN` (0) for a file missing behind a mapped folder,
+  `CONNECTION_ABORTED` (9) for a connection nothing answers. A wrong slot could
+  produce neither.
 
 
 ## [1.8.0]

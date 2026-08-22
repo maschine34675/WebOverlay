@@ -171,6 +171,10 @@ exceptions, which is what makes it worth automating.
 - `Ready` and `Failed` are **latched**. Subscribing after the fact still fires
   them - possibly during the `+=` itself, on the overlay thread. Set your state
   before subscribing, and never let a handler read a field you assign further
-  down the method.
+  down the method. The opposite trap comes with the other dispatch modes: with
+  `EventDispatch.MainThread` a late latched fire waits for the library's next
+  frame, and with `EventDispatch.Manual` for your own next `PumpEvents()`. So a
+  gate must not decide "the overlay failed, use the fallback" on the frame it
+  subscribed - it has not been told yet.
 - A failed overlay must not swallow the hotkey for the rest of the session.
   Latch `Failed` into a flag your gate checks first, and fall back from then on.

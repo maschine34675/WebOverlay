@@ -1762,7 +1762,157 @@ internal static partial class NewApi
         overlay.PumpEvents();
         check("U5 until the next one", messages > before, "messages=" + messages);
 
+        // The promise a Manual overlay must still keep. A script result is
+        // owed to one caller, and queueing it behind a pump nobody will ever
+        // call again is the one way "answered exactly once" becomes never - so
+        // disposing has to hand out what it owes on the spot.
+        string answered = "pending";
+        overlay.ExecuteScript("1 + 1", r => answered = r);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (answered == "pending" && clock.ElapsedMilliseconds < 8000)
+        {
+            overlay.PumpEvents();
+            Thread.Sleep(25);
+        }
+        check("U6 a live Manual overlay answers a script through the pump",
+            answered == "2", "result=" + (answered ?? "<null>"));
+
+        // And the two cases a queue cannot serve, because nobody pumps a handle
+        // they have thrown away. First: an answer that was ready and waiting in
+        // the queue when the handle was disposed. Events are dropped there on
+        // purpose; an answer must not be.
+        string queued = "pending";
+        overlay.ExecuteScript("6 * 7", r => queued = r);
+        Thread.Sleep(800);
+        check("U7 an answer waits for the pump like everything else",
+            queued == "pending", "result=" + (queued ?? "<null>"));
+
+        // Second: one still owed, from a script the renderer is still running.
+        string owed = "pending";
+        int owedAnswers = 0;
+        overlay.ExecuteScript("var t = Date.now(); while (Date.now() - t < 4000) {} 'late'",
+            r => { owed = r; Interlocked.Increment(ref owedAnswers); });
+        Thread.Sleep(500);
         overlay.Dispose();
+
+        wait(() => queued != "pending", 10000);
+        check("U8 and disposing hands over what was already waiting",
+            queued == "42", "result=" + (queued ?? "<null>"));
+        // Whichever of the two gets there first - the library settling the
+        // call as it closes, or the browser's own completion for a script cut
+        // off mid-document - the contract is the same: answered, once.
+        wait(() => owed != "pending", 12000);
+        Thread.Sleep(2000);
+        check("U9 as well as what it still owed", owed != "pending",
+            "result=" + (owed ?? "<null reference>"));
+        check("U10 exactly once", owedAnswers == 1, "answers=" + owedAnswers);
+
+        Thread.Sleep(300);
+        finish();
+    }
+
+    /// <summary>Reads the number out of "web error status N" in a log line.</summary>
+    private static int statusIn(string line)
+    {
+        if (line == null)
+            return -1;
+        int at = line.IndexOf("status ", StringComparison.Ordinal);
+        if (at < 0)
+            return -1;
+        string tail = line.Substring(at + "status ".Length);
+        int end = tail.IndexOfAny(new[] { ';', '.', ' ' });
+        if (end > 0)
+            tail = tail.Substring(0, end);
+        return int.TryParse(tail, out int value) ? value : -1;
+    }
+
+    /// <summary>
+    /// A navigation that fails outright - the page is simply not there - used
+    /// to produce no output at all, which made a typo in a file name look
+    /// exactly like a slow load. Also the empirical proof for the
+    /// NavigationCompleted args slot the error status is read from: a wrong
+    /// slot cannot produce a plausible status for a case that really failed.
+    /// </summary>
+    internal static void FailedNavigation(string scratch)
+    {
+        var warnings = new System.Collections.Generic.List<string>();
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        FieldInfo logWarning = host.GetField("LogWarning", BindingFlags.NonPublic | BindingFlags.Static);
+        var previous = (Action<string>)logWarning.GetValue(null);
+        logWarning.SetValue(null, (Action<string>)(line =>
+        {
+            lock (warnings) warnings.Add(line);
+            previous(line);
+        }));
+
+        string folder = Path.Combine(scratch ?? Path.GetTempPath(), "failed-nav-probe");
+        // (the local list above is what the checks read)
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "there.html"),
+            "<!doctype html><html><body>here</body></html>");
+
+        bool ready = false, failed = false;
+        var overlay = WebOverlays.Create("FailedNavProbe", new OverlayOptions
+        {
+            Width = 400,
+            Height = 300,
+            VirtualHosts = new[] { new VirtualHost("missing.assets", folder) },
+        });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.Ready += () => ready = true;
+        overlay.Failed += () => failed = true;
+        wait(() => ready || failed, 25000);
+        check("N1 the overlay came up", ready && !failed, failed ? "failed" : "ready=" + ready);
+
+        // Nothing at this name; the folder is mapped, the file is not there.
+        overlay.Post("waiting-for-a-page");
+        overlay.Navigate("https://missing.assets/not-there.html");
+        Thread.Sleep(4000);
+
+        string reported;
+        lock (warnings)
+            reported = warnings.Find(w => w.Contains("did not load"));
+        check("N2 the failure is reported instead of passing in silence",
+            reported != null, reported ?? "<silent>");
+        check("N3 and names the page that failed",
+            reported != null && reported.Contains("not-there.html"), reported ?? "<silent>");
+
+        // The status is read through a hand-bound vtable slot, so it has to be
+        // shown doing something a wrong slot could not. A missing file behind a
+        // mapped folder reports UNKNOWN (0) - true, but 0 proves nothing. A
+        // connection nothing will answer has a status of its own, and port 1 on
+        // the loopback address refuses without a name to resolve or a network
+        // to reach.
+        lock (warnings) warnings.Clear();
+        overlay.Navigate("https://127.0.0.1:1/nothing");
+        Thread.Sleep(6000);
+        string refused;
+        lock (warnings)
+            refused = warnings.Find(w => w.Contains("did not load"));
+        check("N4 a refused connection is reported too", refused != null, refused ?? "<silent>");
+        // The status itself is not deterministic per URL - a missing file
+        // behind a mapped folder reports UNKNOWN (0), a refused connection
+        // CONNECTION_ABORTED (9), and a retry can turn one into the other. So
+        // the row asserts only that a status came through and is inside the
+        // documented range; that the slot is the status rather than the
+        // navigation id next to it was settled by measurement, and is recorded
+        // in docs/FAULT-TESTS.md.
+        check("N5 carrying a web error status from the bound args slot",
+            statusIn(refused) >= 0 && statusIn(refused) <= 18, refused ?? "<silent>");
+
+        check("N6 the page is not claimed as loaded", !overlay.IsPageLoaded,
+            "IsPageLoaded=" + overlay.IsPageLoaded);
+
+        // The target stands, so the mod can simply name a page that exists.
+        bool arrived = false;
+        overlay.MessageReceived += _ => arrived = true;
+        overlay.Navigate("https://missing.assets/there.html");
+        wait(() => overlay.IsPageLoaded, 20000);
+        check("N7 and a working page afterwards still loads", overlay.IsPageLoaded,
+            "IsPageLoaded=" + overlay.IsPageLoaded);
+
+        overlay.Dispose();
+        logWarning.SetValue(null, previous);
         Thread.Sleep(300);
         finish();
     }

@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-41 were added for v1.3.0 to v1.8.1
+and re-run unchanged for v1.4.0; rows 10-45 were added for v1.3.0 to v1.8.1
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -50,6 +50,10 @@ and re-run unchanged for v1.4.0; rows 10-41 were added for v1.3.0 to v1.8.1
 | 39 | `Dispatch = Manual` | nothing arrives, including `PageLoaded`, until `PumpEvents()`; then on the pumping thread | PASS |
 | 40 | `Post(..., Retain)` with a page live, then a rejected retarget, then a page-initiated reload | the retained payload survives the rejection and replays to the reloaded page exactly once - the page that stays on screen keeps the state that belongs to it | PASS |
 | 41 | A page named before the browser exists whose navigation is then rejected at creation, followed by a real page | the refused page is not left as the target: the next `LoadHtml` is a first navigation, not a retarget, so state set up beforehand still reaches the page that does load | PASS |
+| 42 | `Navigate` to a file that is not in the mapped folder, and to a connection nothing answers | one warning naming the page and the browser's error status, `IsPageLoaded` stays false, the target stands, and a working page afterwards still loads | PASS |
+| 43 | The web-error-status slot on the NavigationCompleted args | the neighbouring slot returns sequential navigation ids while this one returns differing statuses - `UNKNOWN` (0) for the missing file, `CONNECTION_ABORTED` (9) for the refused connection - which no wrong slot could produce | PASS |
+| 44 | `Dispatch = Manual` with a script answer already waiting in the queue when the handle is disposed | the answer is handed over rather than dropped with the events; events stay droppable, answers do not | PASS |
+| 45 | The same with a script the renderer is still running when the overlay closes | the caller is answered exactly once, whichever of the two paths gets there first | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):
@@ -66,6 +70,10 @@ Not automated (manually covered in game during development, or accepted):
   synchronously, so what the probe would exercise is not the path that matters.
   That a failure is not remembered - the next windowed overlay tries again -
   is covered by row 36, which fails the folder rather than the browser.
+- A renderer crash and the paths hanging off it: settling the scripts that were
+  running in the dead renderer, and a reload the browser refuses. Killing a
+  renderer on demand needs browser internals; the code paths are reviewed and
+  share their settle helper with row 19, which does exercise it.
 - A second-browser attempt that times out and is then retried, where the first
   attempt's completion handler must stay callable. Forcing a 30-second timeout
   from outside means making the WebView2 loader hang, which nothing here can
@@ -95,8 +103,8 @@ Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `nav-reject`, `dispatch`, `failure-kind`, `script-result`, `visibility`,
 `close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
 `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
-`spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`; no
-mode at all is the normal path.
+`spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`,
+`failed-nav`; no mode at all is the normal path.
 
 `glass`, `glass-click` and `cube` sample real screen pixels and send real
 mouse input, so they need a desktop that is actually being composited. Over

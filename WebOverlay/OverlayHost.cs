@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -39,6 +39,14 @@ namespace WebOverlay
         private static int windowedControllers;
         private static string userDataFolder;
         private static bool creatingEnvironment;
+        private static int spareAttempts;
+
+        /// <summary>
+        /// How often a second browser is asked for before the library stops
+        /// trying. Enough to ride out a transient failure, few enough that a
+        /// machine where it cannot work does not pay the wait every time.
+        /// </summary>
+        private const int SpareAttemptLimit = 3;
         private static ComCallback environmentCallback;
         private static ComCallback spareEnvironmentCallback;
         private static WndProcDelegate dispatcherProc;
@@ -213,6 +221,19 @@ namespace WebOverlay
             if (spareEnvironment != IntPtr.Zero || environment == IntPtr.Zero || stopping)
                 return;
 
+            // A failed attempt is deliberately not remembered as "the main
+            // browser will do" - one bad moment must not become the old defect
+            // for the rest of the session. But trying forever is its own
+            // defect: every windowed overlay would hold the creation queue for
+            // the full timeout on a machine where the second browser can never
+            // start. So it is retried a few times and then left alone.
+            if (spareAttempts >= SpareAttemptLimit)
+            {
+                LogWarning("not asking for a second browser again after " + spareAttempts
+                    + " failed attempts; this overlay will fail to open while a transparent one is up.");
+                return;
+            }
+
             LogInfo("a transparent overlay is open, so this windowed overlay needs a second browser.");
 
             // Checked here rather than left to the browser: when WebView2
@@ -222,6 +243,9 @@ namespace WebOverlay
             string folder = userDataFolder + SpareSuffix;
             if (!prepareFolder(folder))
             {
+                // Counted as an attempt like any other, so a folder that will
+                // never be usable stops producing this line every time.
+                spareAttempts++;
                 LogWarning("no second browser: its data folder could not be created (" + folder
                     + "). This overlay will fail to open while a transparent one is up.");
                 return;
@@ -233,12 +257,19 @@ namespace WebOverlay
             creatingEnvironment = true;
             try
             {
+                // Ten seconds, not the thirty the first browser gets. This one
+                // is optional and the queue of waiting overlays is held while
+                // it starts, so a machine where it will never come up must not
+                // cost half a minute per windowed overlay. The browser it
+                // clones is already running, so ten is generous.
                 spareEnvironment = createEnvironment(folder,
-                    "the second browser", ref spareEnvironmentCallback, required: false);
+                    "the second browser", ref spareEnvironmentCallback, required: false,
+                    timeoutSeconds: 10);
             }
             finally
             {
                 creatingEnvironment = false;
+                spareAttempts++;
             }
 
             if (spareEnvironment == IntPtr.Zero)
@@ -535,7 +566,7 @@ namespace WebOverlay
         }
 
         private static IntPtr createEnvironment(string userData, string what,
-            ref ComCallback callback, bool required)
+            ref ComCallback callback, bool required, int timeoutSeconds = 30)
         {
             // The slot may already hold the handler of an attempt that timed
             // out. Native code can still call that one - the whole point of
@@ -601,7 +632,7 @@ namespace WebOverlay
             // the real cause under a timeout message.
             var timer = System.Diagnostics.Stopwatch.StartNew();
             while (created == IntPtr.Zero && !stopping && !refused
-                && timer.Elapsed.TotalSeconds < 30)
+                && timer.Elapsed.TotalSeconds < timeoutSeconds)
             {
                 pump();
                 Thread.Sleep(5);
@@ -609,7 +640,7 @@ namespace WebOverlay
 
             if (created == IntPtr.Zero && !stopping && !refused)
                 report(required, OverlayFailure.EnvironmentFailed,
-                    what + " did not start within 30 seconds.");
+                    what + " did not start within " + timeoutSeconds + " seconds.");
             // From here nothing owns what the completion might still bring.
             abandoned = created == IntPtr.Zero;
             return created;

@@ -260,6 +260,21 @@ namespace WebOverlay
             Failure = kind;
             FailureMessage = reason;
             OverlayHost.LogWarning(reason);
+            // There is no page any more, so IsPageLoaded must stop saying there
+            // is: a consumer that streams reads it to decide whether to send.
+            pageReady = false;
+            pageLoaded = false;
+            // Whoever was waiting for a script result is owed an answer, and
+            // this overlay will never produce one. Settled, not disposed, and
+            // the list is left alone: unlike CloseFromHost this can run inside
+            // the ProcessFailed callback with the controller still open, so a
+            // late completion may yet arrive - Settle is once-only, and the
+            // eventual close still disposes them exactly as before.
+            foreach (ScriptCall pending in pendingScripts.ToArray())
+            {
+                if (pending.Settle())
+                    answer(pending.Result, null);
+            }
             // During game shutdown a failure is expected, and notifying the
             // consumer would trigger its fallback - picture a fallback browser
             // window popping up while the game quits. That applies to the
@@ -290,6 +305,17 @@ namespace WebOverlay
 
         private bool createCore()
         {
+            // Disposed before this ever ran. Commands and creations sit in
+            // separate queues since 1.7.0, and commands are drained first, so a
+            // Create and a Dispose posted in that order can arrive the other way
+            // round. Building the window now would leave a window and a browser
+            // view whose owner is already gone and whose CloseFromHost has been
+            // and gone. No fail() either: the consumer threw the handle away,
+            // and raising Failed would push it into a fallback it never asked
+            // for.
+            if (closed)
+                return false;
+
             if (OverlayHost.Environment == IntPtr.Zero)
             {
                 // Naming the cause, not the symptom: the consumer's user can
@@ -441,6 +467,18 @@ namespace WebOverlay
             // through an internal path, because the public methods clear the
             // outbox and would wipe messages posted right after Create. A
             // Hide() or Toggle() in the gap must win over the default Show.
+            // A refusal here is deliberately NOT a failure of the overlay. The
+            // mod named a page the browser will not take - oversized markup, a
+            // malformed URL - which is a content bug in the mod, not a broken
+            // window: everything else about this overlay works, and the next
+            // LoadHtml will load fine. Failing it would destroy a working
+            // overlay over one bad page and push the consumer into its fallback
+            // for good. What startPendingNavigation does instead is clear the
+            // target, so the overlay is honestly "no page named" rather than
+            // pointing at something that can never load; the refusal itself is
+            // logged. The crash-recovery path decides differently, because
+            // there the page WAS live and its reload being refused leaves
+            // nothing to go back to.
             startPendingNavigation();
             if (desiredVisible)
                 Show();
@@ -579,7 +617,26 @@ namespace WebOverlay
         private static string describe(string value) =>
             value == null ? "<null>" : "\"" + value + "\"";
 
-        private void startPendingNavigation()
+        /// <summary>
+        /// Nothing can reach a page that no longer exists. Without this a send
+        /// after the failure would go into the outbox, and a script caller
+        /// would wait there until the buffer overflowed or the handle was
+        /// disposed - long after the answer was knowable.
+        /// </summary>
+        private bool refuseAfterFailure(Action<string> result)
+        {
+            if (state != CreationState.Failed)
+                return false;
+            answer(result, null);
+            return true;
+        }
+
+        /// <summary>
+        /// Returns false when the browser refused the page outright, which is
+        /// terminal on this path: nothing here has an earlier target to fall
+        /// back to, and no further attempt is coming.
+        /// </summary>
+        private bool startPendingNavigation()
         {
             if (pendingHtml != null)
             {
@@ -590,6 +647,7 @@ namespace WebOverlay
                     webView, WebView2Api.WebView_NavigateToString)(webView, pendingHtml), "LoadHtml"))
                 {
                     forgetTarget();
+                    return false;
                 }
             }
             else if (pendingUrl != null)
@@ -600,8 +658,10 @@ namespace WebOverlay
                     webView, WebView2Api.WebView_Navigate)(webView, pendingUrl), "Navigate"))
                 {
                     forgetTarget();
+                    return false;
                 }
             }
+            return true;
         }
 
         /// <summary>
@@ -809,6 +869,26 @@ namespace WebOverlay
                         clearOutbox();
                     }
                 }
+                else
+                {
+                    // Say so. A navigation that fails outright - a file missing
+                    // from a mapped folder, a host that will not answer - used
+                    // to produce no output at all, so a typo in a page name
+                    // looked exactly like a slow load: the overlay sat there
+                    // with IsPageLoaded false and a quietly filling outbox, and
+                    // nothing anywhere said why.
+                    //
+                    // Only a message. The target stays as it is, because it
+                    // still is the target: the mod may fix the URL and try
+                    // again, and everything buffered is still meant for
+                    // whatever page it names. Retargeting or closing settles
+                    // those promises, as it always did.
+                    WebView2Api.Method<WebView2Api.GetIntDelegate>(
+                        args, WebView2Api.NavCompletedArgs_GetWebErrorStatus)(args, out int status);
+                    OverlayHost.LogWarning("the page did not load (" + (pendingUrl ?? "inline markup")
+                        + "), web error status " + status
+                        + (outbox.Count > 0 ? "; " + outbox.Count + " send(s) stay buffered for it" : "") + ".");
+                }
                 return WebView2Api.S_OK;
             });
             armed &= WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddNavigationCompleted)(
@@ -855,7 +935,23 @@ namespace WebOverlay
                         renderRecoveries++;
                         OverlayHost.LogWarning("the page's renderer failed (kind " + kind
                             + "); reloading (attempt " + renderRecoveries + ").");
-                        startPendingNavigation();
+                        // The scripts that were running in it are gone with it,
+                        // and the reload starts a document that never saw them.
+                        // Their callers are owed the "could not run" answer now
+                        // rather than at Dispose. Settle only - the completions
+                        // are still registered natively, and Settle is
+                        // once-only, so a late one changes nothing.
+                        foreach (ScriptCall pending in pendingScripts.ToArray())
+                        {
+                            if (pending.Settle())
+                                answer(pending.Result, null);
+                        }
+                        if (!startPendingNavigation())
+                        {
+                            fail(OverlayFailure.RendererCrashed,
+                                "the page's renderer failed and the reload was refused; the overlay is dead.");
+                            return WebView2Api.S_OK;
+                        }
                     }
                     else
                     {
@@ -1481,6 +1577,8 @@ namespace WebOverlay
         {
             if (message == null)
                 return;
+            if (refuseAfterFailure(null))
+                return;
             // WebView2 does not deliver messages sent before the page finished
             // loading, so they wait in a bounded outbox until it has - and a
             // live send only goes out while the mod's own target is showing.
@@ -1505,6 +1603,8 @@ namespace WebOverlay
                 answer(result, null);
                 return;
             }
+            if (refuseAfterFailure(result))
+                return;
             if (webView == IntPtr.Zero || !pageReady)
             {
                 buffer(true, script, result);

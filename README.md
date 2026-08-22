@@ -176,15 +176,23 @@ solid panel would still work), `RendererCrashed` (the browser or its renderer
 died after bounded reload attempts - creating it again may work).
 
 Every event above is delivered from the game's main thread instead when the
-overlay was created with `DispatchOnMainThread = true`.
+overlay was created with `DispatchOnMainThread = true`, and waits for your own
+`PumpEvents()` call with `Dispatch = EventDispatch.Manual`. That includes the
+latched `Ready` and `Failed`: outside the default overlay-thread mode, even a
+late subscription is queued rather than run inside the `+=`, so do not read
+your fallback flag on the frame you subscribed.
 
 `ExecuteScript(script, result)` answers the callback exactly once - with the
 JSON the script evaluated to, or `null` when it could not run at all (no page,
 a page that is no longer your target, an overlay that closed, a rejected
-call). That holds even if you dispose the handle while the script is still
-running: closing the overlay answers whoever is waiting, rather than leaving
-them waiting forever. The one case where nothing is delivered is the game
-shutting down. A script that throws is reported by the browser as the JSON
+call, a renderer that crashed under it). That holds even if you dispose the
+handle while the script is still running: closing the overlay answers whoever
+is waiting, rather than leaving them waiting forever - with
+`EventDispatch.Manual` too, where the answers owed at that moment go out on the
+spot rather than into a queue nobody will pump again. While the handle is
+alive, though, a Manual overlay hands you its answers on `PumpEvents()` like
+everything else, so keep pumping while you wait for one. The one case where
+nothing is delivered is the game shutting down. A script that throws is reported by the browser as the JSON
 `"null"`, which is indistinguishable from a script that really evaluated to
 null.
 

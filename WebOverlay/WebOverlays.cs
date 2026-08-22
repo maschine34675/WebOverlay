@@ -530,7 +530,10 @@ namespace WebOverlay
         /// `window.overlay.onRequest(channel, ...)` handler - which may return
         /// a value or a promise. Answered exactly once: with the page's reply,
         /// or with null if no answer arrives within five seconds, so a page
-        /// that cannot answer never hangs the mod.
+        /// that cannot answer never hangs the mod. The answer arrives where
+        /// the events do - see
+        /// <see cref="ExecuteScript(string, Action{string})"/> for what each
+        /// <see cref="EventDispatch"/> mode means for one.
         /// </summary>
         void Request(string channel, string payload, Action<string> answer);
 
@@ -570,15 +573,21 @@ namespace WebOverlay
         /// browser produced ("42", "\"text\"", "null" for no value). The
         /// callback is answered exactly once - with null when the script could
         /// not run at all: no page, a page that is no longer the mod's target,
-        /// an overlay that closed, or a script the browser rejected. So a
-        /// caller waiting for a value is never left waiting forever - the
-        /// answer arrives even after the handle was disposed. The one
-        /// exception is the game shutting down, where the library delivers
-        /// nothing at all rather than wake a fallback on the way out.
+        /// a renderer that crashed under it, an overlay that closed, or a
+        /// script the browser rejected. So a caller waiting for a value is
+        /// never left waiting forever - the answer arrives even after the
+        /// handle was disposed. The one exception is the game shutting down,
+        /// where the library delivers nothing at all rather than wake a
+        /// fallback on the way out.
         ///
-        /// Threading follows the events: the overlay thread, or the game's
-        /// main thread with
-        /// <see cref="OverlayOptions.DispatchOnMainThread"/>.
+        /// Threading follows the events: the overlay thread, the game's main
+        /// thread with <see cref="EventDispatch.MainThread"/>, or your own
+        /// <see cref="PumpEvents"/> call with
+        /// <see cref="EventDispatch.Manual"/> - where the answer waits for the
+        /// pump like everything else, so keep pumping while you are waiting
+        /// for one. Disposing the handle is the exception even there: nobody
+        /// pumps a handle they have thrown away, so the answers owed at that
+        /// point are delivered on the spot instead.
         /// </summary>
         void ExecuteScript(string script, Action<string> result);
 
@@ -669,10 +678,14 @@ namespace WebOverlay
         /// Raised once the browser view is fully set up. Latched: a handler
         /// subscribed after the fact still runs - immediately, on the
         /// subscribing thread - otherwise on the overlay thread; treat it as
-        /// "any thread". With
-        /// <see cref="OverlayOptions.DispatchOnMainThread"/> it is queued like
-        /// every other event instead, so even a late subscription is answered
-        /// from the game's next frame rather than inside the Add call.
+        /// "any thread". That immediacy belongs to
+        /// <see cref="EventDispatch.OverlayThread"/> alone. Whenever the
+        /// overlay dispatches elsewhere, a late subscription is queued like
+        /// every other event rather than run inside the Add call: with
+        /// <see cref="EventDispatch.MainThread"/> it arrives on the game's
+        /// next frame, and with <see cref="EventDispatch.Manual"/> on your
+        /// next <see cref="PumpEvents"/> - so a gate must not read its own
+        /// fallback flag on the frame it subscribed.
         /// </summary>
         event Action Ready;
 
@@ -682,9 +695,8 @@ namespace WebOverlay
         /// stays hidden; dispose the handle and use a fallback.
         /// <see cref="Failure"/> and <see cref="FailureMessage"/> say why, and
         /// are set before this fires. Latched exactly like
-        /// <see cref="Ready"/>, including how
-        /// <see cref="OverlayOptions.DispatchOnMainThread"/> changes when a
-        /// late subscription is answered.
+        /// <see cref="Ready"/>, including when a late subscription is answered
+        /// under each <see cref="EventDispatch"/> mode.
         /// </summary>
         event Action Failed;
     }
@@ -795,6 +807,9 @@ namespace WebOverlay
 
         public void PumpEvents()
         {
+            // Answers first: somebody is blocked on one, nobody is blocked on
+            // an event.
+            drainManualResults();
             while (manual.TryDequeue(out Action action))
             {
                 System.Threading.Interlocked.Decrement(ref manualQueued);
@@ -810,14 +825,38 @@ namespace WebOverlay
         /// safe to await. Only a game that is shutting down swallows it, like
         /// every other callback.
         /// </summary>
+        // Answers wait in a queue of their own, separate from the events. A
+        // full event queue may drop events and a disposed handle stops
+        // delivering them - both documented - but an answer is a promise made
+        // to one caller and neither may swallow it.
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> manualResults =
+            new System.Collections.Concurrent.ConcurrentQueue<Action>();
+
+        private void drainManualResults()
+        {
+            while (manualResults.TryDequeue(out Action action))
+                action();
+        }
+
         private void raiseResult(Action invoke)
         {
             // Queued like everything else in Manual mode: a consumer that owns
             // the delivery point owns it for answers too, and must keep
-            // pumping while it is waiting for one.
-            if (dispatch == EventDispatch.Manual)
+            // pumping while it is waiting for one. Except once the handle is
+            // disposed - nobody pumps a handle they have thrown away, so
+            // queueing there would be the one case where "answered exactly
+            // once" quietly became "never". Closing the overlay is precisely
+            // when the outstanding promises are settled, so the answer has to
+            // go out on the spot instead.
+            if (dispatch == EventDispatch.Manual && disposed == 0)
             {
-                enqueueManual(() => invokeIsolated(invoke));
+                manualResults.Enqueue(() => invokeIsolated(invoke));
+                // Disposal may have started between the check and the enqueue,
+                // in which case the drain there has already run and nothing
+                // else would ever come for this one. Draining is a TryDequeue
+                // loop, so doing it twice costs nothing.
+                if (disposed != 0)
+                    drainManualResults();
                 return;
             }
             if (dispatch != EventDispatch.MainThread || !OverlayHost.DispatchToMainThread(() => invokeIsolated(invoke)))
@@ -1039,6 +1078,11 @@ namespace WebOverlay
             // CloseFromHost would double-free native resources.
             if (System.Threading.Interlocked.Exchange(ref disposed, 1) != 0)
                 return;
+            // Nobody pumps a handle they have thrown away. Events queued for
+            // one are dropped on purpose; answers owed to a caller are not, so
+            // they go out here instead of waiting for a pump that will never
+            // come.
+            drainManualResults();
             OverlayHost.Post(() => window.CloseFromHost());
         }
 

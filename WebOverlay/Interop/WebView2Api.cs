@@ -137,6 +137,7 @@ namespace WebOverlay.Interop
 
         // ICoreWebView2NavigationCompletedEventArgs
         public const int NavCompletedArgs_GetIsSuccess = 3;
+        public const int NavCompletedArgs_GetWebErrorStatus = 4;
 
         // ICoreWebView2NewWindowRequestedEventArgs
         public const int NewWindowArgs_PutHandled = 6;
