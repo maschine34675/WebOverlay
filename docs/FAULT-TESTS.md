@@ -5,13 +5,13 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-39 were added for v1.3.0 to v1.8.0
+and re-run unchanged for v1.4.0; rows 10-41 were added for v1.3.0 to v1.8.1
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
 |---|---|---|---|
 | 1 | `WebView2Loader.dll` missing | first handle raises `Failed` (latched), no hang; later `Create` returns null | PASS |
-| 2 | Inline HTML over the 2 MB WebView2 limit | navigation rejected with a log, buffered sends dropped, no crash | PASS |
+| 2 | Inline HTML over the 2 MB WebView2 limit | navigation rejected with a log, no crash; nothing that was buffered or retained is lost, since the rejected page never became the target (see rows 40-41) | PASS |
 | 3 | `Create` immediately followed by `Dispose`, 10 rounds | no crash, no leak-induced failure; a normal overlay works afterwards | PASS |
 | 4 | Redirect from target origin A to a *different allowed* origin B with a send buffered for A | B loads and can message the host, the buffered send is dropped with a log, nothing reaches B | PASS |
 | 5 | `ExecuteScript` (with its real completion handler) | script executes in the page, verified by a message round-trip | PASS |
@@ -48,6 +48,8 @@ and re-run unchanged for v1.4.0; rows 10-39 were added for v1.3.0 to v1.8.0
 | 37 | A page that reloads with retained state set, then a retarget | the fresh page gets the newest retained payload per channel and nothing else; a page the mod retargeted to starts clean | PASS |
 | 38 | 200 latest-only messages before the page can receive any, plus a page asking for `{ latest: true }` | the library delivers one - the newest - while an ordinary message beside them is untouched; the page gets a handful instead of fifty | PASS |
 | 39 | `Dispatch = Manual` | nothing arrives, including `PageLoaded`, until `PumpEvents()`; then on the pumping thread | PASS |
+| 40 | `Post(..., Retain)` with a page live, then a rejected retarget, then a page-initiated reload | the retained payload survives the rejection and replays to the reloaded page exactly once - the page that stays on screen keeps the state that belongs to it | PASS |
+| 41 | A page named before the browser exists whose navigation is then rejected at creation, followed by a real page | the refused page is not left as the target: the next `LoadHtml` is a first navigation, not a retarget, so state set up beforehand still reaches the page that does load | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):
@@ -64,6 +66,13 @@ Not automated (manually covered in game during development, or accepted):
   synchronously, so what the probe would exercise is not the path that matters.
   That a failure is not remembered - the next windowed overlay tries again -
   is covered by row 36, which fails the folder rather than the browser.
+- A second-browser attempt that times out and is then retried, where the first
+  attempt's completion handler must stay callable. Forcing a 30-second timeout
+  from outside means making the WebView2 loader hang, which nothing here can
+  do; the handler's lifetime is instead guaranteed structurally - the slot is
+  a `ref` parameter that disposes what it replaces, so a call site cannot
+  forget - and by `ComCallback`'s own rule that `Dispose` roots an instance
+  native code still holds.
 - Shutdown during environment start (guarded by `stopping` checks; exercised
   implicitly at every game exit).
 - Freeing the cursor while the game holds it: needs Unity and a game that

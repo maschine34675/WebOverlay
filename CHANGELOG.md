@@ -14,8 +14,51 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
-Nothing in the shipped library. The repository gained the host it was tested
-with:
+## [1.8.1]
+
+### Forge version notes
+
+Nothing changes for players - this release is for the mods that use the
+library.
+
+- Fixed: a mod's settings could still be lost after a page reload, in the one
+  case 1.8.0 did not cover - when a page the mod asked for was refused by the
+  browser.
+- Fixed: a rare crash when the second browser had to be started more than once.
+
+### Fixed
+
+- A navigation the browser refuses now leaves the overlay exactly as it was.
+  `Navigate` and `LoadHtml` used to drop the buffered sends and the retained
+  state *before* the call that turned out to be rejected, so the page that
+  stayed on screen lost the state belonging to it, and the next reload - the
+  library's own after a renderer crash, or the page calling `location.reload()`
+  - handed it its defaults while the mod still believed its configuration was
+  up. That is precisely the silent loss `PostOptions.Retain` exists to prevent,
+  reached through a failed attempt instead of a reload. A *successful* retarget
+  still forgets, as documented.
+- A page named before the browser exists is navigated to once the view is
+  created, and that attempt could be refused too - the oversized inline page, a
+  URL the browser will not take. Its result was never looked at, so the refused
+  page stayed the overlay's target: every send buffered into nothing,
+  `IsPageLoaded` stayed false for good, and the mod's next `LoadHtml` looked
+  like a retarget away from it and threw out state that had never belonged to
+  any page. The overlay now goes back to "no page named", which is what it is.
+- The completion handler of a second-browser attempt that timed out is handed
+  to the leak list before the next attempt overwrites the field. It stays
+  registered with a browser that may still answer, and the managed object it
+  calls through was only kept alive by that field - so a retry could leave the
+  first handler's thunks to be collected while native code could still call
+  them. Reachable since 1.7.0, when a failed spare stopped being remembered so
+  the next overlay would try again.
+- The XML documentation for replaying retained state sat above
+  `forgetPageState`, which does the opposite; `SetBounds` carried a second
+  stray summary block in the same shape, from 1.6.0. Both merged into the
+  member they describe.
+
+### Repository
+
+Nothing here changes the shipped DLL.
 
 - `tools/Probe` - the standalone host that drives the built DLL outside the
   game, previously a throwaway harness kept out of the tree. Every row of
@@ -27,6 +70,17 @@ with:
   page in a real overlay, feeds it channel messages, prints what it sends back
   and screenshots the result, so a HUD can be built without launching a raid.
   `tools/Probe/sample-page.html` is a worked example.
+- `docs/SOFT-DEPENDENCY.md` - the rules for depending on this library without
+  requiring it, including the version gate that additive minors make necessary.
+- The README says what a HUD has to decide for itself: it floats over the
+  game's own screens, and the hideout passes every obvious "am I in a raid"
+  test.
+
+### Notes
+
+- Probe rows 40-41 cover both delivery fixes, each with its control case beside
+  it, so what the row measures is the rejection rather than the reload.
+
 
 ## [1.8.0]
 

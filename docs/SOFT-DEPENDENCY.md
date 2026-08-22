@@ -138,7 +138,7 @@ Set `MinimumVersion` from the newest member you actually use:
 |---|---|
 | 1.4.0 | `OverlayOptions.VirtualHosts`, `Failure`/`FailureMessage`, `PageLoaded`/`IsPageLoaded`, main-thread dispatch |
 | 1.5.0 | `ExecuteScript(script, result)`, `VisibilityChanged` |
-| 1.6.0 | `Post(channel, payload)`, `Request`/`OnRequest`, `SetShape` |
+| 1.6.0 | `Post(channel, payload)`, `Request`/`OnRequest`, `SetShape`, `SetBounds` |
 | 1.7.0 | `OnRequest` with a deferred `reply`, `IWebOverlay.Transparency`, `InjectTheme`, `FreeCursorWhileShown`, `WebOverlayPlugin.VirtualKey` / `CloseKeysFor` |
 | 1.8.0 | `PostOptions.Retain` / `LatestOnly`, `OverlayOptions.Dispatch`, `PumpEvents()` |
 

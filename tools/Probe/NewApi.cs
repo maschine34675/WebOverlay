@@ -1537,7 +1537,116 @@ internal static partial class NewApi
         check("R6 a page the mod retargeted to starts clean",
             report == "<nothing>", report ?? "<none>");
 
+        // WOV-1801: a retarget that is REJECTED leaves the old page on screen,
+        // so the state that belongs to that page has to survive with it. Back
+        // to the real page first, since only a page with an origin can reload
+        // itself the way a renderer crash makes the library reload it.
+        int before = loads.Count;
+        overlay.Navigate("https://retain.assets/index.html");
+        wait(() => loads.Count > before, 20000);
+        overlay.Post("config", "third", PostOptions.Retain);
+        Thread.Sleep(500);
+
+        // Rejected synchronously: over the browser's 2 MB limit for inline
+        // markup. Nothing navigates; the page from a moment ago is still live.
+        overlay.LoadHtml("<!doctype html><html><body>"
+            + new string('x', 3 * 1024 * 1024) + "</body></html>");
+        Thread.Sleep(500);
+        check("R7 a rejected retarget leaves the page live", overlay.IsPageLoaded,
+            "IsPageLoaded=" + overlay.IsPageLoaded);
+
+        report = null;
+        overlay.Post("report", "");
+        wait(() => report != null, 5000);
+        check("R8 and the page still answers", report != null && report.Contains("config=third"),
+            report ?? "<none>");
+
+        // The point of the row: the rejection must not have taken the retained
+        // state with it, or the next reload hands the page its defaults while
+        // the mod still believes its configuration is up.
+        before = loads.Count;
+        overlay.Post("reload", "");
+        wait(() => loads.Count > before, 20000);
+        Thread.Sleep(900);
+        report = null;
+        overlay.Post("report", "");
+        wait(() => report != null, 5000);
+        // Exactly once, and only through the replay: a rejection must put
+        // nothing back on the wire to the page that never went away, or a page
+        // that never reloads would see its configuration arrive twice.
+        check("R9 retained state survives a rejected retarget and replays after a reload, once",
+            report != null && report.Contains("config=third")
+            && report.Split(new[] { "config=third" }, StringSplitOptions.None).Length == 2,
+            report ?? "<none>");
+
         overlay.Dispose();
+        Thread.Sleep(300);
+
+        // The same question one layer down. A page named before the browser is
+        // up is not navigated to on the spot - it is recorded and replayed by
+        // startPendingNavigation once the view exists. If THAT attempt is
+        // rejected, the overlay must be back to "no page named": otherwise the
+        // target stays pointing at a page that can never load, and the mod's
+        // next LoadHtml looks like a retarget away from it - which throws away
+        // state that never belonged to any page at all.
+        // The control first, so the comparison is honest: the same sequence
+        // without the rejection, on an inline page.
+        string control = null;
+        bool controlLoaded = false;
+        var plain = WebOverlays.Create("RetainProbe0", new OverlayOptions { Width = 400, Height = 300 });
+        if (plain == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        plain.ChannelMessage += (c, p) => { if (c == "report") control = p; };
+        plain.PageLoaded += () => controlLoaded = true;
+        plain.Post("early", "plain");
+        plain.Post("kept", "retained", PostOptions.Retain);
+        plain.LoadHtml(@"<!doctype html><html><body><script>
+          var seen = [];
+          overlay.on('early', function (p) { seen.push('early=' + p); });
+          overlay.on('kept', function (p) { seen.push('kept=' + p); });
+          overlay.on('report', function () { overlay.send('report', seen.join(' | ') || '<nothing>'); });
+        </script></body></html>");
+        wait(() => controlLoaded, 20000);
+        Thread.Sleep(700);
+        plain.Post("report", "");
+        wait(() => control != null, 5000);
+        check("R10a control: state set up before the first inline page reaches it",
+            control != null && control.Contains("early=plain") && control.Contains("kept=retained"),
+            control ?? "<none>");
+        plain.Dispose();
+        Thread.Sleep(300);
+
+        string second = null;
+        bool secondLoaded = false, secondFailed = false;
+        var fresh = WebOverlays.Create("RetainProbe2", new OverlayOptions { Width = 400, Height = 300 });
+        if (fresh == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        fresh.Failed += () => secondFailed = true;
+        fresh.ChannelMessage += (c, p) => { if (c == "report") second = p; };
+        fresh.PageLoaded += () => secondLoaded = true;
+
+        fresh.Post("early", "plain");
+        fresh.Post("kept", "retained", PostOptions.Retain);
+
+        // Rejected: over the 2 MB limit, and no page was ever named.
+        fresh.LoadHtml("<!doctype html><html><body>"
+            + new string('x', 3 * 1024 * 1024) + "</body></html>");
+        Thread.Sleep(400);
+
+        fresh.LoadHtml(@"<!doctype html><html><body><script>
+          var seen = [];
+          overlay.on('early', function (p) { seen.push('early=' + p); });
+          overlay.on('kept', function (p) { seen.push('kept=' + p); });
+          overlay.on('report', function () { overlay.send('report', seen.join(' | ') || '<nothing>'); });
+        </script></body></html>");
+        wait(() => secondLoaded || secondFailed, 20000);
+        Thread.Sleep(700);
+        fresh.Post("report", "");
+        wait(() => second != null, 5000);
+        check("R10 a navigation rejected while the browser was starting leaves no target behind",
+            second != null && second.Contains("early=plain") && second.Contains("kept=retained"),
+            (second ?? "<none>") + " loaded=" + secondLoaded + " failed=" + secondFailed
+                + " IsPageLoaded=" + fresh.IsPageLoaded);
+
+        fresh.Dispose();
         Thread.Sleep(300);
         finish();
     }

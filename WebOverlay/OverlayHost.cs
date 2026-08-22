@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -234,7 +234,7 @@ namespace WebOverlay
             try
             {
                 spareEnvironment = createEnvironment(folder,
-                    "the second browser", out spareEnvironmentCallback, required: false);
+                    "the second browser", ref spareEnvironmentCallback, required: false);
             }
             finally
             {
@@ -530,13 +530,27 @@ namespace WebOverlay
             userDataFolder = userData;
 
             environment = createEnvironment(userData, "the browser environment",
-                out environmentCallback, required: true);
+                ref environmentCallback, required: true);
             return environment != IntPtr.Zero;
         }
 
         private static IntPtr createEnvironment(string userData, string what,
-            out ComCallback callback, bool required)
+            ref ComCallback callback, bool required)
         {
+            // The slot may already hold the handler of an attempt that timed
+            // out. Native code can still call that one - the whole point of
+            // the `abandoned` flag below - and overwriting the field would
+            // leave it unrooted while it is still reachable from native code,
+            // so its thunks would be collected out from under the call.
+            // Dispose hands it to the leak list, which roots it until native
+            // lets go. `ref` rather than `out` so this cannot be forgotten at
+            // a call site.
+            if (callback != null)
+            {
+                callback.Dispose();
+                callback = null;
+            }
+
             IntPtr created = IntPtr.Zero;
             bool refused = false;
             bool abandoned = false;

@@ -586,16 +586,40 @@ namespace WebOverlay
                 pageReady = false;
                 pageLoaded = false;
                 expectInlineNavigation = true;
-                checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
-                    webView, WebView2Api.WebView_NavigateToString)(webView, pendingHtml), "LoadHtml");
+                if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                    webView, WebView2Api.WebView_NavigateToString)(webView, pendingHtml), "LoadHtml"))
+                {
+                    forgetTarget();
+                }
             }
             else if (pendingUrl != null)
             {
                 pageReady = false;
                 pageLoaded = false;
-                checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
-                    webView, WebView2Api.WebView_Navigate)(webView, pendingUrl), "Navigate");
+                if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
+                    webView, WebView2Api.WebView_Navigate)(webView, pendingUrl), "Navigate"))
+                {
+                    forgetTarget();
+                }
             }
+        }
+
+        /// <summary>
+        /// Back to "no page named". Only for a navigation the browser refused
+        /// on this internal path, which has no earlier target to fall back to:
+        /// a mod that asked for a page before the browser existed, or a reload
+        /// after a renderer crash. Leaving the refused page as the target
+        /// would point the overlay at something that can never load - every
+        /// send would buffer into nothing, IsPageLoaded would stay false for
+        /// good, and the mod's next LoadHtml would look like a retarget away
+        /// from it and throw out state that never belonged to any page.
+        /// </summary>
+        private void forgetTarget()
+        {
+            pendingUrl = null;
+            pendingHtml = null;
+            htmlLoaded = false;
+            expectInlineNavigation = false;
         }
 
         private bool applySettings()
@@ -1008,39 +1032,50 @@ namespace WebOverlay
             pendingHtml = null;
             htmlLoaded = false;
             expectInlineNavigation = false;
-            // Anything still buffered - and anything remembered - was meant
-            // for the previous page. Choosing the first page is not that: a
-            // mod that sets its state up before naming the page should keep
-            // it, which is the order the state is worth having in.
-            if (retargeting)
-                forgetPageState();
             // The mod asked for this page, so its origin becomes trusted.
             allowOrigin(url);
             if (webView == IntPtr.Zero)
+            {
+                // Only recorded for now, so nothing can be rejected: the page
+                // being left is already out of reach.
+                if (retargeting)
+                    forgetPageState();
                 return;
+            }
             pageReady = false;
             pageLoaded = false;
             if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                 webView, WebView2Api.WebView_Navigate)(webView, url), "Navigate"))
             {
                 restoreTarget(previous);
+                return;
             }
+            // Only now: anything still buffered - and anything remembered -
+            // was meant for the previous page, and this is the moment it stops
+            // being the target. Choosing the FIRST page is not that: a mod
+            // that sets its state up before naming a page should keep it,
+            // which is the order the state is worth having in.
+            if (retargeting)
+                forgetPageState();
         }
 
         /// <summary>
         /// A synchronously rejected navigation (invalid URL, inline HTML over
-        /// the 2 MB limit) never produces NavigationCompleted. The buffered
-        /// sends were meant for the page that will now never load, so they are
-        /// dropped - silently growing a queue nobody will ever flush would
-        /// hide the defect from the consumer.
+        /// the 2 MB limit) never produces NavigationCompleted. Nothing
+        /// happened, so nothing here changes: the buffered sends and the
+        /// retained state stay with whatever page is - or becomes - the
+        /// target. Dropping them used to look tidy, but the page they were
+        /// meant for is either still on screen or still to be named, and a mod
+        /// left believing its configuration is up while the page runs on its
+        /// defaults is exactly the silent loss Retain exists to prevent.
         /// </summary>
         private bool checkNavigationResult(int hr, string what)
         {
             if (hr == WebView2Api.S_OK)
                 return true;
             OverlayHost.LogWarning("" + what + " was rejected, hr=0x" + hr.ToString("X8")
-                + "; the page will not change" + (outbox.Count > 0 ? " and " + outbox.Count + " buffered send(s) were dropped" : "") + ".");
-            clearOutbox();
+                + "; the page will not change"
+                + (outbox.Count > 0 ? " (" + outbox.Count + " buffered send(s) still waiting)" : "") + ".");
             return false;
         }
 
@@ -1091,10 +1126,12 @@ namespace WebOverlay
             pendingHtml = html;
             pendingUrl = null;
             htmlLoaded = true;
-            if (retargeting)
-                forgetPageState();
             if (webView == IntPtr.Zero)
+            {
+                if (retargeting)
+                    forgetPageState();
                 return;
+            }
             pageReady = false;
             pageLoaded = false;
             expectInlineNavigation = true;
@@ -1102,7 +1139,10 @@ namespace WebOverlay
                 webView, WebView2Api.WebView_NavigateToString)(webView, html), "LoadHtml"))
             {
                 restoreTarget(previous);
+                return;
             }
+            if (retargeting)
+                forgetPageState();
         }
 
         /// <summary>
@@ -1286,12 +1326,12 @@ namespace WebOverlay
         }
 
         /// <summary>
-        /// Moves or resizes the overlay at runtime. Not remembered: the bounds
-        /// store is for the spot the player chose, and a mod resizing its own
-        /// window must not overwrite that. It does win over a remembered spot
-        /// for the rest of the session, though - the mod asked last.
+        /// Moves or resizes the overlay at runtime, in screen coordinates. Not
+        /// remembered: the bounds store is for the spot the player chose, and a
+        /// mod resizing its own window must not overwrite that. It does win
+        /// over a remembered spot for the rest of the session, though - the mod
+        /// asked last.
         /// </summary>
-        /// <summary>Screen coordinates of the overlay window.</summary>
         public void SetBounds(int? x, int? y, int? width, int? height)
         {
             if (window == IntPtr.Zero)
@@ -1341,11 +1381,6 @@ namespace WebOverlay
         }
 
         /// <summary>
-        /// Hands a fresh document the state the mod has been assuming. Before
-        /// the outbox, so a message the mod sent while the page was loading
-        /// wins over the older retained value on the same channel.
-        /// </summary>
-        /// <summary>
         /// Everything that was meant for the page being left behind.
         /// </summary>
         private void forgetPageState()
@@ -1354,6 +1389,11 @@ namespace WebOverlay
             retained.Clear();
         }
 
+        /// <summary>
+        /// Hands a fresh document the state the mod has been assuming. Before
+        /// the outbox, so a message the mod sent while the page was loading
+        /// wins over the older retained value on the same channel.
+        /// </summary>
         private void replayRetained()
         {
             if (retained.Count == 0)
