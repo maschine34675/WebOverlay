@@ -76,6 +76,11 @@ namespace WebOverlay
                 RememberBounds = options.RememberBounds,
                 PersistenceKey = options.PersistenceKey,
                 DispatchOnMainThread = options.DispatchOnMainThread,
+                // One decision, two ways of expressing it: the older flag wins
+                // only where the newer one says nothing.
+                Dispatch = options.Dispatch != EventDispatch.OverlayThread ? options.Dispatch
+                    : options.DispatchOnMainThread ? EventDispatch.MainThread
+                    : EventDispatch.OverlayThread,
                 InjectTheme = options.InjectTheme,
                 FreeCursorWhileShown = options.FreeCursorWhileShown,
                 VirtualHosts = copy(options.VirtualHosts),
@@ -155,6 +160,73 @@ namespace WebOverlay
         /// than let the page's own host name reach the network.
         /// </summary>
         VirtualHostFailed,
+    }
+
+    /// <summary>
+    /// Which thread an overlay's events arrive on.
+    /// </summary>
+    public enum EventDispatch
+    {
+        /// <summary>
+        /// The library's own thread, as events have always arrived. Queue what
+        /// a handler learns and touch game state from your own `Update`.
+        /// </summary>
+        OverlayThread = 0,
+
+        /// <summary>
+        /// The game's main thread, delivered from the library plugin's
+        /// `Update`, so a handler may touch Unity objects directly. Costs up
+        /// to one frame - and note whose frame: the work happens inside the
+        /// library's `Update`, so a profiler bills it there and its place in
+        /// the frame follows plugin load order.
+        /// </summary>
+        MainThread,
+
+        /// <summary>
+        /// The game's main thread, but on your terms: events wait until you
+        /// call <see cref="IWebOverlay.PumpEvents"/>, so they run inside your
+        /// own `Update`, at the point you choose, on your own frame budget.
+        /// An overlay set to this and never pumped receives nothing - the
+        /// queue fills and then drops, with one warning.
+        /// </summary>
+        Manual,
+    }
+
+    /// <summary>
+    /// How a channel message should be treated beyond sending it once.
+    /// </summary>
+    [Flags]
+    public enum PostOptions
+    {
+        /// <summary>Sent once, to whoever is listening now.</summary>
+        None = 0,
+
+        /// <summary>
+        /// Remembered as the current value of this channel and re-sent to
+        /// every page that loads afterwards, before anything else reaches it.
+        /// The library reloads a page by itself after a renderer crash, and a
+        /// fresh document starts from its own defaults - so configuration a
+        /// mod sent once would quietly be lost mid-session. Only the newest
+        /// retained payload per channel is kept, and retargeting the overlay
+        /// with <see cref="IWebOverlay.LoadHtml"/> or
+        /// <see cref="IWebOverlay.Navigate"/> forgets them all: the page
+        /// changed, so its state is not the new page's state.
+        /// </summary>
+        Retain = 1,
+
+        /// <summary>
+        /// Worth sending only while it is the newest: if the page has not
+        /// received the previous payload on this channel yet, that one is
+        /// dropped and this takes its place. For per-frame telemetry - marker
+        /// positions, a camera feed - where an older frame has no value once a
+        /// newer one exists.
+        ///
+        /// This applies while the library still holds the message. Once it has
+        /// handed a message to the browser there is no queue here to collapse,
+        /// so a page that consumes slower than the mod sends should also ask
+        /// for `{ latest: true }` on its side of the channel.
+        /// </summary>
+        LatestOnly = 2,
     }
 
     /// <summary>
@@ -340,6 +412,14 @@ namespace WebOverlay
         public bool DispatchOnMainThread { get; set; }
 
         /// <summary>
+        /// Which thread this overlay's events arrive on, and who pays for
+        /// them. <see cref="DispatchOnMainThread"/> is the older way of saying
+        /// <see cref="EventDispatch.MainThread"/> and still works; setting
+        /// either is enough.
+        /// </summary>
+        public EventDispatch Dispatch { get; set; }
+
+        /// <summary>
         /// Puts the library's palette on the page as CSS custom properties -
         /// `--wo-gold`, `--wo-ink`, `--wo-text`, `--wo-dim`, `--wo-accent`,
         /// `--wo-font`, `--wo-border`, `--wo-radius` - so overlays from
@@ -439,6 +519,13 @@ namespace WebOverlay
         void Post(string channel, string payload);
 
         /// <summary>
+        /// The same, with <see cref="PostOptions"/> - a value the page should
+        /// get again after it reloads, or one that is only worth sending while
+        /// it is the newest.
+        /// </summary>
+        void Post(string channel, string payload, PostOptions options);
+
+        /// <summary>
         /// Asks the page a question and takes its answer, from the page's
         /// `window.overlay.onRequest(channel, ...)` handler - which may return
         /// a value or a promise. Answered exactly once: with the page's reply,
@@ -497,6 +584,14 @@ namespace WebOverlay
 
         /// <summary>Opens the browser developer tools, if enabled in the options.</summary>
         void OpenDevTools();
+
+        /// <summary>
+        /// Delivers this overlay's waiting events, on the calling thread. Only
+        /// for <see cref="EventDispatch.Manual"/>, where it is the one thing
+        /// that makes events arrive at all; call it from your own `Update`.
+        /// Harmless in the other modes, where it has nothing to deliver.
+        /// </summary>
+        void PumpEvents();
 
         /// <summary>
         /// Moves or resizes the overlay, in screen coordinates. Any argument
@@ -601,7 +696,7 @@ namespace WebOverlay
 
         public OverlayHandle(string title, string ownerName, OverlayOptions options)
         {
-            dispatchOnMainThread = options.DispatchOnMainThread;
+            dispatch = options.Dispatch;
             window = new OverlayWindow(title, ownerName, options);
             window.MessageReceived = message => raise(() => MessageReceived?.Invoke(message));
             window.ChannelMessage = (channel, payload) => raise(() => ChannelMessage?.Invoke(channel, payload));
@@ -644,7 +739,18 @@ namespace WebOverlay
             window.Failed = () => fire(ref failedHandlers, ref failedAlready);
         }
 
-        private readonly bool dispatchOnMainThread;
+        private readonly EventDispatch dispatch;
+
+        // Only used by EventDispatch.Manual: the consumer's own queue, drained
+        // when it says so.
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> manual =
+            new System.Collections.Concurrent.ConcurrentQueue<Action>();
+        private int manualQueued;
+        private int manualOverflowWarned;
+
+        // Far above a frame's worth of events at any sane rate; a consumer
+        // that never pumps should notice, not grow without bound.
+        private const int ManualQueueLimit = 4096;
 
         /// <summary>
         /// Hands one event to the consumer, on the game's main thread when the
@@ -655,13 +761,44 @@ namespace WebOverlay
         /// </summary>
         private void raise(Action invoke)
         {
-            if (!dispatchOnMainThread || !OverlayHost.DispatchToMainThread(() =>
+            if (dispatch == EventDispatch.Manual)
+            {
+                enqueueManual(() =>
+                {
+                    if (disposed == 0)
+                        invokeIsolated(invoke);
+                });
+                return;
+            }
+            if (dispatch != EventDispatch.MainThread || !OverlayHost.DispatchToMainThread(() =>
                 {
                     if (disposed == 0)
                         invokeIsolated(invoke);
                 }))
             {
                 invokeIsolated(invoke);
+            }
+        }
+
+        private void enqueueManual(Action action)
+        {
+            if (System.Threading.Interlocked.Increment(ref manualQueued) > ManualQueueLimit)
+            {
+                System.Threading.Interlocked.Decrement(ref manualQueued);
+                if (System.Threading.Interlocked.Exchange(ref manualOverflowWarned, 1) == 0)
+                    OverlayHost.LogWarning("this overlay's event queue is full (" + ManualQueueLimit
+                        + ") and events are being dropped - is anything calling PumpEvents?");
+                return;
+            }
+            manual.Enqueue(action);
+        }
+
+        public void PumpEvents()
+        {
+            while (manual.TryDequeue(out Action action))
+            {
+                System.Threading.Interlocked.Decrement(ref manualQueued);
+                action();
             }
         }
 
@@ -675,7 +812,15 @@ namespace WebOverlay
         /// </summary>
         private void raiseResult(Action invoke)
         {
-            if (!dispatchOnMainThread || !OverlayHost.DispatchToMainThread(() => invokeIsolated(invoke)))
+            // Queued like everything else in Manual mode: a consumer that owns
+            // the delivery point owns it for answers too, and must keep
+            // pumping while it is waiting for one.
+            if (dispatch == EventDispatch.Manual)
+            {
+                enqueueManual(() => invokeIsolated(invoke));
+                return;
+            }
+            if (dispatch != EventDispatch.MainThread || !OverlayHost.DispatchToMainThread(() => invokeIsolated(invoke)))
                 invokeIsolated(invoke);
         }
 
@@ -797,7 +942,11 @@ namespace WebOverlay
 
         public void Post(string message) => post(() => window.PostMessageToPage(message));
 
-        public void Post(string channel, string payload) => post(() => window.PostToChannel(channel, payload));
+        public void Post(string channel, string payload) =>
+            Post(channel, payload, PostOptions.None);
+
+        public void Post(string channel, string payload, PostOptions options) =>
+            post(() => window.PostToChannel(channel, payload, options));
 
         public void Request(string channel, string payload, Action<string> answer) =>
             Request(channel, payload, answer, 5000);

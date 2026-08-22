@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-36 were added for v1.3.0 to v1.7.0
+and re-run unchanged for v1.4.0; rows 10-39 were added for v1.3.0 to v1.8.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -45,6 +45,9 @@ and re-run unchanged for v1.4.0; rows 10-36 were added for v1.3.0 to v1.7.0
 | 33 | The same overlays in the other order | all come up in one browser - no second browser is created when the first one can still serve windowed views | PASS |
 | 34 | Browser processes and memory with a window, then with a HUD added | one extra process and 53 MB, because that order needs no second browser (the collision order costs about six processes and 258 MB) | PASS |
 | 35 | Talking to an overlay that is already up while a second browser starts for another one | the message arrives - only overlay creation waits for a browser, commands do not | PASS |
+| 37 | A page that reloads with retained state set, then a retarget | the fresh page gets the newest retained payload per channel and nothing else; a page the mod retargeted to starts clean | PASS |
+| 38 | 200 latest-only messages before the page can receive any, plus a page asking for `{ latest: true }` | the library delivers one - the newest - while an ordinary message beside them is untouched; the page gets a handful instead of fifty | PASS |
+| 39 | `Dispatch = Manual` | nothing arrives, including `PageLoaded`, until `PumpEvents()`; then on the pumping thread | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):
@@ -73,4 +76,4 @@ map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
 `nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
-`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `footprint`, `spare-browser`, `spare-folder`.
+`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `footprint`, `spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`.

@@ -60,7 +60,16 @@ namespace WebOverlay
             public bool IsScript;
             public string Payload;
             public Action<string> Result;
+
+            /// <summary>Set for a channel message that may be superseded.</summary>
+            public string LatestChannel;
         }
+
+        // The current value of each retained channel, in the order the mod
+        // first sent them, so a page that loads later - or reloads after a
+        // renderer crash - starts from the state the mod thinks it is in.
+        private readonly List<KeyValuePair<string, string>> retained =
+            new List<KeyValuePair<string, string>>();
 
         // The shape the overlay is cut down to, or null for the whole window.
         private WebView2Api.RECT[] shape;
@@ -761,6 +770,7 @@ namespace WebOverlay
                     // the original target.
                     if (currentDocumentIsTarget())
                     {
+                        replayRetained();
                         flushOutbox();
                         // "The mod's own page is live", which is what a
                         // consumer means by loaded - not merely "a document
@@ -993,12 +1003,17 @@ namespace WebOverlay
             if (string.IsNullOrEmpty(url))
                 return;
             TargetState previous = captureTarget();
+            bool retargeting = previous.Url != null || previous.Html != null;
             pendingUrl = url;
             pendingHtml = null;
             htmlLoaded = false;
             expectInlineNavigation = false;
-            // Anything still buffered was meant for the previous page.
-            clearOutbox();
+            // Anything still buffered - and anything remembered - was meant
+            // for the previous page. Choosing the first page is not that: a
+            // mod that sets its state up before naming the page should keep
+            // it, which is the order the state is worth having in.
+            if (retargeting)
+                forgetPageState();
             // The mod asked for this page, so its origin becomes trusted.
             allowOrigin(url);
             if (webView == IntPtr.Zero)
@@ -1072,10 +1087,12 @@ namespace WebOverlay
             if (html == null)
                 return;
             TargetState previous = captureTarget();
+            bool retargeting = pendingUrl != null || pendingHtml != null;
             pendingHtml = html;
             pendingUrl = null;
             htmlLoaded = true;
-            clearOutbox();
+            if (retargeting)
+                forgetPageState();
             if (webView == IntPtr.Zero)
                 return;
             pageReady = false;
@@ -1292,11 +1309,58 @@ namespace WebOverlay
         }
 
         /// <summary>Sends a message to the page on a named channel.</summary>
-        public void PostToChannel(string channel, string payload)
+        public void PostToChannel(string channel, string payload, PostOptions options)
         {
             if (channel == null)
                 return;
-            PostMessageToPage(ChannelProtocol.Message(channel, payload));
+            if ((options & PostOptions.Retain) != 0)
+            {
+                remember(channel, payload);
+                // No point buffering it as well: the page cannot have it yet,
+                // and the replay on load is what will hand it over - buffering
+                // too would deliver the same value twice.
+                if (webView == IntPtr.Zero || !pageReady)
+                    return;
+            }
+            PostMessageToPage(ChannelProtocol.Message(channel, payload),
+                (options & PostOptions.LatestOnly) != 0 ? channel : null);
+        }
+
+        private void remember(string channel, string payload)
+        {
+            for (int i = 0; i < retained.Count; i++)
+            {
+                if (retained[i].Key != channel)
+                    continue;
+                // Newest wins, but keeps its place: the order a mod set these
+                // up in is the order a fresh page should see them.
+                retained[i] = new KeyValuePair<string, string>(channel, payload);
+                return;
+            }
+            retained.Add(new KeyValuePair<string, string>(channel, payload));
+        }
+
+        /// <summary>
+        /// Hands a fresh document the state the mod has been assuming. Before
+        /// the outbox, so a message the mod sent while the page was loading
+        /// wins over the older retained value on the same channel.
+        /// </summary>
+        /// <summary>
+        /// Everything that was meant for the page being left behind.
+        /// </summary>
+        private void forgetPageState()
+        {
+            clearOutbox();
+            retained.Clear();
+        }
+
+        private void replayRetained()
+        {
+            if (retained.Count == 0)
+                return;
+            var values = retained.ToArray();
+            foreach (KeyValuePair<string, string> value in values)
+                PostMessageToPage(ChannelProtocol.Message(value.Key, value.Value), null);
         }
 
         /// <summary>
@@ -1371,7 +1435,9 @@ namespace WebOverlay
             stopRequestTimerIfIdle();
         }
 
-        public void PostMessageToPage(string message)
+        public void PostMessageToPage(string message) => PostMessageToPage(message, null);
+
+        public void PostMessageToPage(string message, string latestChannel)
         {
             if (message == null)
                 return;
@@ -1380,7 +1446,7 @@ namespace WebOverlay
             // live send only goes out while the mod's own target is showing.
             if (webView == IntPtr.Zero || !pageReady)
             {
-                buffer(false, message);
+                buffer(false, message, null, latestChannel);
                 return;
             }
             if (!currentDocumentIsTarget())
@@ -1466,11 +1532,33 @@ namespace WebOverlay
             }
         }
 
-        private void buffer(bool isScript, string payload, Action<string> result = null)
+        private void buffer(bool isScript, string payload, Action<string> result = null,
+            string latestChannel = null)
         {
+            if (latestChannel != null)
+            {
+                // Only the newest is worth keeping: the page has not seen any
+                // of these yet, so an older one would only be a stale frame
+                // rendered before the current one.
+                for (int i = 0; i < outbox.Count; i++)
+                {
+                    if (outbox[i].LatestChannel != latestChannel)
+                        continue;
+                    Pending existing = outbox[i];
+                    existing.Payload = payload;
+                    outbox[i] = existing;
+                    return;
+                }
+            }
             if (outbox.Count < OutboxLimit)
             {
-                outbox.Add(new Pending { IsScript = isScript, Payload = payload, Result = result });
+                outbox.Add(new Pending
+                {
+                    IsScript = isScript,
+                    Payload = payload,
+                    Result = result,
+                    LatestChannel = latestChannel,
+                });
                 return;
             }
             overflowDropped++;

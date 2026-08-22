@@ -9,6 +9,44 @@ field, followed by the detailed record for anyone reading the source later.
 
 ## [Unreleased]
 
+## [1.8.0]
+
+### Forge version notes
+
+Nothing changes for players - this release is for the mods that use the
+library.
+
+- A mod's settings survive a page reload: after a browser hiccup the overlay
+  comes back the way it was instead of falling back to its defaults.
+- Overlays that stream live data (markers, telemetry) can keep up instead of
+  falling behind when the game stutters.
+
+### Added
+
+- `Post(channel, payload, PostOptions.Retain)` - the payload is remembered per
+  channel and replayed to every page that loads afterwards, before anything
+  else reaches it. The library reloads a page by itself after a renderer crash,
+  and a fresh document starts from its own defaults, so configuration sent once
+  was quietly lost mid-session with the mod's dirty-check none the wiser.
+  Retargeting the overlay forgets them; setting state up before naming the
+  first page does not.
+- `PostOptions.LatestOnly` - a payload still held by the library is replaced by
+  a newer one on the same channel, and `overlay.on(channel, fn, { latest: true })`
+  hands the page the newest payload once per frame rather than the backlog.
+  Once a message has gone to the browser there is no queue here to collapse,
+  which is why the page has a half of this.
+- `OverlayOptions.Dispatch` with `EventDispatch.Manual` and
+  `IWebOverlay.PumpEvents()`: events wait until the consumer asks, so they run
+  inside its own `Update`, at the point it chooses, on its own frame budget.
+  `DispatchOnMainThread` keeps working as the older way of saying
+  `EventDispatch.MainThread`.
+
+### Fixed
+
+- Messages and retained state set up before the first `LoadHtml` or `Navigate`
+  are no longer discarded by it. Only a real retarget - away from a page that
+  existed - forgets what was meant for the page being left.
+
 ## [1.7.0]
 
 ### Forge version notes

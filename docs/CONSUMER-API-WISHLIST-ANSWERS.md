@@ -7,7 +7,10 @@ verified by the probe host (`vhost`, `dispatch`, `failure-kind`,
 Entry 8 and the throwing half of 9 stay declined for the reasons given.
 
 Entries 10-22 arrived later, from ModProfiler and QuestMarkers; they are
-answered at the end of this document and none of them is implemented yet.
+answered at the end of this document. Of those, 10, 12, 13, 18, 19 and 21
+shipped in v1.7.0, and 11, 16 and 17 in v1.8.0 - 17 as the two halves the
+library can honestly deliver. What remains is documentation (14, 22) and
+giving the probe host a home (20).
 
 **One correction to this document:** entry 7 below proposes hit-test regions
 as the better answer, keeping the picture and giving up only the mouse. That

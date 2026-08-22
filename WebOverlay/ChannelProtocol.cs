@@ -92,14 +92,37 @@ namespace WebOverlay
   }
   window.overlay = {
     env: env,
-    on: function (channel, fn) {
-      (handlers[channel] = handlers[channel] || []).push(fn);
+    on: function (channel, fn, options) {
+      var handler = fn;
+      if (options && options.latest) {
+        // Only the newest payload is worth rendering: keep it, and hand it
+        // over once per frame instead of running behind.
+        var pending = null, scheduled = false;
+        handler = function (p) {
+          pending = p;
+          if (scheduled) return;
+          scheduled = true;
+          var deliver = function () {
+            scheduled = false;
+            var value = pending;
+            pending = null;
+            try { fn(value); } catch (x) { }
+          };
+          if (window.requestAnimationFrame) window.requestAnimationFrame(deliver);
+          else setTimeout(deliver, 16);
+        };
+        handler.inner = fn;
+      }
+      (handlers[channel] = handlers[channel] || []).push(handler);
     },
     off: function (channel, fn) {
       var list = handlers[channel];
       if (!list) return;
-      var i = list.indexOf(fn);
-      if (i >= 0) list.splice(i, 1);
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] !== fn && list[i].inner !== fn) continue;
+        list.splice(i, 1);
+        return;
+      }
     },
     send: function (channel, payload) {
       send({ __wo: 1, t: 'm', c: String(channel), p: text(payload) });

@@ -85,8 +85,11 @@ dropped.
 One thing to know before doing real work in a dispatched handler: it runs
 inside **this library's** `Update`, so a profiler bills the time to the library
 rather than to your mod, and where it lands in the frame depends on plugin load
-order. Keep such handlers short and do the work from your own `Update` if
-either matters to you.
+order. Keep such handlers short - or take
+`Dispatch = EventDispatch.Manual` and call `PumpEvents()` from your own
+`Update`, which delivers the same events at the point you choose and on your
+own frame budget. Nothing arrives until you pump, so a mod that stops pumping
+stops hearing.
 
 When another mod ships alongside this library, reference it with
 `<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your
@@ -125,6 +128,7 @@ describes the library as it is now.
 | `RememberBounds` | true | Reopen at the position and size the player left the window at, across sessions. |
 | `PersistenceKey` | assembly/title | Storage key for the remembered bounds. |
 | `DispatchOnMainThread` | false | Raise this overlay's events from the game's main thread (see below). |
+| `Dispatch` | OverlayThread | Where events arrive: `OverlayThread`, `MainThread`, or `Manual` with `PumpEvents()`. |
 | `InjectTheme` | false | Put the library palette on the page as CSS variables (see `docs/STYLE.md`). |
 | `FreeCursorWhileShown` | false | Hand the cursor back while this overlay is up and the game is unfocused. |
 | `VirtualHosts` | null | Folders served as `https://<host>/`, so the page can load real files (see below). |
@@ -137,6 +141,8 @@ describes the library as it is now.
 | `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
 | `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
 | `Post(channel, payload)` | Send on a named channel; arrives at the page's `overlay.on(channel, ...)`. |
+| `Post(channel, payload, options)` | The same, `Retain`ed for pages that load later or only worth sending while `LatestOnly` (see below). |
+| `PumpEvents()` | Deliver this overlay's waiting events, for `Dispatch = Manual`. |
 | `Request(channel, payload, answer)` | Ask the page a question; answered exactly once, `null` on timeout. |
 | `OnRequest(channel, handler)` | Answer questions the page asks with `overlay.request(...)`; null removes the handler. Take `(payload, reply)` instead of returning a value when the answer is not ready yet. |
 | `Transparency` | Which transparency this overlay got: `Composition`, `ChromaKey` or `None`. |
@@ -208,6 +214,33 @@ overlay.on('fps', value => show(value));           // mod -> page
 overlay.send('button', 'reload');                  // page -> mod
 overlay.onRequest('zoom', v => applyZoom(v));      // mod asks; may return a promise
 overlay.request('stash', 'ammo').then(json => ...) // page asks, resolves with the answer
+```
+
+Two things a channel message can be beyond "send this now":
+
+```csharp
+overlay.Post("config", json, PostOptions.Retain);       // every page that loads gets it
+overlay.Post("frame", data, PostOptions.LatestOnly);    // only while it is the newest
+```
+
+**Retained** is the answer to a trap: the library reloads a page by itself
+after a renderer crash, and the fresh document starts from its own defaults -
+so configuration a mod sent once is quietly gone mid-session, and the mod's own
+dirty-check sees no change to re-send. A retained payload is remembered per
+channel and handed to every page that loads afterwards, before anything else
+reaches it. Retargeting the overlay with `LoadHtml` or `Navigate` forgets them:
+the page changed, so its state is not the new page's state. (Setting state up
+*before* naming the first page is fine - that page is the one it was meant
+for.)
+
+**Latest-only** drops a payload that has not been sent yet when a newer one on
+the same channel arrives, which is what per-frame telemetry wants. It applies
+while the library still holds the message; once it has gone to the browser
+there is no queue here to collapse. The other half is in the page, which is
+where a backlog actually forms:
+
+```js
+overlay.on('frame', draw, { latest: true });   // newest payload, once per frame
 ```
 
 A request is answered **exactly once**: with the other side's reply, with
