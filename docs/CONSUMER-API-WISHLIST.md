@@ -359,3 +359,164 @@ additive, so consumers gate on "at least X.Y".
 - `window.overlay` is absent outside the library (a page opened in a plain
   browser); a one-line guard in the page is enough, and a README sentence
   would spare the first confused console.
+
+---
+
+# Third round (2026-08-22, from the QuestMarkers side)
+
+Written after building QuestMarkers on 1.6.0 - a display-only HUD that
+streams one projected marker frame per rendered frame over a channel - and
+running its adversarial review. Entries 1-9 are answered in
+`CONSUMER-API-WISHLIST-ANSWERS.md`, 10-15 are the ModProfiler round; this one
+starts at 16 and repeats nothing from either. As before, nothing here is a bug
+report - several are traps every HUD consumer walks into and then fixes on its
+own side, which is exactly the kind of work a library exists to absorb.
+
+## 16. Retained messages on a channel
+
+**Today:** the library reloads the same page silently after a renderer crash
+(bounded attempts, no `Failed`), and `PageLoaded` fires again. The fresh
+document starts with its built-in defaults. QuestMarkers' review found that its
+display options would have quietly reverted mid-raid - the dirty-check on the
+mod side saw no change and never resent them. The fix was "re-post the config
+from `PageLoaded`", which every consumer with page-side configuration needs and
+none would think of until a GPU reset hits a player.
+
+**Sketch:**
+
+```csharp
+void Post(string channel, string payload, bool retain);   // retain: replay on (re)load
+```
+
+The library keeps the last retained payload per channel and replays it to every
+document that loads for the same target - a reload after a crash included - in
+channel order, before anything else. A retarget via `LoadHtml`/`Navigate`
+clears the set, since the page changed. This is the MQTT "retained message"
+idea, and it turns a trap into a one-word flag.
+
+## 17. Latest-wins delivery for streaming channels
+
+**Today:** every `Post` is queued in order and delivered in order. At the
+measured ~9,600 messages/s that is invisible - until it is not: a GC pause, a
+renderer busy with a reload, or a hidden-then-shown overlay leaves a queue of
+per-frame marker frames that are all stale on arrival, and the markers
+visibly trail the camera while the page catches up. A consumer cannot fix this
+from outside; by the time it could notice, the frames are already queued.
+
+**Sketch:**
+
+```csharp
+void Post(string channel, string payload, bool latestOnly);   // or PostLatest(...)
+```
+
+A message flagged latest-only replaces any still-undelivered payload on the
+same channel instead of being appended - in the pre-load outbox and in the
+delivery queue alike. Per-frame telemetry (markers, the demo's `view` feed,
+ModProfiler's snapshots) is exactly the traffic this is for; ordinary messages
+keep their ordering guarantee untouched. Combines naturally with 16 as two
+flags on the same overload.
+
+## 18. `Show()` should refuse exclusive fullscreen itself
+
+**Today:** `WebOverlayPlugin.IsDisplayModeSupported` is the consumer's job to
+check before *every* `Show()`, including the re-show of an overlay created
+earlier. QuestMarkers had the check on its creation path only; the review
+caught the re-show path, where a player who switched to exclusive fullscreen
+mid-session would have had the game minimised at the next raid start. Every
+consumer has at least two Show paths and gets this wrong in one of them.
+
+**Sketch:** the plugin already registers a main-thread dispatcher into the
+Unity-free core (entry 3). Register a display-mode probe the same way, and let
+`Show()` log once and stay hidden - `VisibilityChanged(false)` if anything - when
+it reports exclusive fullscreen. The consumer's own check becomes optional
+instead of load-bearing.
+
+## 19. Tell the page which transparency it got
+
+**Today:** a `Transparent` HUD is composition hosted or falls back to the
+chroma key, and the README explains how differently `rgba()` panels and soft
+shadows look in the two modes. Nothing exposes which one the overlay actually
+got - not on the handle, not to the page - so a page cannot adapt its styles,
+and a mod cannot even log it. QuestMarkers' ink panels and drop shadows are
+designed for glass and would need solid variants on chroma; today that is a
+guess.
+
+**Sketch:**
+
+```csharp
+enum OverlayTransparency { None, Composition, ChromaKey }
+OverlayTransparency Transparency { get; }      // valid once Ready
+```
+
+plus the same fact for the page without any mod code: a class on the root
+element set by the injected shim (`wo-composed` / `wo-chroma`) or
+`overlay.env.transparency`. A stylesheet can then say
+`.wo-chroma .panel { background: #1b1c18 }` and be done.
+
+## 20. A versioned page-preview tool - the probe host belongs in the repo
+
+**Today:** the empirical probe host (the net9 program that drives the real
+`Anvil-WebOverlay.dll` outside the game and proved every vtable slot) lives in
+a session scratchpad, not in the repository. QuestMarkers verified its page by
+adding a mode to it - and that render is what found the marker anchor bug (the
+pin tip sat a label's height below the target) before any raid. A consumer has
+no official way to see its page inside a real composed HUD without starting the
+game, and the library's own evidence base can be lost with a cleaned temp
+folder.
+
+**Sketch:** `tools/PagePreview` (or the probe host itself under `tools/Probe`)
+in the repo, with one consumer-facing mode:
+
+```
+PagePreview <page.html> [--backdrop dark|<image.png>] [--post <channel> <payload>]...
+            [--screenshot out.png]
+```
+
+It loads the page into a real transparent HUD over the backdrop, sends the
+given messages, and saves a screenshot. That is the whole QuestMarkers test
+loop, and it would serve the Style Studio's font gallery just as well.
+
+## 21. Shared design tokens
+
+**Today:** the demo HUD, the cube page, the glass panel and QuestMarkers all
+declare the same palette by copy-paste: gold `#c2ad6d`, ink
+`rgba(16,17,13,.72-.78)`, text `#d0cdbd`, dim `#918e7e`, the Segoe UI stack.
+Four copies already, and every new consumer makes a fifth - and a palette
+change never propagates.
+
+**Sketch, cheapest first:** a `docs/STYLE.md` listing the tokens and the panel
+recipe. Nicer: an opt-in `OverlayOptions.InjectTheme` that has the shim set CSS
+custom properties on `:root` (`--wo-gold`, `--wo-ink`, `--wo-text`, `--wo-dim`,
+`--wo-font`), so mod pages look like one family and a consumer writes
+`border-color: var(--wo-gold)` instead of a hex value. Pure consistency, no
+priority.
+
+## 22. HUD lifecycle traps worth a README section (docs only)
+
+All of these came out of the QuestMarkers review; each is one line in the code
+once known and invisible until a player reports it:
+
+- A HUD is an OS window above the game's *own* full-screen interfaces - it
+  floats over the inventory, the map, the menu and the death sequence unless
+  the consumer gates visibility on game state (EFT:
+  `EftScreenManager.Instance.CheckCurrentScreen(EEftScreenType.BattleUI)` and
+  the player's `HealthController.IsAlive`).
+- The hideout registers a `GameWorld`, a game that reaches
+  `GameStatus.Started`, and a player flagged `IsYourPlayer` - every "am I in a
+  raid" check passes there unless the world is excluded by type
+  (`HideoutGameWorld`).
+- Page-side configuration must be re-sent on every `PageLoaded` until 16
+  exists; the library reloads the page after a renderer crash.
+- The exclusive-fullscreen guard belongs on every Show path until 18 exists.
+- A page that drives visibility through both a CSS class and an inline
+  `style.opacity` will find the inline value always wins - pick one mechanism.
+  (Not a library matter, but it cost a review round, and the README's HUD
+  section is where page authors look.)
+
+## What QuestMarkers actually needs
+
+1. **16 retained messages** and **17 latest-wins** - the two that cannot be
+   built on the consumer side and directly affect how the markers feel.
+2. **18 Show guard** and **22 docs** - the traps the review had to find.
+3. **20 preview tool** - it already exists; it just needs a home.
+4. **19 transparency mode** and **21 tokens** - whenever convenient.
