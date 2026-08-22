@@ -9,14 +9,6 @@ field, followed by the detailed record for anyone reading the source later.
 
 ## [Unreleased]
 
-### Known
-
-- A windowed overlay cannot be created while the only live overlays are
-  transparent ones: WebView2 refuses to mix windowed and visual hosting in one
-  environment, and the second creation fails with `ViewFailed`
-  (`ERROR_INVALID_STATE`). Present since 1.2.0, measured 2026-08-22. The other
-  order works, so a mod whose panel opens before any HUD is unaffected.
-
 ## [1.7.0]
 
 ### Forge version notes
@@ -30,6 +22,9 @@ library.
 - The library now refuses to open a window over a game in exclusive fullscreen
   rather than relying on every mod to check first, which is what used to
   minimise the game.
+- Fixed: a mod's window failed to open while another mod's transparent overlay
+  was on screen. Two mods that use the library at the same time no longer
+  interfere with each other.
 
 ### Added
 
@@ -47,6 +42,22 @@ library.
   mouse captured.
 - `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`,
   the table two consumers had each written for themselves.
+
+### Fixed
+
+- A windowed overlay could not be created while the only live overlays were
+  transparent ones - it failed with `ViewFailed` and `ERROR_INVALID_STATE`.
+  A browser hosting visual (composed) views refuses to create a windowed one,
+  and two environments sharing a user data folder share the browser, so the
+  library now gives such a windowed overlay a browser of its own. Present since
+  1.2.0; in practice one mod's HUD broke another mod's panel, which is exactly
+  the QuestMarkers and ModProfiler combination.
+
+  The second browser is created only when that collision actually happens and
+  takes the windowed overlay, because it costs about six processes and a
+  quarter of a gigabyte (measured). A game whose mods only use HUDs, only use
+  windows, or open the window first never pays for it - measured at one extra
+  process and 53 MB for a window plus a HUD in that order.
 
 ### Changed
 

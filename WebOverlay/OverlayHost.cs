@@ -28,7 +28,13 @@ namespace WebOverlay
         private static Thread thread;
         private static IntPtr dispatcherWindow;
         private static IntPtr environment;
+        private static IntPtr spareEnvironment;
+        private static int composedControllers;
+        private static int windowedControllers;
+        private static string userDataFolder;
+        private static bool creatingEnvironment;
         private static ComCallback environmentCallback;
+        private static ComCallback spareEnvironmentCallback;
         private static WndProcDelegate dispatcherProc;
         private static volatile bool running;
         private static volatile bool stopping;
@@ -121,6 +127,107 @@ namespace WebOverlay
                 PostMessage(dispatcherWindow, WM_APP_WORK, IntPtr.Zero, IntPtr.Zero);
         }
 
+        /// <summary>
+        /// Which browser an overlay of this kind has to be built from.
+        ///
+        /// A browser hosting a transparent overlay refuses to create a
+        /// windowed one: the second creation fails with ERROR_INVALID_STATE,
+        /// which in practice is one mod's HUD breaking another mod's panel.
+        /// Two environments sharing a user data folder share the browser
+        /// process, so the way out is a second browser with a folder of its
+        /// own - and that costs real memory (measured: about six processes and
+        /// a quarter of a gigabyte). So it is created only when the collision
+        /// actually happens, and it takes the windowed overlay: a game whose
+        /// mods only use HUDs, only use windows, or open the window first
+        /// never pays for it.
+        /// </summary>
+        internal static IntPtr EnvironmentFor(bool composed)
+        {
+            // A windowed view is refused only when the browser is hosting
+            // transparent overlays and nothing windowed - measured: with a
+            // windowed view already alive there, another one is fine. So the
+            // second browser is for the one case that actually needs it.
+            if (composed || composedControllers == 0 || windowedControllers > 0)
+                return environment;
+            if (spareEnvironment == IntPtr.Zero)
+                createSpareEnvironment();
+            return spareEnvironment;
+        }
+
+        /// <summary>
+        /// Counted so the decision above can be made: a live transparent
+        /// overlay is what makes the main browser refuse windowed ones.
+        /// Both are called on the overlay thread.
+        /// </summary>
+        internal static void ComposedControllerOpened() => composedControllers++;
+
+        /// <summary>Windowed views in the main browser, for the same decision.</summary>
+        internal static void WindowedControllerOpened(bool inMainEnvironment)
+        {
+            if (inMainEnvironment)
+                windowedControllers++;
+        }
+
+        internal static void WindowedControllerClosed(bool inMainEnvironment)
+        {
+            if (inMainEnvironment && windowedControllers > 0)
+                windowedControllers--;
+        }
+
+        internal static void ComposedControllerClosed()
+        {
+            if (composedControllers > 0)
+                composedControllers--;
+        }
+
+        /// <summary>
+        /// Runs on the overlay thread, inside the work item that is creating
+        /// the overlay that needs it.
+        /// </summary>
+        private static void createSpareEnvironment()
+        {
+            if (spareEnvironment != IntPtr.Zero || environment == IntPtr.Zero || stopping)
+                return;
+
+            LogInfo("a transparent overlay is open, so this windowed overlay needs a second browser.");
+
+            // Waiting for an environment means pumping messages, and pumping
+            // would otherwise let the next queued overlay start on top of the
+            // one being created. The queue keeps until this returns.
+            creatingEnvironment = true;
+            try
+            {
+                spareEnvironment = createEnvironment(userDataFolder + SpareSuffix,
+                    "the second browser", out spareEnvironmentCallback, required: false);
+            }
+            finally
+            {
+                creatingEnvironment = false;
+            }
+
+            if (spareEnvironment == IntPtr.Zero)
+            {
+                // Falling back to the main browser is the old behaviour,
+                // including its defect - better than refusing outright.
+                LogWarning("no second browser; this overlay will fail to open while"
+                    + " a transparent one is up.");
+                spareEnvironment = environment;
+            }
+
+            // Work that arrived while the queue was held needs a nudge, since
+            // the message that would have drained it is long gone.
+            if (dispatcherWindow != IntPtr.Zero)
+                PostMessage(dispatcherWindow, WM_APP_WORK, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        /// <summary>
+        /// A folder of its own is the whole point: environments that share one
+        /// share the browser process, and the browser is what refuses to host
+        /// both kinds.
+        /// </summary>
+        private const string SpareSuffix = "-windowed";
+
+        /// <summary>The windowed environment; whether the library started.</summary>
         internal static IntPtr Environment => environment;
 
         /// <summary>
@@ -263,7 +370,7 @@ namespace WebOverlay
                 return;
             try
             {
-                bool started = createDispatcherWindow() && loadRuntime() && createEnvironment();
+                bool started = createDispatcherWindow() && loadRuntime() && createEnvironments();
                 if (!started)
                     startFailed = true;
 
@@ -362,77 +469,106 @@ namespace WebOverlay
             return true;
         }
 
-        private static bool createEnvironment()
+        /// <summary>
+        /// The browser every windowed overlay is built from. The second one,
+        /// for transparent overlays, waits until something actually asks for
+        /// it - see <see cref="EnvironmentFor"/>.
+        /// </summary>
+        private static bool createEnvironments()
         {
             // Never under the game folder, which may be read-only.
             string userData = Path.Combine(
                 System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
                 "WebOverlay", "BrowserData");
             Directory.CreateDirectory(userData);
+            userDataFolder = userData;
 
-            environmentCallback = new ComCallback(WebView2Api.IID_EnvironmentCompleted, (int result, IntPtr pointer) =>
+            environment = createEnvironment(userData, "the browser environment",
+                out environmentCallback, required: true);
+            return environment != IntPtr.Zero;
+        }
+
+        private static IntPtr createEnvironment(string userData, string what,
+            out ComCallback callback, bool required)
+        {
+            IntPtr created = IntPtr.Zero;
+            bool refused = false;
+            callback = new ComCallback(WebView2Api.IID_EnvironmentCompleted, (int result, IntPtr pointer) =>
             {
                 // A completion that arrives after the start already timed out
-                // must not adopt the environment: EnsureStarted is latched to
-                // failure, nobody would ever use it, and the browser process
-                // would idle until game exit. Not storing it lets the browser
-                // shut itself down.
+                // must not adopt the environment: nobody would ever use it,
+                // and the browser process would idle until game exit. Not
+                // storing it lets the browser shut itself down.
                 if (startFailed || stopping)
                 {
-                    LogWarning("a late browser environment arrived after the timeout; discarding it.");
+                    LogWarning("a late environment arrived after the timeout; discarding it.");
                     return WebView2Api.S_OK;
                 }
 
                 if (result == WebView2Api.S_OK && pointer != IntPtr.Zero)
                 {
-                    environment = pointer;
-                    Marshal.AddRef(environment);
+                    created = pointer;
+                    Marshal.AddRef(created);
                 }
                 else
                 {
-                    startFailure(OverlayFailure.EnvironmentFailed,
-                        "the browser environment failed, hr=0x" + result.ToString("X8") + ".");
+                    refused = true;
+                    report(required, OverlayFailure.EnvironmentFailed,
+                        what + " failed, hr=0x" + result.ToString("X8") + ".");
                 }
 
                 return WebView2Api.S_OK;
             });
 
             int hr = WebView2Api.CreateCoreWebView2EnvironmentWithOptions(
-                null, userData, IntPtr.Zero, environmentCallback.Pointer);
+                null, userData, IntPtr.Zero, callback.Pointer);
             if (hr != WebView2Api.S_OK)
             {
-                startFailure(OverlayFailure.EnvironmentFailed,
-                    "could not request a browser environment, hr=0x" + hr.ToString("X8") + ".");
-                return false;
+                report(required, OverlayFailure.EnvironmentFailed,
+                    "could not request " + what + ", hr=0x" + hr.ToString("X8") + ".");
+                return IntPtr.Zero;
             }
 
             // The completion may arrive re-entrantly or through the pump. This
             // wait runs on the overlay thread, never on Unity's - and a
             // shutdown mid-wait ends it instead of holding the thread for the
-            // full timeout.
-            // Also ends the moment the completion reports a failure: waiting
-            // out the full timeout after a definitive "no" would delay every
-            // consumer's fallback by half a minute and bury the real cause
-            // under a timeout message.
+            // full timeout. It also ends the moment the completion reports a
+            // failure: waiting out the full timeout after a definitive "no"
+            // would delay every consumer's fallback by half a minute and bury
+            // the real cause under a timeout message.
             var timer = System.Diagnostics.Stopwatch.StartNew();
-            while (environment == IntPtr.Zero && !stopping
-                && StartFailure == OverlayFailure.Unknown
+            while (created == IntPtr.Zero && !stopping && !refused
                 && timer.Elapsed.TotalSeconds < 30)
             {
                 pump();
                 Thread.Sleep(5);
             }
 
-            if (environment == IntPtr.Zero && !stopping && StartFailure == OverlayFailure.Unknown)
-            {
-                startFailure(OverlayFailure.EnvironmentFailed,
-                    "the browser environment did not start within 30 seconds.");
-            }
-            return environment != IntPtr.Zero;
+            if (created == IntPtr.Zero && !stopping && !refused)
+                report(required, OverlayFailure.EnvironmentFailed,
+                    what + " did not start within 30 seconds.");
+            return created;
+        }
+
+        /// <summary>
+        /// A required environment failing is why the library cannot work; an
+        /// optional one failing is worth knowing but not a start failure.
+        /// </summary>
+        private static void report(bool required, OverlayFailure kind, string reason)
+        {
+            if (required)
+                startFailure(kind, reason);
+            else
+                LogWarning(reason);
         }
 
         private static void drainWork()
         {
+            // Held while an environment is being created: that wait pumps
+            // messages, and running the next overlay's creation from inside
+            // this one is exactly what the hold prevents.
+            if (creatingEnvironment)
+                return;
             while (work.TryDequeue(out Action action))
             {
                 try
@@ -498,6 +634,12 @@ namespace WebOverlay
 
             try
             {
+                // Aliased when the second one could not be created; releasing
+                // it twice would be a double free.
+                bool shared = spareEnvironment == environment;
+                if (spareEnvironment != IntPtr.Zero && !shared)
+                    Marshal.Release(spareEnvironment);
+                spareEnvironment = IntPtr.Zero;
                 if (environment != IntPtr.Zero)
                 {
                     Marshal.Release(environment);
@@ -506,7 +648,7 @@ namespace WebOverlay
             }
             catch (Exception ex)
             {
-                LogWarning("releasing the environment failed (" + ex.GetType().Name + ").");
+                LogWarning("releasing the environments failed (" + ex.GetType().Name + ").");
             }
 
             // environmentCallback is deliberately never disposed: if the

@@ -446,10 +446,17 @@ absent) - target WebGL.
   decided per interface at `QueryInterface` time, so an older runtime does not
   fail to load; individual capabilities simply fall back, exactly as HUD
   transparency does when composition support is missing.
-- **One browser for the whole game.** Every WebView2 environment starts its own
-  browser process tree and wants its user-data folder to itself, so the library
-  keeps a single environment and gives out as many overlay windows as mods ask
-  for.
+- **One browser for the whole game, almost always.** Every WebView2 environment
+  starts its own browser process tree and wants its user-data folder to itself,
+  so the library keeps a single environment and gives out as many overlay
+  windows as mods ask for. There is one exception, forced by the browser: a
+  browser that is hosting a transparent overlay refuses to create a windowed
+  one (`ERROR_INVALID_STATE`), and environments sharing a user data folder
+  share the browser. So when a mod opens a window while another mod's
+  transparent overlay is up, that window gets a second browser of its own -
+  about six processes and a quarter of a gigabyte, measured, which is why it is
+  created only for that case and not up front. Pages in it have their own
+  browser profile, so per-origin storage does not carry across.
 - **Its own thread.** WebView2 is COM and needs a thread that is STA and pumps
   messages. The game's main thread is neither, so the library runs one.
 - **Owned popup windows, not child windows.** Unity presents through a

@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-31 were added for v1.3.0 to v1.7.0
+and re-run unchanged for v1.4.0; rows 10-34 were added for v1.3.0 to v1.7.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -41,11 +41,9 @@ and re-run unchanged for v1.4.0; rows 10-31 were added for v1.3.0 to v1.7.0
 | 29 | A deferred request answered from a background thread a second later, and one whose handler throws | both reach the page - the late answer with its value, the throwing one with null | PASS |
 | 30 | The transparency a page is told about, with and without the theme | `wo-composed` / `wo-opaque` on the root element, `overlay.env` agreeing with the handle, palette variables only when asked for | PASS |
 | 31 | `Show()` while the display-mode probe reports exclusive fullscreen, then not | refused and logged, then shown again - without a `Failed` in between | PASS |
-
-Two modes record a defect rather than a guarantee: `mixed` shows that a
-windowed overlay cannot be created while the only live overlays are transparent
-ones, and `mixed-reverse` shows the same combination working in the other
-order. They are expected to fail until that is fixed; see the changelog.
+| 32 | A transparent overlay first, then a windowed one, then more of both | all come up: the windowed one gets a second browser, since a browser hosting composed views refuses windowed ones | PASS |
+| 33 | The same overlays in the other order | all come up in one browser - no second browser is created when the first one can still serve windowed views | PASS |
+| 34 | Browser processes and memory with a window, then with a HUD added | one extra process and 53 MB, because that order needs no second browser (the collision order costs about six processes and 258 MB) | PASS |
 
 Not automated (manually covered in game during development, or accepted):
 
@@ -69,4 +67,4 @@ map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
 `nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
-`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`.
+`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `footprint`.

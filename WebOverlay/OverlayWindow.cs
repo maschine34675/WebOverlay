@@ -136,6 +136,7 @@ namespace WebOverlay
         private bool closed;
         private bool everPositioned;
         private bool warnedAboutFullscreen;
+        private bool windowedInMainEnvironment;
         private int renderRecoveries;
         private int overflowDropped;
 
@@ -312,6 +313,9 @@ namespace WebOverlay
             if (usesComposition)
                 return createComposedView();
 
+            // Chosen up front, because the completion below needs to know
+            // which browser this view ended up in.
+            IntPtr host = OverlayHost.EnvironmentFor(false);
             controllerCallback = new ComCallback(WebView2Api.IID_ControllerCompleted, (int result, IntPtr pointer) =>
             {
                 // Disposed while the browser was still starting: expected, not
@@ -334,6 +338,11 @@ namespace WebOverlay
 
                 controller = pointer;
                 Marshal.AddRef(controller);
+                if (!usesComposition)
+                {
+                    windowedInMainEnvironment = host == OverlayHost.Environment;
+                    OverlayHost.WindowedControllerOpened(windowedInMainEnvironment);
+                }
                 try
                 {
                     configure();
@@ -348,8 +357,8 @@ namespace WebOverlay
             });
 
             int hr = WebView2Api.Method<WebView2Api.CreateControllerDelegate>(
-                OverlayHost.Environment, WebView2Api.Environment_CreateController)(
-                OverlayHost.Environment, window, controllerCallback.Pointer);
+                host, WebView2Api.Environment_CreateController)(
+                host, window, controllerCallback.Pointer);
             if (hr != WebView2Api.S_OK)
             {
                 fail(OverlayFailure.ViewFailed, "could not request a browser view, hr=0x" + hr.ToString("X8") + ".");
@@ -1731,6 +1740,8 @@ namespace WebOverlay
                     controller = IntPtr.Zero;
                     WebView2Api.Method<WebView2Api.NoArgsDelegate>(toClose, WebView2Api.Controller_Close)(toClose);
                     Marshal.Release(toClose);
+                    if (!usesComposition)
+                        OverlayHost.WindowedControllerClosed(windowedInMainEnvironment);
                 }
             }
             catch
@@ -1771,6 +1782,7 @@ namespace WebOverlay
                     IntPtr toRelease = compositionController;
                     compositionController = IntPtr.Zero;
                     Marshal.Release(toRelease);
+                    OverlayHost.ComposedControllerClosed();
                 }
             }
             catch
@@ -2010,7 +2022,7 @@ namespace WebOverlay
             }
 
             Guid iid = WebView2Api.IID_Environment3;
-            if (Marshal.QueryInterface(OverlayHost.Environment, ref iid, out IntPtr environment3) != WebView2Api.S_OK
+            if (Marshal.QueryInterface(OverlayHost.EnvironmentFor(true), ref iid, out IntPtr environment3) != WebView2Api.S_OK
                 || environment3 == IntPtr.Zero)
             {
                 OverlayHost.LogWarning("this WebView2 runtime cannot host composition"
@@ -2032,7 +2044,7 @@ namespace WebOverlay
         private bool createComposedView()
         {
             Guid iid3 = WebView2Api.IID_Environment3;
-            if (Marshal.QueryInterface(OverlayHost.Environment, ref iid3, out IntPtr environment3) != WebView2Api.S_OK
+            if (Marshal.QueryInterface(OverlayHost.EnvironmentFor(true), ref iid3, out IntPtr environment3) != WebView2Api.S_OK
                 || environment3 == IntPtr.Zero)
             {
                 fail(OverlayFailure.CompositionUnavailable, "the composition environment disappeared.");
@@ -2068,6 +2080,10 @@ namespace WebOverlay
 
                 compositionController = pointer;
                 Marshal.AddRef(compositionController);
+                // From here the main browser will not create a windowed view;
+                // the host needs to know so the next one gets a browser that
+                // will.
+                OverlayHost.ComposedControllerOpened();
 
                 // The same object speaks the plain controller interface; the
                 // QI hands over its own reference, so no extra AddRef here.
