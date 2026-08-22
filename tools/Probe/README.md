@@ -81,14 +81,14 @@ Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
 `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
 `spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`,
-`failed-nav`.
+`failed-nav`, `generation`.
 Running the program with no mode takes the normal path: create, load, render,
 message back.
 
 Two things to know before reading a failure:
 
-- **`glass`, `glass-click` and `cube` need a desktop that is actually being
-  composited.** They sample real screen pixels and send real mouse input, so
+- **`glass`, `glass-click`, `cube`, `shape` and `shape-guards` need a desktop
+  that is actually being composited.** They sample real screen pixels and send real mouse input, so
   they need more than a logged-in session: they need one whose desktop is
   being drawn. Over RDP that fails in two ways, and both look identical -
   every sample comes back `rgb(0,0,0)` and every click lands nowhere:

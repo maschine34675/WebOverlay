@@ -5,8 +5,12 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-45 were added for v1.3.0 to v1.8.1
+and re-run unchanged for v1.4.0; rows 10-49 were added for v1.3.0 to v1.8.2
 (runtime 151.0.4129.93).
+
+The Result column says how the row is evidenced. `PASS` means the probe
+asserts it automatically; anything else names what was actually done, because a
+row that claims more than the automation delivers is worse than no row.
 
 | # | Scenario | Expectation | Result |
 |---|---|---|---|
@@ -50,10 +54,14 @@ and re-run unchanged for v1.4.0; rows 10-45 were added for v1.3.0 to v1.8.1
 | 39 | `Dispatch = Manual` | nothing arrives, including `PageLoaded`, until `PumpEvents()`; then on the pumping thread | PASS |
 | 40 | `Post(..., Retain)` with a page live, then a rejected retarget, then a page-initiated reload | the retained payload survives the rejection and replays to the reloaded page exactly once - the page that stays on screen keeps the state that belongs to it | PASS |
 | 41 | A page named before the browser exists whose navigation is then rejected at creation, followed by a real page | the refused page is not left as the target: the next `LoadHtml` is a first navigation, not a retarget, so state set up beforehand still reaches the page that does load | PASS |
-| 42 | `Navigate` to a file that is not in the mapped folder, and to a connection nothing answers | one warning naming the page and the browser's error status, `IsPageLoaded` stays false, the target stands, and a working page afterwards still loads | PASS |
-| 43 | The web-error-status slot on the NavigationCompleted args | the neighbouring slot returns sequential navigation ids while this one returns differing statuses - `UNKNOWN` (0) for the missing file, `CONNECTION_ABORTED` (9) for the refused connection - which no wrong slot could produce | PASS |
+| 42 | `Navigate` to a file that is not in the mapped folder, and to a connection nothing answers | a warning naming the page and the browser's error status - one per completed attempt, and the browser may retry a target by itself, so a single `Navigate` can produce more than one; `IsPageLoaded` stays false, the target stands, and a working page afterwards still loads | PASS |
+| 43 | The web-error-status slot on the NavigationCompleted args | the neighbouring slot returns sequential navigation ids while this one returns differing statuses - `UNKNOWN` (0) for the missing file, `CONNECTION_ABORTED` (9) for the refused connection - which no wrong slot could produce | **measured by hand**, once, during v1.8.1: the probe reads no navigation id, so it asserts only that a status arrives inside the documented range |
 | 44 | `Dispatch = Manual` with a script answer already waiting in the queue when the handle is disposed | the answer is handed over rather than dropped with the events; events stay droppable, answers do not | PASS |
 | 45 | The same with a script the renderer is still running when the overlay closes | the caller is answered exactly once, whichever of the two paths gets there first | PASS |
+| 46 | A send buffered while the target page fails to load, then the mod naming a different page | the send does not follow the mod elsewhere - it was addressed to the page that was the target when it was made, and moving away is a retarget | PASS |
+| 47 | `Navigate` to the page already showing, with retained state set | treated as a reload rather than a retarget: the state survives, as it does when the page reloads itself | PASS |
+| 48 | A page asks a question, the document changes while the mod is still holding the answer, and the new page asks its own | the new page gets its own answer and never the one owed to its predecessor, although both questions carry the same page-side id | PASS |
+| 49 | `Show()` refused by the display-mode probe on an already hidden overlay | no `VisibilityChanged` is invented for the refusal, so the event stays trustworthy as state | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):
@@ -104,10 +112,11 @@ Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
 `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
 `spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`,
-`failed-nav`; no mode at all is the normal path.
+`failed-nav`, `generation`; no mode at all is the normal path.
 
-`glass`, `glass-click` and `cube` sample real screen pixels and send real
-mouse input, so they need a desktop that is actually being composited. Over
+`glass`, `glass-click`, `cube`, `shape` and `shape-guards` sample real screen
+pixels and send real mouse input, so they need a desktop that is actually being
+composited. Over
 RDP both a disconnected session *and* an `Active` session whose window is
 merely minimised return `rgb(0,0,0)` for every sample and swallow every click.
 See [`tools/Probe/README.md`](../tools/Probe/README.md) for that and for

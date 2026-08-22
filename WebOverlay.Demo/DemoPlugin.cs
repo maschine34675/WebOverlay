@@ -20,7 +20,11 @@ namespace WebOverlay.Demo
     /// WebGL cube that follows the player camera.
     /// </summary>
     [BepInPlugin("com.anvil.weboverlay.demo", "Anvil-WebOverlayDemo", Branding.PluginVersion)]
-    [BepInDependency(Branding.PluginGuid)]
+    // With the version, not just the GUID: this demo uses API that arrived in
+    // 1.7.0, and a body touching a member an older library does not have fails
+    // at JIT time - long after BepInEx would have called the dependency
+    // satisfied. The constant is the library's own, so the two cannot drift.
+    [BepInDependency(Branding.PluginGuid, Branding.PluginVersion)]
     public class DemoPlugin : BaseUnityPlugin
     {
         private ConfigEntry<KeyboardShortcut> toggleKey;

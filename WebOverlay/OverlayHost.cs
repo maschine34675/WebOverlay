@@ -304,7 +304,20 @@ namespace WebOverlay
         /// itself - queuing into a queue nobody drains would simply lose the
         /// event.
         /// </summary>
-        internal static bool DispatchToMainThread(Action action)
+        internal static bool DispatchToMainThread(Action action) =>
+            DispatchToMainThread(action, droppable: true);
+
+        /// <summary>
+        /// Hands work to the game's main thread. Events may be dropped when the
+        /// queue is full - that is what the limit is for - but an answer
+        /// somebody is waiting for may not: the count of outstanding answers is
+        /// bounded by the calls that asked for them, so letting those past the
+        /// limit cannot run away. Dropping one instead would break the
+        /// "answered exactly once" contract, and delivering it inline would run
+        /// a handler that expects the main thread on the overlay thread, which
+        /// for a handler touching Unity objects is worse than either.
+        /// </summary>
+        internal static bool DispatchToMainThread(Action action, bool droppable)
         {
             if (action == null || !mainThreadPumpAvailable)
             {
@@ -319,7 +332,7 @@ namespace WebOverlay
             if (stopping)
                 return true;
 
-            if (Interlocked.Increment(ref mainThreadQueued) > MainThreadQueueLimit)
+            if (Interlocked.Increment(ref mainThreadQueued) > MainThreadQueueLimit && droppable)
             {
                 Interlocked.Decrement(ref mainThreadQueued);
                 if (Interlocked.Exchange(ref mainThreadOverflowWarned, 1) == 0)

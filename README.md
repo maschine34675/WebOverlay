@@ -49,7 +49,7 @@ If your mod should also work when this library is *not* installed, that takes
 more than a `try`/`catch` on Mono - and getting it slightly wrong can break
 other people's mods rather than yours. The rules, and the two shipping gates
 that follow them, are in
-[`docs/SOFT-DEPENDENCY.md`](docs/SOFT-DEPENDENCY.md).
+[`docs/SOFT-DEPENDENCY.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/SOFT-DEPENDENCY.md).
 
 `WebOverlays.Create` returns `null` when overlays are known to be unavailable,
 and otherwise a handle whose browser is still starting: creation is
@@ -105,7 +105,10 @@ Install the demo plugin to see a working panel: press **F10** in game,
 **F11** for the transparent HUD demo, **F8** for the interactive glass
 panel, and **F7** for a Three.js WebGL cube that follows the player camera.
 
-What changed between versions is in [CHANGELOG.md](CHANGELOG.md); this file
+Links below point at the repository rather than at neighbouring files: this
+README also ships inside the release zip, where nothing else does.
+
+What changed between versions is in [CHANGELOG.md](https://github.com/maschine34675/WebOverlay/blob/main/CHANGELOG.md); this file
 describes the library as it is now.
 
 ## API reference
@@ -135,7 +138,7 @@ describes the library as it is now.
 | `PersistenceKey` | assembly/title | Storage key for the remembered bounds. |
 | `DispatchOnMainThread` | false | Raise this overlay's events from the game's main thread (see below). |
 | `Dispatch` | OverlayThread | Where events arrive: `OverlayThread`, `MainThread`, or `Manual` with `PumpEvents()`. |
-| `InjectTheme` | false | Put the library palette on the page as CSS variables (see `docs/STYLE.md`). |
+| `InjectTheme` | false | Put the library palette on the page as CSS variables (see [`docs/STYLE.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/STYLE.md)). |
 | `FreeCursorWhileShown` | false | Hand the cursor back while this overlay is up and the game is unfocused. |
 | `VirtualHosts` | null | Folders served as `https://<host>/`, so the page can load real files (see below). |
 
@@ -278,7 +281,7 @@ Pages also learn what they are running in without asking the mod: the library
 puts `wo-composed`, `wo-chroma` or `wo-opaque` on the root element (and
 `overlay.env.transparency` says the same), so a stylesheet can adapt to the
 kind of transparency it actually got. `OverlayOptions.InjectTheme` additionally
-sets the library palette as CSS variables - see `docs/STYLE.md`.
+sets the library palette as CSS variables - see [`docs/STYLE.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/STYLE.md).
 
 `window.overlay` exists only inside an overlay. A page that should also open in
 an ordinary browser wants one guard line (`if (window.overlay) { ... }`) rather
@@ -355,10 +358,16 @@ without a `try`/`catch` therefore aborts the surrounding script and leaves a
 half-built UI with no visible error - if your page wants storage, give it a
 virtual host.
 
-The mapped folder is served read-only, and cross-origin requests to it are
-denied, so nothing outside your overlay can reach the files. The mapped origin
-is trusted for navigation and messages exactly like a `Navigate` target; pick a
-host name unique to your mod, since it is also the key its storage belongs to.
+The mapped folder is served read-only, and the mapping exists only inside your
+overlay's own browser view - nothing outside it can reach the files. Inside it,
+`fetch` and XHR from another origin are denied; a different origin you allow in
+the same overlay can still load files as a script, image or iframe, so map a
+folder that holds only what your interface serves. (That is
+`DENY_CORS` rather than the stricter `DENY`, deliberately: an inline `LoadHtml`
+page has an opaque origin, and under `DENY` even your own markup could not
+reach its assets.) The mapped origin is trusted for navigation and messages
+exactly like a `Navigate` target; pick a host name unique to your mod, since it
+is also the key its storage belongs to.
 
 Mapping is all-or-nothing on purpose. If a folder is missing, a host name is
 malformed, or the runtime is too old to map folders at all, the overlay fails
@@ -381,8 +390,8 @@ dotnet run --project tools/Probe -c Release -- preview path/to/page.html --trans
 It serves the file from its own folder, so relative assets and storage behave
 as they will in the mod; `--post <channel> <text>` feeds the page messages,
 whatever the page sends back is printed, and `--screenshot` saves what it
-looks like. `tools/Probe/sample-page.html` is a worked example to start from,
-and [`tools/Probe/README.md`](tools/Probe/README.md) has the rest.
+looks like. [`tools/Probe/sample-page.html`](https://github.com/maschine34675/WebOverlay/blob/main/tools/Probe/sample-page.html) is a worked example to start from,
+and [`tools/Probe/README.md`](https://github.com/maschine34675/WebOverlay/blob/main/tools/Probe/README.md) has the rest.
 
 ## Security defaults
 
@@ -613,12 +622,12 @@ assemblies from an SPT installation: build with
 `SptRoot` defaults to three folders above the project, so a working copy that
 sits in `<your SPT folder>/Development/WebOverlay` needs no argument at all -
 and the build only copies its output into a folder that really is an SPT
-installation. `scripts/New-ReleasePackage.ps1` produces the release zips
+installation. [`scripts/New-ReleasePackage.ps1`](https://github.com/maschine34675/WebOverlay/blob/main/scripts/New-ReleasePackage.ps1) produces the release zips
 including the license files, verified against a manifest allowlist.
 
-`tools/Probe` is the host that drives the built DLL outside the game - the
+[`tools/Probe`](https://github.com/maschine34675/WebOverlay/blob/main/tools/Probe) is the host that drives the built DLL outside the game - the
 proof behind every hand-bound vtable slot in this library, and the source of
-every row in `docs/FAULT-TESTS.md`. It is not part of any release. Its
+every row in [`docs/FAULT-TESTS.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/FAULT-TESTS.md). It is not part of any release. Its
 `preview` mode is the one meant for consumers rather than for the library
 itself.
 

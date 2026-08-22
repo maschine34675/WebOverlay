@@ -14,6 +14,85 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.2]
+
+### Forge version notes
+
+Nothing changes for players - this release is for the mods that use the
+library.
+
+- Fixed: an answer the game was too busy to deliver could be dropped instead of
+  arriving late.
+- Fixed: a page that reloads no longer receives an answer meant for the page
+  before it.
+
+### Fixed
+
+- `EventDispatch.MainThread` could drop a script result or a page answer
+  silently. The main-thread queue reports a full queue as delivered, and the
+  result path believed it - so a stalled frame loop swallowed the answer. This
+  is the same broken promise 1.8.1 closed for `EventDispatch.Manual`, in the
+  half that was missed: answers now pass the limit, which cannot run away
+  because the number outstanding is bounded by the calls that asked.
+- A question belongs to the document that asked it. The page numbers its
+  questions from 1 again in every new document and matches an answer on that
+  number alone, so a reply the mod took its time over - the deferred
+  `OnRequest`, or any reply at all under main-thread dispatch - could resolve
+  whichever question the *next* document happened to number the same. Replies
+  are now bound to the document that asked, in the mod's hands and in the
+  outbox, and dropped when that document is gone. The host-to-page direction
+  was never affected: those ids never restart.
+- A late `NavigationCompleted` from a navigation that had already been replaced
+  was taken at face value. It could mark the page the mod is waiting for as
+  loaded, flush the outbox into a document on its way out, and report a
+  superseded navigation's cancellation as a failure of the new one. A
+  completion arriving before its own navigation has started is now ignored.
+- The first navigation waited for nothing: the channel shim is installed
+  asynchronously, and the browser only promises it is in place once the
+  completion has run. The mod's own first page could therefore have come up
+  without `window.overlay` - which its first script may use. Only the
+  navigation waits; `Ready` and the window do not, since `Ready` has never
+  meant "the page is loaded".
+- A request that timed out while still waiting for the page could be put to
+  that page anyway once it loaded, running a handler with side effects for an
+  answer nobody was listening for. The question is now withdrawn with its
+  deadline.
+- `ExecuteScript` and `Post` on an overlay whose window had already closed
+  buffered into an outbox nobody would ever flush, leaving a script caller
+  waiting until the handle was disposed. They are answered at once, as they
+  already were on a failed overlay.
+- Creating a windowed overlay may have to start a second browser, and waiting
+  for one pumps messages - which can run that overlay's own close. Creation now
+  asks again afterwards whether anyone still wants it, instead of building a
+  view for a window that has gone.
+- `Navigate` to the page already showing counted as a retarget and threw away
+  the retained state, while the same page reloading itself kept it. Two routes
+  to the same visible outcome, two different results. A navigation to the
+  current target is a reload.
+- The demo plugin declared its dependency on the library without a minimum
+  version while using API from 1.7.0 - the failure would have arrived at JIT
+  time, long after BepInEx called the dependency satisfied. It now names the
+  version, from the library's own constant.
+
+### Changed
+
+- The virtual-host documentation said cross-origin requests to the mapped
+  folder are denied. That is true of `fetch` and XHR and not of ordinary
+  sub-resource loads: another origin allowed in the same overlay can still pull
+  a file in as a script, image or iframe. The wording is corrected in all four
+  places it appeared. The access kind stays `DENY_CORS` rather than the
+  stricter `DENY`, deliberately - an inline `LoadHtml` page has an opaque
+  origin, so under `DENY` even the mod's own markup could not reach its assets.
+- The README's links point at the repository rather than at neighbouring files,
+  since it also ships inside the release zip where nothing else does.
+
+### Notes
+
+- Probe mode `generation`, rows 48-49; two half-written assertions in existing
+  modes finished rather than deleted. `docs/FAULT-TESTS.md` now says how each
+  row is evidenced, because one row was claiming a proof the probe does not
+  perform.
+
 ## [1.8.1]
 
 ### Forge version notes

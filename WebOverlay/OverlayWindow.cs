@@ -63,6 +63,22 @@ namespace WebOverlay
 
             /// <summary>Set for a channel message that may be superseded.</summary>
             public string LatestChannel;
+
+            /// <summary>
+            /// The question this envelope asks, when it is one. A request that
+            /// has already timed out - answered null - must not still be put
+            /// to the page later, or a handler with side effects runs for an
+            /// answer nobody is listening for any more.
+            /// </summary>
+            public int RequestId;
+
+            /// <summary>
+            /// The document this envelope belongs to, for the two kinds that
+            /// belong to one: a question put to a page, and an answer owed to
+            /// it. Zero for an ordinary send, which belongs to whatever page
+            /// the mod is targeting rather than to a particular document.
+            /// </summary>
+            public int Generation;
         }
 
         // The current value of each retained channel, in the order the mod
@@ -93,6 +109,20 @@ namespace WebOverlay
         // answered so the browser never calls a collected delegate, and
         // retired right after so they do not accumulate.
         private readonly List<ScriptCall> pendingScripts = new List<ScriptCall>();
+
+        // Set between handing a navigation to the browser and seeing it start.
+        // Any completion in that window belongs to the navigation being
+        // replaced, not to the one the mod is waiting for.
+        private bool awaitingNavigationStart;
+
+        // Bumped for every top-level document. A question asked by one
+        // document must not be answered into the next.
+        private int documentGeneration;
+
+        // The channel shim is installed asynchronously; the first navigation
+        // waits for the browser to confirm it rather than racing it.
+        private bool shimSettled;
+        private bool navigationOwedToShim;
 
         /// <summary>
         /// One script in flight. The consumer callback lives here rather than
@@ -303,6 +333,14 @@ namespace WebOverlay
             }
         }
 
+        /// <summary>
+        /// Whether building this overlay is still worth finishing. Read it
+        /// again after anything that pumps messages: the consumer may have
+        /// disposed the handle, or the host may have started shutting down,
+        /// while this method was suspended inside such a wait.
+        /// </summary>
+        private bool stillWanted => !closed && !OverlayHost.Stopping;
+
         private bool createCore()
         {
             // Disposed before this ever ran. Commands and creations sit in
@@ -356,7 +394,13 @@ namespace WebOverlay
 
             // Chosen up front, because the completion below needs to know
             // which browser this view ended up in.
+            // A suspension point, not a getter: for a windowed view this may
+            // have to start a second browser, and waiting for one pumps
+            // messages - which can run this very window's CloseFromHost. So
+            // whether anyone still wants this overlay has to be asked again.
             IntPtr host = OverlayHost.EnvironmentFor(false);
+            if (!stillWanted)
+                return false;
             controllerCallback = new ComCallback(WebView2Api.IID_ControllerCompleted, (int result, IntPtr pointer) =>
             {
                 // Disposed while the browser was still starting: expected, not
@@ -479,7 +523,12 @@ namespace WebOverlay
             // logged. The crash-recovery path decides differently, because
             // there the page WAS live and its reload being refused leaves
             // nothing to go back to.
-            startPendingNavigation();
+            // Only if the shim is in place. Otherwise the completion above
+            // starts it, moments later and on this same thread.
+            if (shimSettled)
+                startPendingNavigation();
+            else
+                navigationOwedToShim = true;
             if (desiredVisible)
                 Show();
 
@@ -495,6 +544,17 @@ namespace WebOverlay
         /// for itself. It only wraps the existing message bridge, so it hands
         /// a page nothing it did not already have.
         /// </summary>
+        /// <summary>
+        /// Puts `window.overlay` in place for every document. Installation is
+        /// asynchronous, and the browser only promises the script is installed
+        /// once the completion has run - so the first navigation waits for it
+        /// rather than racing it. Without that, the mod's own first page could
+        /// come up without the object its very first script uses.
+        ///
+        /// Only the navigation waits. `Ready` and the window itself do not:
+        /// `Ready` has never meant "the page is loaded" - that is
+        /// <see cref="PageLoaded"/> - so nothing a consumer can observe moves.
+        /// </summary>
         private void injectChannelShim()
         {
             if (channelShimCallback == null)
@@ -503,6 +563,19 @@ namespace WebOverlay
                     if (hr != WebView2Api.S_OK)
                         OverlayHost.LogWarning("the channel shim was rejected, hr=0x" + hr.ToString("X8")
                             + "; named channels will not work on this overlay.");
+                    shimSettled = true;
+                    if (navigationOwedToShim)
+                    {
+                        navigationOwedToShim = false;
+                        // The overlay may have been closed or failed while the
+                        // browser was confirming the script; navigating a view
+                        // in either state is pointless at best.
+                        if (!closed && state != CreationState.Failed && webView != IntPtr.Zero
+                            && !startPendingNavigation())
+                        {
+                            forgetTarget();
+                        }
+                    }
                     return WebView2Api.S_OK;
                 });
 
@@ -511,16 +584,24 @@ namespace WebOverlay
                 webView, ChannelProtocol.ShimFor(Transparency, options.InjectTheme),
                 channelShimCallback.Pointer);
             if (result != WebView2Api.S_OK)
+            {
+                // Refused outright: no completion is coming, so waiting for one
+                // would hang the first page for good. The overlay goes on
+                // without channels, which the warning says.
                 OverlayHost.LogWarning("could not install the channel shim, hr=0x" + result.ToString("X8")
                     + "; named channels will not work on this overlay.");
+                shimSettled = true;
+            }
         }
 
         /// <summary>
         /// Serves the mod's own folders as `https://&lt;host&gt;/`, which is the
         /// only way a page gets real files - and, when it navigates there
         /// instead of being handed inline markup, a real origin with working
-        /// storage. Read-only and CORS-denied: nothing outside this overlay
-        /// reaches the folder.
+        /// storage. Read-only, and the mapping lives only in this overlay's
+        /// view, so nothing outside it reaches the folder; inside it, CORS-
+        /// checked access from another origin is denied while ordinary
+        /// sub-resource loads are not.
         ///
         /// A bad mapping is a broken page, not a broken security boundary, so
         /// it is logged and skipped rather than failing the overlay - the
@@ -625,7 +706,7 @@ namespace WebOverlay
         /// </summary>
         private bool refuseAfterFailure(Action<string> result)
         {
-            if (state != CreationState.Failed)
+            if (state != CreationState.Failed && !closed)
                 return false;
             answer(result, null);
             return true;
@@ -643,6 +724,7 @@ namespace WebOverlay
                 pageReady = false;
                 pageLoaded = false;
                 expectInlineNavigation = true;
+                awaitingNavigationStart = true;
                 if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                     webView, WebView2Api.WebView_NavigateToString)(webView, pendingHtml), "LoadHtml"))
                 {
@@ -654,6 +736,7 @@ namespace WebOverlay
             {
                 pageReady = false;
                 pageLoaded = false;
+                awaitingNavigationStart = true;
                 if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                     webView, WebView2Api.WebView_Navigate)(webView, pendingUrl), "Navigate"))
                 {
@@ -680,6 +763,8 @@ namespace WebOverlay
             pendingHtml = null;
             htmlLoaded = false;
             expectInlineNavigation = false;
+            // Nothing was ever handed to the browser, so no start is owed.
+            awaitingNavigationStart = false;
         }
 
         private bool applySettings()
@@ -843,6 +928,14 @@ namespace WebOverlay
             {
                 if (args == IntPtr.Zero)
                     return WebView2Api.S_OK;
+                // A completion that arrives while we are still waiting for our
+                // navigation to start belongs to the one it replaced. Taking
+                // it would mark the page the mod is waiting for as loaded -
+                // and flush the outbox into a document that is on its way out.
+                // Its failures are not ours to report either: a superseded
+                // navigation completes as cancelled.
+                if (awaitingNavigationStart)
+                    return WebView2Api.S_OK;
                 WebView2Api.Method<WebView2Api.GetIntDelegate>(args, WebView2Api.NavCompletedArgs_GetIsSuccess)(
                     args, out int success);
                 if (success != 0)
@@ -990,6 +1083,14 @@ namespace WebOverlay
             {
                 pageReady = false;
                 pageLoaded = false;
+                // The navigation we asked for has begun, so the next
+                // completion belongs to it. Cleared here rather than at the
+                // call, because only this event says the browser really took
+                // it - and only for a navigation the filter above allowed.
+                awaitingNavigationStart = false;
+                // A new top-level document supersedes the one that asked any
+                // question still in flight; see the generation check below.
+                documentGeneration++;
             }
             return WebView2Api.S_OK;
         }
@@ -1123,7 +1224,13 @@ namespace WebOverlay
             if (string.IsNullOrEmpty(url))
                 return;
             TargetState previous = captureTarget();
-            bool retargeting = previous.Url != null || previous.Html != null;
+            // Retargeting means the target CHANGED, not merely that there was
+            // one. Asking for the page already showing is a reload, and a
+            // reload keeps the state the mod set up for that page - which is
+            // what happens when the page reloads itself. Two routes to the
+            // same visible outcome must not end up in different states.
+            bool retargeting = (previous.Url != null || previous.Html != null)
+                && !(previous.Html == null && string.Equals(previous.Url, url, StringComparison.Ordinal));
             pendingUrl = url;
             pendingHtml = null;
             htmlLoaded = false;
@@ -1140,6 +1247,7 @@ namespace WebOverlay
             }
             pageReady = false;
             pageLoaded = false;
+            awaitingNavigationStart = true;
             if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                 webView, WebView2Api.WebView_Navigate)(webView, url), "Navigate"))
             {
@@ -1204,6 +1312,9 @@ namespace WebOverlay
 
         private void restoreTarget(TargetState previous)
         {
+            // The refused navigation will never start, so the overlay must not
+            // go on ignoring completions while it waits for one.
+            awaitingNavigationStart = false;
             pendingUrl = previous.Url;
             pendingHtml = previous.Html;
             htmlLoaded = previous.HtmlLoaded;
@@ -1218,7 +1329,10 @@ namespace WebOverlay
             if (html == null)
                 return;
             TargetState previous = captureTarget();
-            bool retargeting = pendingUrl != null || pendingHtml != null;
+            // Same rule as Navigate: identical markup is a reload of the page
+            // already showing, not a move away from it.
+            bool retargeting = (previous.Url != null || previous.Html != null)
+                && !(previous.Url == null && string.Equals(previous.Html, html, StringComparison.Ordinal));
             pendingHtml = html;
             pendingUrl = null;
             htmlLoaded = true;
@@ -1231,6 +1345,7 @@ namespace WebOverlay
             pageReady = false;
             pageLoaded = false;
             expectInlineNavigation = true;
+            awaitingNavigationStart = true;
             if (!checkNavigationResult(WebView2Api.Method<WebView2Api.StringDelegate>(
                 webView, WebView2Api.WebView_NavigateToString)(webView, html), "LoadHtml"))
             {
@@ -1287,11 +1402,30 @@ namespace WebOverlay
                 OverlayHost.Post(() => PostMessageToPage(ChannelProtocol.Answer(channel, null, id)));
                 return true;
             }
+            // Which document is asking. The page numbers its questions from 1
+            // again in every new document, and matches an answer on that
+            // number alone - so an answer the mod takes its time over would
+            // otherwise resolve whatever question the NEXT document happens to
+            // have given the same number. A deferred reply is the ordinary
+            // case, not an exotic one: with main-thread dispatch it already
+            // crosses a frame.
+            int asked = documentGeneration;
             Action<string> reply = value =>
             {
                 if (System.Threading.Interlocked.Exchange(ref answered, 1) != 0)
                     return;
-                OverlayHost.Post(() => PostMessageToPage(ChannelProtocol.Answer(channel, value, id)));
+                OverlayHost.Post(() =>
+                {
+                    // The page that asked is gone. Its promise went with it,
+                    // and the document now showing is waiting for an answer of
+                    // its own.
+                    if (documentGeneration != asked)
+                        return;
+                    // The generation travels with it: an answer to a question
+                    // asked from a parse-time script can still be waiting in
+                    // the outbox when the document changes.
+                    PostMessageToPage(ChannelProtocol.Answer(channel, value, id), null, 0, asked);
+                });
             };
             if (RequestReceived == null)
                 reply(null);
@@ -1524,7 +1658,10 @@ namespace WebOverlay
                 DeadlineMilliseconds = clock.ElapsedMilliseconds + timeoutMilliseconds,
             };
             startRequestTimer();
-            PostMessageToPage(ChannelProtocol.Request(channel, payload, id));
+            // The id travels with the envelope so that, if the page is not
+            // ready and this waits in the outbox, the deadline can take it
+            // back out again.
+            PostMessageToPage(ChannelProtocol.Request(channel, payload, id), null, id, documentGeneration);
         }
 
         private void startRequestTimer()
@@ -1566,6 +1703,15 @@ namespace WebOverlay
             {
                 PendingRequest expired = pendingRequests[id];
                 pendingRequests.Remove(id);
+                // If the question never left the outbox, take it back: the
+                // caller has just been told there is no answer, and putting
+                // the question to a page that loads later would run its
+                // handler - side effects and all - for nobody.
+                for (int i = outbox.Count - 1; i >= 0; i--)
+                {
+                    if (outbox[i].RequestId == id)
+                        outbox.RemoveAt(i);
+                }
                 answer(expired.Answer, null);
             }
             stopRequestTimerIfIdle();
@@ -1573,7 +1719,10 @@ namespace WebOverlay
 
         public void PostMessageToPage(string message) => PostMessageToPage(message, null);
 
-        public void PostMessageToPage(string message, string latestChannel)
+        public void PostMessageToPage(string message, string latestChannel) =>
+            PostMessageToPage(message, latestChannel, 0, 0);
+
+        public void PostMessageToPage(string message, string latestChannel, int requestId, int generation)
         {
             if (message == null)
                 return;
@@ -1584,7 +1733,7 @@ namespace WebOverlay
             // live send only goes out while the mod's own target is showing.
             if (webView == IntPtr.Zero || !pageReady)
             {
-                buffer(false, message, null, latestChannel);
+                buffer(false, message, null, latestChannel, requestId, generation);
                 return;
             }
             if (!currentDocumentIsTarget())
@@ -1673,7 +1822,7 @@ namespace WebOverlay
         }
 
         private void buffer(bool isScript, string payload, Action<string> result = null,
-            string latestChannel = null)
+            string latestChannel = null, int requestId = 0, int generation = 0)
         {
             if (latestChannel != null)
             {
@@ -1697,6 +1846,8 @@ namespace WebOverlay
                     IsScript = isScript,
                     Payload = payload,
                     Result = result,
+                    RequestId = requestId,
+                    Generation = generation,
                     LatestChannel = latestChannel,
                 });
                 return;
@@ -1749,10 +1900,22 @@ namespace WebOverlay
             outbox.Clear();
             foreach (Pending item in items)
             {
+                // Bound to a document that has since been replaced: a question
+                // whose asker is gone, or an answer to one. An ordinary send
+                // carries no generation and follows the mod's target as always.
+                if (item.Generation != 0 && item.Generation != documentGeneration)
+                {
+                    answer(item.Result, null);
+                    continue;
+                }
                 if (item.IsScript)
                     ExecuteScript(item.Payload, item.Result);
                 else
-                    PostMessageToPage(item.Payload);
+                    // The id and the generation go back with it: flushing can
+                    // re-buffer when the page is not ready after all, and an
+                    // entry that lost them could no longer be withdrawn on its
+                    // deadline or recognised as belonging to a gone document.
+                    PostMessageToPage(item.Payload, item.LatestChannel, item.RequestId, item.Generation);
             }
         }
 

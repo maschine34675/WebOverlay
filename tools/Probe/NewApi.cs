@@ -76,6 +76,10 @@ internal static partial class NewApi
         overlay.Navigate("https://probe.assets/index.html");
         wait(() => answer != null || failed, 25000);
 
+        // The positive mate of V7 below, which asserts a broken mapping fails:
+        // a good one must reach Ready and stay there.
+        check("V0b a good mapping starts the overlay rather than failing it",
+            ready && !failed, "ready=" + ready + " failed=" + failed);
         check("V1 the mapped page loaded", answer != null && !failed,
             answer == null ? ("failed=" + failed + " reason=" + overlay.Failure + " " + overlay.FailureMessage) : "loaded");
         Console.WriteLine("page reports: " + (answer ?? "-"));
@@ -1165,6 +1169,11 @@ internal static partial class NewApi
         Thread.Sleep(1200);
         check("A9 Show refuses a display mode that cannot host a window",
             !plain.IsVisible, "IsVisible=" + plain.IsVisible);
+        // And says nothing about it: the overlay was already hidden, so a
+        // refusal is not a transition. A consumer trusting VisibilityChanged
+        // as state must not see one invented here.
+        check("A9b and reports no visibility change for the refusal",
+            !wentInvisible, "wentInvisible=" + wentInvisible);
         probe.SetValue(null, null);
         plain.Show();
         Thread.Sleep(1200);
@@ -1811,6 +1820,88 @@ internal static partial class NewApi
         finish();
     }
 
+
+    /// <summary>
+    /// A question belongs to the document that asked it. The page numbers its
+    /// questions from 1 again in every new document and matches an answer on
+    /// that number alone, so a reply the mod takes its time over would - with
+    /// nothing else in the way - resolve whichever question the NEXT document
+    /// happens to have numbered the same.
+    /// </summary>
+    internal static void Generation(string scratch)
+    {
+        string folder = Path.Combine(scratch ?? Path.GetTempPath(), "generation-probe");
+        Directory.CreateDirectory(folder);
+
+        // Asks one question as its very first act, and reports whatever comes
+        // back. Its id is 1, as it is in every fresh document.
+        File.WriteAllText(Path.Combine(folder, "a.html"), @"<!doctype html><html><body>A<script>
+          overlay.request('slow', 'from-a', 20000).then(function (v) {
+            overlay.send('answered', 'a:' + String(v));
+          });
+          overlay.send('loaded', 'a');
+        </script></body></html>");
+
+        File.WriteAllText(Path.Combine(folder, "b.html"), @"<!doctype html><html><body>B<script>
+          overlay.request('quick', 'from-b', 20000).then(function (v) {
+            overlay.send('answered', 'b:' + String(v));
+          });
+          overlay.send('loaded', 'b');
+        </script></body></html>");
+
+        var loaded = new System.Collections.Generic.List<string>();
+        var answers = new System.Collections.Generic.List<string>();
+        Action<string> deferred = null;
+        bool failed = false;
+
+        var overlay = WebOverlays.Create("GenerationProbe", new OverlayOptions
+        {
+            Width = 500,
+            Height = 400,
+            VirtualHosts = new[] { new VirtualHost("gen.assets", folder) },
+        });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.Failed += () => failed = true;
+        overlay.ChannelMessage += (c, p2) =>
+        {
+            if (c == "loaded") { lock (loaded) loaded.Add(p2); }
+            else if (c == "answered") { lock (answers) answers.Add(p2); }
+        };
+        // Held rather than answered: this is the deferred form, and the whole
+        // point is that the answer is still in the mod's hands when the
+        // document changes.
+        overlay.OnRequest("slow", (payload, reply) => deferred = reply);
+        overlay.OnRequest("quick", (payload, reply) => reply("\"for-b\""));
+
+        overlay.Navigate("https://gen.assets/a.html");
+        wait(() => loaded.Count > 0 || failed, 25000);
+        check("G1 the first page loaded and asked", loaded.Count > 0 && !failed,
+            failed ? "failed" : "loaded=" + loaded.Count);
+        wait(() => deferred != null, 8000);
+        check("G2 the mod is holding its answer", deferred != null,
+            deferred != null ? "held" : "never asked");
+
+        // The document changes while that answer is still owed.
+        overlay.Navigate("https://gen.assets/b.html");
+        wait(() => loaded.Count > 1, 25000);
+        Thread.Sleep(800);
+
+        // Now the mod answers - the page it was talking to is gone.
+        deferred("\"for-a\"");
+        Thread.Sleep(2500);
+
+        string got;
+        lock (answers)
+            got = string.Join(" | ", answers.ToArray());
+        check("G3 the second page got its own answer", got.Contains("b:\"for-b\""), got);
+        check("G4 and not the one owed to the first page",
+            !got.Contains("for-a"), got);
+
+        overlay.Dispose();
+        Thread.Sleep(300);
+        finish();
+    }
+
     /// <summary>Reads the number out of "web error status N" in a log line.</summary>
     private static int statusIn(string line)
     {
@@ -1848,8 +1939,14 @@ internal static partial class NewApi
         string folder = Path.Combine(scratch ?? Path.GetTempPath(), "failed-nav-probe");
         // (the local list above is what the checks read)
         Directory.CreateDirectory(folder);
+        // Echoes whatever reaches it, so the row can prove the buffered send
+        // really arrives rather than merely that a page loaded.
         File.WriteAllText(Path.Combine(folder, "there.html"),
-            "<!doctype html><html><body>here</body></html>");
+            "<!doctype html><html><body>here<script>"
+            + "window.chrome.webview.addEventListener('message', function (e) {"
+            + "  window.chrome.webview.postMessage('echo:' + String(e.data)); });"
+            + "window.overlay.on('cfg', function (p) { window.__cfg = p; });"
+            + "</script></body></html>");
 
         bool ready = false, failed = false;
         var overlay = WebOverlays.Create("FailedNavProbe", new OverlayOptions
@@ -1904,12 +2001,39 @@ internal static partial class NewApi
             "IsPageLoaded=" + overlay.IsPageLoaded);
 
         // The target stands, so the mod can simply name a page that exists.
-        bool arrived = false;
-        overlay.MessageReceived += _ => arrived = true;
+        string echoed = null;
+        overlay.MessageReceived += m => { if (m != null && m.StartsWith("echo:")) echoed = m; };
         overlay.Navigate("https://missing.assets/there.html");
         wait(() => overlay.IsPageLoaded, 20000);
         check("N7 and a working page afterwards still loads", overlay.IsPageLoaded,
             "IsPageLoaded=" + overlay.IsPageLoaded);
+
+        // Not delivered, and deliberately so: the send was addressed to the
+        // page the mod named at the time, and naming a different page is a
+        // retarget - which forgets what was meant for the page being left,
+        // whether or not that page ever managed to load. The failure did not
+        // drop it (the warning above counts it as still buffered); the move
+        // away from it did.
+        Thread.Sleep(2500);
+        check("N8 but a send addressed to the abandoned page does not follow the mod elsewhere",
+            echoed == null, echoed ?? "<nothing echoed, as documented>");
+
+        // The neighbouring question, because the answer is not obvious: an
+        // explicit re-navigation to the page that is ALREADY the target. A
+        // page reloading itself keeps its retained state - that is what row 40
+        // measures - so a mod asking for the same page again should not be
+        // treated as walking away from it.
+        overlay.Post("cfg", "value", PostOptions.Retain);
+        Thread.Sleep(600);
+        echoed = null;
+        overlay.Navigate("https://missing.assets/there.html");
+        wait(() => overlay.IsPageLoaded, 20000);
+        Thread.Sleep(1200);
+        string seen = null;
+        overlay.ExecuteScript("window.__cfg || 'none'", r => seen = r);
+        wait(() => seen != null, 6000);
+        check("N9 re-navigating to the page already showing keeps its retained state",
+            seen != null && seen.Contains("value"), "page saw " + (seen ?? "<null>"));
 
         overlay.Dispose();
         logWarning.SetValue(null, previous);

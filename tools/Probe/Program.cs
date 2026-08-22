@@ -80,6 +80,7 @@ internal static class Program
             case "latest-only": NewApi.LatestOnly(); return;
             case "manual-pump": NewApi.ManualPump(); return;
             case "failed-nav": NewApi.FailedNavigation(args.Length > 1 ? args[1] : null); return;
+            case "generation": NewApi.Generation(args.Length > 1 ? args[1] : null); return;
 
             // Not a fault-matrix row: the mode for looking at your own page.
             case "preview":

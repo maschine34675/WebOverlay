@@ -456,8 +456,12 @@ namespace WebOverlay
         /// working `localStorage` isolated per host name, no 2 MB document
         /// limit, and real file paths in the developer tools.
         ///
-        /// The folder is served read-only and cross-origin requests to it are
-        /// denied, so nothing outside the overlay can reach the files.
+        /// The folder is served read-only, and the mapping exists only inside
+        /// this overlay's own browser view - so nothing outside it can reach
+        /// the files. Inside it, `fetch` and XHR from another origin are
+        /// denied, but another origin you allow in the same overlay can still
+        /// load files as a script, image or iframe. Map a folder that holds
+        /// only what your interface serves.
         /// </summary>
         public VirtualHost[] VirtualHosts { get; set; }
     }
@@ -859,8 +863,13 @@ namespace WebOverlay
                     drainManualResults();
                 return;
             }
-            if (dispatch != EventDispatch.MainThread || !OverlayHost.DispatchToMainThread(() => invokeIsolated(invoke)))
+            // droppable: false for the same reason Manual has a queue of its
+            // own - a full queue may cost events, never an answer.
+            if (dispatch != EventDispatch.MainThread
+                || !OverlayHost.DispatchToMainThread(() => invokeIsolated(invoke), droppable: false))
+            {
                 invokeIsolated(invoke);
+            }
         }
 
         public event Action<string> MessageReceived;

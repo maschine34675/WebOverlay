@@ -117,9 +117,12 @@ namespace WebOverlay.Interop
         // rendered and reported the mapped origin.
         public const int WebView2_3_SetVirtualHostNameToFolderMapping = 71;
 
-        // COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND. DENY_CORS is the safe one:
-        // the mapped folder serves the page's own origin, and a cross-origin
-        // document cannot pull anything out of it.
+        // COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND: DENY = 0, ALLOW = 1,
+        // DENY_CORS = 2. DENY_CORS denies CORS-checked access - fetch, XHR -
+        // from other origins, while still allowing no-CORS sub-resource loads
+        // (img, script, iframe). It is deliberately not DENY: an inline
+        // LoadHtml page has an opaque origin, so under DENY even the mod's own
+        // markup could not reach its mapped assets.
         public const int HostResourceAccessDenyCors = 2;
 
         // ICoreWebView2AcceleratorKeyPressedEventArgs
