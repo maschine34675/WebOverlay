@@ -86,13 +86,22 @@ message back.
 
 Two things to know before reading a failure:
 
-- **`glass`, `glass-click` and `cube` need an attached interactive session.**
-  They sample real screen pixels and send real mouse input. Over RDP, a
-  disconnected session makes every sample come back `rgb(0,0,0)` and every
-  click land nowhere - a whole-mode failure that looks alarming and means
-  nothing. `query session` should show your session as `Active`, not
-  `Disc`. Even attached, the compositor occasionally drops a frame during a
-  capture, so re-run before believing a single pixel failure.
+- **`glass`, `glass-click` and `cube` need a desktop that is actually being
+  composited.** They sample real screen pixels and send real mouse input, so
+  they need more than a logged-in session: they need one whose desktop is
+  being drawn. Over RDP that fails in two ways, and both look identical -
+  every sample comes back `rgb(0,0,0)` and every click lands nowhere:
+
+  - the session is disconnected (`query session` shows `Disc` rather than
+    `Active`), or
+  - the session is `Active` but the remote desktop **window is minimised**,
+    which suspends composition just as thoroughly. This one is the trap:
+    the session state looks perfectly healthy.
+
+  Both were measured; restoring the window turns all three modes green again
+  with no change to the library. Even with the desktop drawing, the compositor
+  occasionally drops a frame during a capture, so re-run before believing a
+  single pixel failure.
 - **`fault-loader` and `failure-kind` move `WebView2Loader.dll` aside** for
   the length of the run, because they test what an incomplete plugin folder
   does. They put it back afterwards, including after an earlier run that was

@@ -90,8 +90,9 @@ Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 mode at all is the normal path.
 
 `glass`, `glass-click` and `cube` sample real screen pixels and send real
-mouse input, so they need an interactive session that is actually attached -
-over RDP a disconnected session returns `rgb(0,0,0)` for every sample and
-swallows every click. See [`tools/Probe/README.md`](../tools/Probe/README.md)
-for that and for `preview`, the mode meant for building your own pages rather
-than for testing the library.
+mouse input, so they need a desktop that is actually being composited. Over
+RDP both a disconnected session *and* an `Active` session whose window is
+merely minimised return `rgb(0,0,0)` for every sample and swallow every click.
+See [`tools/Probe/README.md`](../tools/Probe/README.md) for that and for
+`preview`, the mode meant for building your own pages rather than for testing
+the library.
