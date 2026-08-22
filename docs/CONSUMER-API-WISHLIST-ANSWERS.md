@@ -6,6 +6,9 @@ verified by the probe host (`vhost`, `dispatch`, `failure-kind`,
 `script-result`, `visibility`, `channels`, `shape`, `bounds-api` modes).
 Entry 8 and the throwing half of 9 stay declined for the reasons given.
 
+Entries 10-22 arrived later, from ModProfiler and QuestMarkers; they are
+answered at the end of this document and none of them is implemented yet.
+
 **One correction to this document:** entry 7 below proposes hit-test regions
 as the better answer, keeping the picture and giving up only the mouse. That
 does not work, and the measurement is in the entry: `HTTRANSPARENT` passes a
@@ -260,3 +263,239 @@ mod by host name.
 5. **4** (shim and request/reply) - biggest surface; do it once 1 and 3 have
    settled how pages are written.
 6. **7** - hit-test regions after a probe, `SetBounds` whenever needed.
+
+---
+
+# Answers to the second and third rounds
+
+Written 2026-08-22 against entries 10-22, from ModProfiler and QuestMarkers.
+Same rules as above: a verdict, the reason, and - where it is a yes - what the
+implementation actually costs. Three entries assume something the library does
+not have, and those corrections are the useful part.
+
+## Verdicts at a glance
+
+| # | Wish | Verdict |
+|---|---|---|
+| 10 | Deferred request replies | **Yes**, an overload |
+| 11 | Who pays for dispatched callbacks, manual pump | **Yes to both halves**, the pump needs a per-overlay queue |
+| 12 | Free the cursor while a framed window has focus | **Yes**, in the plugin, under a clearer name |
+| 13 | `VirtualKey(KeyCode)` helper | **Yes**, trivial |
+| 14 | Soft-dependency guide | **Yes** - and the version gate is the part worth writing down |
+| 15 | Checked, needs nothing | Agreed; one README sentence |
+| 16 | Retained messages | **Yes** |
+| 17 | Latest-wins delivery | **Partly** - the library owns no queue where the entry assumes one |
+| 18 | `Show()` refuses exclusive fullscreen | **Yes** |
+| 19 | Tell the page which transparency it got | **Yes**, same mechanism as 21 |
+| 20 | The probe host belongs in the repo | **Yes** - it also closes a gap this repo has been carrying |
+| 21 | Shared design tokens | **Yes**, bundled with 19 |
+| 22 | HUD lifecycle traps | **Yes**, as documentation |
+
+---
+
+## 10. Deferred request replies - yes
+
+`OnRequest(channel, Func<string, string>)` does force the answer out of the
+dispatched callback, and the page side has been asynchronous from the start.
+The window already hands the routing layer a `reply` action with once-only
+semantics; only the public shape assumes a return value.
+
+Add an overload rather than change the existing one:
+
+```csharp
+void OnRequest(string channel, Action<string /*payload*/, Action<string> /*reply*/> handler);
+```
+
+The reply may be called from any thread, at any later time. What already holds
+keeps holding: a handler that throws answers `null`, a handler that never
+replies leaves the page to its own timeout, and a reply that arrives after that
+timeout is dropped by the shim rather than resolving a stale promise. Worth
+documenting explicitly, since with an asynchronous handler a late reply stops
+being a theoretical case.
+
+## 11. Who pays for dispatched callbacks - yes, and the pump is worth it
+
+The measurement is right, and it is right by construction: `DispatchOnMainThread`
+delivers from `WebOverlayPlugin.Update`, so a consumer's handler runs inside the
+library's frame slice and any profiler bills it there. That is a documentation
+failure first - the option's own text talks about threading and never about
+whose budget the work lands in.
+
+The manual pump is worth having, with one correction to the sketch: the queue
+is **one process-wide queue in the host**, not per overlay, so `PumpEvents()`
+cannot drain "this overlay's events" today. It needs a per-overlay queue, with
+the plugin's pump draining the overlays that asked for main-thread delivery.
+That is a contained refactor of the dispatch path, not a redesign.
+
+Second correction, on the API: shipping `Dispatch` next to the existing
+`DispatchOnMainThread` would leave two knobs for one decision. The bool stays
+(it is released API) and becomes a documented alias that sets the enum, with
+the enum as the way it is described from now on.
+
+One thing the entry does not mention but the implementation must: in `Manual`
+mode nothing may be delivered until the consumer pumps, so an overlay that is
+never pumped queues forever. The existing cap (4096, then drop with one
+warning) already covers it; that cap should be documented rather than left as a
+surprise.
+
+## 12. Free the cursor - yes, in the plugin, under a better name
+
+This is the library fixing its own side effect: a framed overlay takes the
+foreground on `Show`, and the game keeps the cursor captured while it is not
+focused. Every consumer that opens a framed window mid-raid hits it, and each
+would write the same `Update`/`LateUpdate` pair.
+
+It belongs in the plugin, where `Cursor` and `Screen` already live, so the core
+stays free of Unity - which the whole empirical test suite depends on. The core
+needs to expose only "is an overlay that asked for this currently visible",
+which is the same small bridge entry 18 needs in the other direction.
+
+`FreeCursorWhileFocused` reads as "while the overlay is focused", which is not
+what it does. `FreeCursorWhileShown` says it: while this overlay is visible and
+the game window is not focused, the cursor is released; the moment the game has
+focus again the library stops touching it and the game relocks on its own.
+
+Muting the game's input commands stays out, as proposed - that is a Harmony
+patch against a game type and has no place in a library that references no game
+assembly.
+
+## 13. `VirtualKey(KeyCode)` - yes
+
+Two consumers carrying the same twenty-line table, the second copy written only
+because a review caught a hard-coded close key, is exactly the argument. It is
+Unity-typed, so it lives in the plugin next to `IsDisplayModeSupported`, and it
+is a table plus two lines of code.
+
+## 14. Soft-dependency guide - yes, and the version gate is the new part
+
+The closure trap has been folklore in this codebase since CraftQueue's stack
+sizes silently collapsed to 1; writing it down is overdue. The genuinely new
+rule is the version gate, and it is a direct consequence of how these four
+releases were built: minors are additive, so a gate body that touches a 1.6
+member fails at JIT time on a 1.3 install - presence is no longer the question,
+`Metadata.Version >= new Version(1, 6, 0)` is.
+
+`docs/SOFT-DEPENDENCY.md` with the pattern, the two shipping gates as
+references, the Mono.Cecil build check, and one sentence in the changelog
+contract saying minors are additive so consumers gate on "at least X.Y".
+
+## 15. Checked, needs nothing - agreed
+
+All three hold. The third deserves the README sentence: a page opened in an
+ordinary browser has no `window.overlay`, so a page meant to be openable both
+ways needs one guard line.
+
+## 16. Retained messages - yes
+
+The trap is real and the library causes it: after a renderer crash the page is
+reloaded silently, `PageLoaded` fires again, and a mod whose configuration is
+guarded by a dirty check never resends. A consumer *can* fix this itself - the
+fix is one `PageLoaded` handler - but nobody writes it before a player reports
+that a HUD reverted mid-raid.
+
+```csharp
+void Post(string channel, string payload, bool retain);
+```
+
+Two implementation notes that are not in the sketch. The replay has to happen
+**before the outbox is flushed** on load, or a message the mod sent while the
+page was loading would be overwritten by the older retained one. And the
+retained set must be cleared by `LoadHtml`/`Navigate`, which already clear the
+outbox for the same reason: the page changed, the old state is not its state.
+
+## 17. Latest-wins - partly, and the entry assumes a queue that does not exist
+
+The symptom is real, the mechanism is not. Once the page is loaded, `Post` does
+not queue anywhere in the library: it calls `PostWebMessageAsString` straight
+through to the browser. The only queue this library owns for outbound traffic
+is the pre-load outbox. So "replace the still-undelivered payload in the
+delivery queue" cannot be honoured for the case the entry describes - the
+frames are already in Chromium's IPC queue, and reaching into it is not
+something a caller can be given.
+
+What can be delivered, honestly:
+
+- **Collapsing in the outbox.** A latest-only message replaces an undelivered
+  one on the same channel while the page is still loading. That is a real case
+  (an overlay created with a per-frame feed already running), just not the one
+  the entry describes.
+- **Collapsing in the page**, which is where the queue actually is. The shim
+  can offer `overlay.on(channel, fn, { latest: true })`: buffer the newest
+  payload and deliver it once per animation frame. That fixes the visible
+  symptom - markers trailing the camera - because the page stops rendering
+  stale frames it has already superseded.
+
+Both are worth having and they compose with 16 as flags on the same overload.
+What should not be shipped is an API that promises flow control the library
+cannot perform. Worth saying in the same place: a consumer streaming per frame
+should send from `Update` and let the page coalesce, rather than assume delivery
+is free.
+
+## 18. `Show()` refuses exclusive fullscreen - yes
+
+The argument is the one that decides it: every consumer has at least two show
+paths and will get one of them wrong, and the failure mode is the game
+minimising itself at raid start. The library knows about the window; the
+consumer's check should be a courtesy, not load-bearing.
+
+The mechanism already exists in shape: the plugin registers the main-thread
+pump into the Unity-free core, and a display-mode probe registers the same way.
+`Show()` then refuses, logs once per overlay, and leaves the overlay hidden. It
+must not raise `Failed` - exclusive fullscreen is a setting the player can
+change back, not a broken overlay - and `IsDisplayModeSupported` stays public
+for consumers that want to explain the situation in their own UI.
+
+## 19. Tell the page which transparency it got - yes
+
+The window knows this before it injects anything (`usesComposition` is decided
+before the window exists), so both halves are cheap: a `Transparency` property
+on the handle, valid once `Ready`, and the shim stamping
+`wo-composed` / `wo-chroma` on the root element so a stylesheet can adapt with
+no mod code at all. The shim is one constant today; parameterising it at
+injection is a string replacement.
+
+## 20. The probe host in the repo - yes, and it closes a gap of ours
+
+This one is not really a wish, it is a finding. `docs/FAULT-TESTS.md` currently
+ends with "the probe source lives outside the repository - re-create it from
+this table", which means the evidence behind twenty-eight rows and every proven
+vtable slot lives in a temp folder. That is a bad place for the thing that
+proves the library works.
+
+Bringing it in as `tools/PagePreview` with the consumer-facing mode described
+gives a consumer a way to see its page in a real composed HUD without starting
+the game, and gives this repository its own test harness back. It is a net9
+console project that is not part of any release zip, and it needs a pass to
+drop session-specific modes and paths to other mods' pages before it moves.
+
+## 21. Shared design tokens - yes, with 19
+
+`docs/STYLE.md` is worth writing on its own. The injected variables are the
+same mechanism as 19 - the shim already has to be parameterised - so they ship
+together or not at all. Opt-in, because a mod that wants its own look should
+not have to fight a theme it did not ask for.
+
+## 22. HUD lifecycle traps - yes, as documentation
+
+Most of these are game-specific, which is fine: this library exists for one
+game and its README already says so. They belong in the HUD section, where a
+page author looks, with the two general ones - re-sending page configuration
+until 16 exists, and the exclusive-fullscreen guard until 18 exists - marked as
+temporary so they can be deleted when those ship.
+
+The inline-`style.opacity`-versus-class trap is not a library matter, as the
+entry says, but it cost a review round and belongs with the rest.
+
+## Suggested order
+
+1. **10**, **13**, **19**, **21**, **15**'s README line, and the documentation
+   half of **11** - all small, none of them touching the dispatch or delivery
+   paths.
+2. **18** and **12** - both are the same small bridge from the plugin into the
+   core, so they are one piece of work.
+3. **16** and **17** - the delivery-path change, with 17 scoped to what the
+   library can actually promise.
+4. **11**'s manual pump - the per-overlay queue refactor, worth doing after 16
+   and 17 have settled how delivery is described.
+5. **14**, **22**, **20** - the documentation and the probe host, which is the
+   one that also pays this repository back.
