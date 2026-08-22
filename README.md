@@ -509,11 +509,20 @@ absent) - target WebGL.
 ## Requirements and limits
 
 - Needs the Microsoft WebView2 runtime, which current Windows 10 and 11
-  installations already include. Without it the failure surfaces
-  asynchronously: the first `WebOverlays.Create` still returns a handle whose
-  `Failed` event fires shortly after; later calls return null.
+  installations already include - and which any machine that has started the
+  SPT launcher demonstrably has, since the launcher's own interface is a web UI
+  hosted in WebView2. Without it the failure surfaces asynchronously: the first
+  `WebOverlays.Create` still returns a handle whose `Failed` event fires
+  shortly after; later calls return null.
+- Overlays keep to a browser of their own. The runtime is shared with anything
+  else using it, the launcher included, but the browser *process* is not: this
+  library gives its browser a user data folder of its own, and WebView2 only
+  pools processes across environments that share a folder. So nothing here can
+  disturb - or be disturbed by - another application's WebView2.
 - Needs borderless windowed or windowed mode. In exclusive fullscreen a window
-  over the game would minimise it, so `Show()` refuses and logs there;
+  over the game would minimise it, so `Show()` refuses and logs there. Current
+  Escape From Tushonka appears to stay borderless even when set to fullscreen,
+  so this is insurance rather than a case you are likely to meet;
   `WebOverlayPlugin.IsDisplayModeSupported` is still public for a mod that
   wants to explain the situation in its own interface.
 - A framed overlay takes the foreground, and a game that captures the mouse
