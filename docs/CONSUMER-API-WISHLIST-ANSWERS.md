@@ -9,8 +9,10 @@ Entry 8 and the throwing half of 9 stay declined for the reasons given.
 Entries 10-22 arrived later, from ModProfiler and QuestMarkers; they are
 answered at the end of this document. Of those, 10, 12, 13, 18, 19 and 21
 shipped in v1.7.0, and 11, 16 and 17 in v1.8.0 - 17 as the two halves the
-library can honestly deliver. What remains is documentation (14, 22) and
-giving the probe host a home (20).
+library can honestly deliver. The three without an API half followed as
+repository work: 20 as `tools/Probe`, 14 as `docs/SOFT-DEPENDENCY.md`, and 22
+as the README's "What a HUD has to decide for itself". Both lists are now
+answered in full.
 
 **One correction to this document:** entry 7 below proposes hit-test regions
 as the better answer, keeping the picture and giving up only the mouse. That
@@ -382,6 +384,10 @@ member fails at JIT time on a 1.3 install - presence is no longer the question,
 references, the Mono.Cecil build check, and one sentence in the changelog
 contract saying minors are additive so consumers gate on "at least X.Y".
 
+**Done.** The guide also carries a table of which member arrived in which
+version, since that is what a consumer actually needs to set `MinimumVersion`
+from, and the changelog now states the additive rule in its own contract.
+
 ## 15. Checked, needs nothing - agreed
 
 All three hold. The third deserves the README sentence: a page opened in an
@@ -498,6 +504,12 @@ temporary so they can be deleted when those ship.
 
 The inline-`style.opacity`-versus-class trap is not a library matter, as the
 entry says, but it cost a review round and belongs with the rest.
+
+**Done**, as "What a HUD has to decide for itself" in the README's HUD
+section. Two of the five entries did not survive the wait: re-sending page
+configuration is now `PostOptions.Retain` (1.8.0) and the fullscreen guard is
+inside `Show()` (1.7.0), so both are recorded there as closed rather than as
+advice.
 
 ## Suggested order
 

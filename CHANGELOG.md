@@ -7,6 +7,11 @@ describes the library as it is now rather than how it got there.
 Each version starts with the short player-facing copy for the Forge version
 field, followed by the detailed record for anyone reading the source later.
 
+Minor releases are additive: they add members and change nothing a consumer
+depended on. So a mod gates on "at least X.Y" rather than on presence, and
+every entry below names the version a member arrived in - see
+[`docs/SOFT-DEPENDENCY.md`](docs/SOFT-DEPENDENCY.md).
+
 ## [Unreleased]
 
 Nothing in the shipped library. The repository gained the host it was tested

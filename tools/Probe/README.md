@@ -5,12 +5,12 @@ game. It exists for two reasons:
 
 - **Proof.** Every hand-bound vtable slot in this library was verified here
   before it was trusted. A slot number read off a header is a guess until
-  something observable changes because of it — a pixel, a click, a message.
+  something observable changes because of it - a pixel, a click, a message.
   Every row of [`docs/FAULT-TESTS.md`](../../docs/FAULT-TESTS.md) is one mode
   of this program.
 - **Preview.** The `preview` mode shows *your* page in a real overlay, with
   the same window, the same transparency and the same message bridge as in a
-  raid — so a layout can be worked on without starting the game.
+  raid - so a layout can be worked on without starting the game.
 
 It is not part of any release. It targets net9.0 rather than the net472 the
 plugin needs, because nothing here runs inside Unity.
@@ -37,7 +37,7 @@ dotnet run --project tools/Probe -c Release -- preview path/to/page.html --trans
 | Option | |
 |---|---|
 | `--transparent` | no frame, alpha against a coloured backdrop |
-| `--interactive` | transparent and clickable — a HUD that takes input |
+| `--interactive` | transparent and clickable - a HUD that takes input |
 | `--size WxH` | default 900x600 |
 | `--host <name>` | serve the folder under this host name instead of `preview.local`; match your mod's own `VirtualHost` when the page uses absolute URLs or `localStorage` |
 | `--theme` | inject the `--wo-*` colour tokens |
@@ -52,8 +52,8 @@ work as they do in a mod. Anything the page sends back is printed, and
 `overlay.request('preview', ...)` is answered, so a page can be tried out
 before the mod behind it exists.
 
-A page the mod assembles at run time — one with placeholders spliced in before
-`LoadHtml` — cannot be shown as it sits on disk. Preview the file the mod
+A page the mod assembles at run time - one with placeholders spliced in before
+`LoadHtml` - cannot be shown as it sits on disk. Preview the file the mod
 would produce, or keep the parts separate and let the page fetch them.
 
 [`sample-page.html`](sample-page.html) is a small worked example of the three
@@ -89,7 +89,7 @@ Two things to know before reading a failure:
 - **`glass`, `glass-click` and `cube` need an attached interactive session.**
   They sample real screen pixels and send real mouse input. Over RDP, a
   disconnected session makes every sample come back `rgb(0,0,0)` and every
-  click land nowhere — a whole-mode failure that looks alarming and means
+  click land nowhere - a whole-mode failure that looks alarming and means
   nothing. `query session` should show your session as `Active`, not
   `Disc`. Even attached, the compositor occasionally drops a frame during a
   capture, so re-run before believing a single pixel failure.
@@ -99,5 +99,5 @@ Two things to know before reading a failure:
   killed mid-block. If a build ran in between, the fresh copy wins.
 
 `bounds-save` and `bounds-verify` are one row in two halves: run `bounds-save`,
-then `bounds-verify` in a second process, which is the point — the store has to
+then `bounds-verify` in a second process, which is the point - the store has to
 survive the process, not just the window.

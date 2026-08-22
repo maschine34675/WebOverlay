@@ -45,6 +45,12 @@ window.chrome.webview.postMessage('button pressed');
 window.chrome.webview.addEventListener('message', e => console.log(e.data));
 ```
 
+If your mod should also work when this library is *not* installed, that takes
+more than a `try`/`catch` on Mono - and getting it slightly wrong can break
+other people's mods rather than yours. The rules, and the two shipping gates
+that follow them, are in
+[`docs/SOFT-DEPENDENCY.md`](docs/SOFT-DEPENDENCY.md).
+
 `WebOverlays.Create` returns `null` when overlays are known to be unavailable,
 and otherwise a handle whose browser is still starting: creation is
 asynchronous and never blocks Unity's thread. Failures that surface later -
@@ -427,6 +433,40 @@ a **chroma key** with these rules; an interactive one fails instead:
 - Per-pixel transparency is binary: semi-transparent page pixels blend towards
   near-black rather than the game - solid dark panels are the safe look.
 - `rgb(3,1,3)` is the reserved transparency key; avoid painting it.
+
+The page can read which of the two it got - `IWebOverlay.Transparency` on the
+mod side, `overlay.env.transparency` and a `wo-composed` / `wo-chroma` /
+`wo-opaque` class on the root element in the page - so one stylesheet can
+serve both.
+
+### What a HUD has to decide for itself
+
+An overlay is an operating-system window sitting above the game. That is what
+makes it work at all, and it is also the source of every surprise below. None
+of these are library behaviour the mod can turn off; they are decisions the
+mod has to make. Each is one line once known, and invisible until a player
+reports it.
+
+- **It floats over the game's own screens too** - the inventory, the map, the
+  menus, the death sequence. A HUD that should only exist during play has to
+  say so: in EFT that is
+  `EftScreenManager.Instance.CheckCurrentScreen(EEftScreenType.BattleUI)` plus
+  the player's `HealthController.IsAlive`, checked on a timer or a screen
+  event, with `Hide()` when it no longer holds.
+- **The hideout looks exactly like a raid** to every obvious test: it registers
+  a `GameWorld`, the game reaches `GameStatus.Started`, and there is a player
+  flagged `IsYourPlayer`. Exclude it by world type (`HideoutGameWorld`) or your
+  HUD will greet the player over their workbench.
+- **Pick one mechanism for showing and hiding the page.** A page that toggles a
+  CSS class *and* writes `style.opacity` will find the inline value wins every
+  time - this is ordinary CSS precedence, not the overlay, and it has cost more
+  than one review round.
+
+Two traps that used to belong here have been closed by the library: page-side
+configuration no longer has to be re-sent on every `PageLoaded` - send it with
+`PostOptions.Retain` and the library replays it after its own reload (1.8.0) -
+and `Show()` refuses exclusive fullscreen by itself, logging once, rather than
+leaving each caller to guard it (1.7.0).
 
 ## Performance
 
