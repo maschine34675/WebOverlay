@@ -76,6 +76,8 @@ namespace WebOverlay
                 RememberBounds = options.RememberBounds,
                 PersistenceKey = options.PersistenceKey,
                 DispatchOnMainThread = options.DispatchOnMainThread,
+                InjectTheme = options.InjectTheme,
+                FreeCursorWhileShown = options.FreeCursorWhileShown,
                 VirtualHosts = copy(options.VirtualHosts),
             };
         }
@@ -153,6 +155,32 @@ namespace WebOverlay
         /// than let the page's own host name reach the network.
         /// </summary>
         VirtualHostFailed,
+    }
+
+    /// <summary>
+    /// How an overlay ended up doing transparency, which decides how a page
+    /// should be styled: composition gives true per-pixel alpha, the chroma
+    /// key does not. Available once <see cref="IWebOverlay.Ready"/> has fired;
+    /// the page learns the same thing without any mod code from the class the
+    /// library puts on its root element.
+    /// </summary>
+    public enum OverlayTransparency
+    {
+        /// <summary>An ordinary opaque window.</summary>
+        None = 0,
+
+        /// <summary>
+        /// True per-pixel alpha: `rgba()` glass, soft shadows and clean
+        /// antialiasing blend with the game. Page class `wo-composed`.
+        /// </summary>
+        Composition,
+
+        /// <summary>
+        /// The fallback on older systems: transparency is binary and
+        /// semi-transparent pixels blend towards near-black, so a page wants
+        /// solid panels here. Page class `wo-chroma`.
+        /// </summary>
+        ChromaKey,
     }
 
     /// <summary>
@@ -312,6 +340,31 @@ namespace WebOverlay
         public bool DispatchOnMainThread { get; set; }
 
         /// <summary>
+        /// Puts the library's palette on the page as CSS custom properties -
+        /// `--wo-gold`, `--wo-ink`, `--wo-text`, `--wo-dim`, `--wo-accent`,
+        /// `--wo-font`, `--wo-border`, `--wo-radius` - so overlays from
+        /// different mods can look like one family without copying hex values
+        /// around. Off by default: a mod with its own look should not have to
+        /// fight a theme it did not ask for. See `docs/STYLE.md`.
+        /// </summary>
+        public bool InjectTheme { get; set; }
+
+        /// <summary>
+        /// While this overlay is visible and the game window does not have the
+        /// focus, hand the mouse cursor back to the player. A game that
+        /// captures the cursor keeps it captured when a window of the same
+        /// process takes the foreground, so a framed overlay opened mid-raid
+        /// would otherwise be unreachable - this is the library undoing its own
+        /// side effect. The moment the game has the focus again the library
+        /// stops touching the cursor and the game takes it back.
+        ///
+        /// Needs the library's Unity plugin, so it does nothing in a non-Unity
+        /// host. Off by default, and pointless for a HUD, which never takes
+        /// the foreground.
+        /// </summary>
+        public bool FreeCursorWhileShown { get; set; }
+
+        /// <summary>
         /// Folders served to the page as `https://&lt;host&gt;/`, so it can load
         /// real files instead of inlining everything. The mapped origins are
         /// trusted automatically, exactly like a
@@ -341,6 +394,13 @@ namespace WebOverlay
         /// filling the outbox. Pairs with <see cref="PageLoaded"/>.
         /// </summary>
         bool IsPageLoaded { get; }
+
+        /// <summary>
+        /// Which kind of transparency this overlay actually got. Meaningful
+        /// once <see cref="Ready"/> has fired; the page can read the same fact
+        /// from the `wo-composed` / `wo-chroma` class on its root element.
+        /// </summary>
+        OverlayTransparency Transparency { get; }
 
         /// <summary>
         /// Why <see cref="Failed"/> fired; <see cref="OverlayFailure.Unknown"/>
@@ -402,6 +462,18 @@ namespace WebOverlay
         /// <see cref="OverlayOptions.DispatchOnMainThread"/>.
         /// </summary>
         void OnRequest(string channel, Func<string, string> handler);
+
+        /// <summary>
+        /// The same, for an answer that is not ready yet: call `reply` once,
+        /// whenever and from wherever the answer arrives - after a scan, a
+        /// file write, a round trip of your own. A handler that throws before
+        /// replying answers null, and a reply that arrives after the page gave
+        /// up waiting is dropped rather than resolving a stale promise, so the
+        /// page can raise its own deadline with
+        /// `overlay.request(channel, payload, timeoutMs)` when it expects to
+        /// wait.
+        /// </summary>
+        void OnRequest(string channel, Action<string, Action<string>> handler);
 
         /// <summary>Runs JavaScript in the page, for pushing live values.</summary>
         void ExecuteScript(string script);
@@ -535,7 +607,7 @@ namespace WebOverlay
             window.ChannelMessage = (channel, payload) => raise(() => ChannelMessage?.Invoke(channel, payload));
             window.RequestReceived = (channel, payload, reply) =>
             {
-                Func<string, string> handler;
+                Action<string, Action<string>> handler;
                 lock (responders)
                     responders.TryGetValue(channel, out handler);
                 if (handler == null)
@@ -547,20 +619,21 @@ namespace WebOverlay
                 }
                 // Like a script result, this is a promise to one caller - it
                 // is delivered even if the consumer has since disposed, and
-                // the page is answered whatever the handler does.
+                // the page is answered whatever the handler does. `reply` is
+                // once-only, so a handler that answered and then threw is
+                // still fine.
                 raiseResult(() =>
                 {
-                    string value = null;
                     try
                     {
-                        value = handler(payload);
+                        handler(payload, reply);
                     }
                     catch (Exception ex)
                     {
                         OverlayHost.LogWarning("a request handler threw ("
                             + ex.GetType().Name + ": " + ex.Message + ").");
+                        reply(null);
                     }
-                    reply(value);
                 });
             };
             window.KeyPressed = key => raise(() => KeyPressed?.Invoke(key));
@@ -612,8 +685,8 @@ namespace WebOverlay
 
         // One responder per channel, set from the consumer's thread and read
         // on the overlay thread.
-        private readonly System.Collections.Generic.Dictionary<string, Func<string, string>> responders =
-            new System.Collections.Generic.Dictionary<string, Func<string, string>>(StringComparer.Ordinal);
+        private readonly System.Collections.Generic.Dictionary<string, Action<string, Action<string>>> responders =
+            new System.Collections.Generic.Dictionary<string, Action<string, Action<string>>>(StringComparer.Ordinal);
         public event Action Closed;
         public event Action<bool> VisibilityChanged;
         public event Action PageLoaded;
@@ -687,6 +760,8 @@ namespace WebOverlay
 
         public bool IsPageLoaded => window.IsPageLoaded;
 
+        public OverlayTransparency Transparency => window.Transparency;
+
         public OverlayFailure Failure => window.Failure;
 
         public string FailureMessage => window.FailureMessage;
@@ -741,7 +816,12 @@ namespace WebOverlay
                 value => raiseResult(() => answer(value)), timeoutMilliseconds));
         }
 
-        public void OnRequest(string channel, Func<string, string> handler)
+        public void OnRequest(string channel, Func<string, string> handler) =>
+            OnRequest(channel, handler == null
+                ? (Action<string, Action<string>>)null
+                : (payload, reply) => reply(handler(payload)));
+
+        public void OnRequest(string channel, Action<string, Action<string>> handler)
         {
             if (channel == null)
                 return;

@@ -82,6 +82,12 @@ subscription included, which then also arrives from the next frame instead of
 inside the `+=` - and events still queued when you `Dispose` the handle are
 dropped.
 
+One thing to know before doing real work in a dispatched handler: it runs
+inside **this library's** `Update`, so a profiler bills the time to the library
+rather than to your mod, and where it lands in the frame depends on plugin load
+order. Keep such handlers short and do the work from your own `Update` if
+either matters to you.
+
 When another mod ships alongside this library, reference it with
 `<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your
 own release zip - it is a shared dependency the user installs once.
@@ -119,6 +125,8 @@ describes the library as it is now.
 | `RememberBounds` | true | Reopen at the position and size the player left the window at, across sessions. |
 | `PersistenceKey` | assembly/title | Storage key for the remembered bounds. |
 | `DispatchOnMainThread` | false | Raise this overlay's events from the game's main thread (see below). |
+| `InjectTheme` | false | Put the library palette on the page as CSS variables (see `docs/STYLE.md`). |
+| `FreeCursorWhileShown` | false | Hand the cursor back while this overlay is up and the game is unfocused. |
 | `VirtualHosts` | null | Folders served as `https://<host>/`, so the page can load real files (see below). |
 
 `IWebOverlay`:
@@ -130,7 +138,8 @@ describes the library as it is now.
 | `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
 | `Post(channel, payload)` | Send on a named channel; arrives at the page's `overlay.on(channel, ...)`. |
 | `Request(channel, payload, answer)` | Ask the page a question; answered exactly once, `null` on timeout. |
-| `OnRequest(channel, handler)` | Answer questions the page asks with `overlay.request(...)`; null removes the handler. |
+| `OnRequest(channel, handler)` | Answer questions the page asks with `overlay.request(...)`; null removes the handler. Take `(payload, reply)` instead of returning a value when the answer is not ready yet. |
+| `Transparency` | Which transparency this overlay got: `Composition`, `ChromaKey` or `None`. |
 | `ExecuteScript(script, result)` | Same, and hands back what the script evaluated to, as JSON. |
 | `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
 | `SetBounds(x, y, w, h)` | Move or resize at runtime; null keeps a value. Not persisted. |
@@ -205,6 +214,28 @@ A request is answered **exactly once**: with the other side's reply, with
 `null` when nothing answers that channel, and with `null` when the deadline
 (five seconds by default, `Request(..., timeoutMilliseconds)` to change it)
 passes. So neither side can hang the other, whatever the page does.
+
+When an answer is not ready yet, take the deferred form of `OnRequest` and
+call `reply` later, from wherever the answer arrives:
+
+```csharp
+overlay.OnRequest("rescan", (payload, reply) => StartCoroutine(Rescan(reply)));
+```
+
+The page can raise its own deadline with `overlay.request(channel, payload,
+timeoutMs)` when it expects to wait. A reply that arrives after the page gave
+up is dropped rather than resolving a stale promise, and a handler that throws
+before replying answers `null`.
+
+Pages also learn what they are running in without asking the mod: the library
+puts `wo-composed`, `wo-chroma` or `wo-opaque` on the root element (and
+`overlay.env.transparency` says the same), so a stylesheet can adapt to the
+kind of transparency it actually got. `OverlayOptions.InjectTheme` additionally
+sets the library palette as CSS variables - see `docs/STYLE.md`.
+
+`window.overlay` exists only inside an overlay. A page that should also open in
+an ordinary browser wants one guard line (`if (window.overlay) { ... }`) rather
+than a console full of errors.
 
 The plain `Post` / `MessageReceived` pair is untouched and keeps working:
 anything that is not a well-formed envelope reaches `MessageReceived`
@@ -384,7 +415,15 @@ absent) - target WebGL.
   asynchronously: the first `WebOverlays.Create` still returns a handle whose
   `Failed` event fires shortly after; later calls return null.
 - Needs borderless windowed or windowed mode. In exclusive fullscreen a window
-  over the game would minimise it, so check `WebOverlayPlugin.IsDisplayModeSupported`.
+  over the game would minimise it, so `Show()` refuses and logs there;
+  `WebOverlayPlugin.IsDisplayModeSupported` is still public for a mod that
+  wants to explain the situation in its own interface.
+- A framed overlay takes the foreground, and a game that captures the mouse
+  keeps capturing it - which leaves the window unreachable mid-raid. Set
+  `FreeCursorWhileShown` and the library hands the cursor back while such an
+  overlay is up and the game is unfocused.
+- `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`
+  turn a configurable hotkey into the virtual-key codes `CloseKeys` wants.
 - While the overlay holds the keyboard the game does not see key presses, and
   the other way round. That is why the window has a title bar with a close
   button by default, and why `OverlayOptions.CloseKeys` exists. The title bar

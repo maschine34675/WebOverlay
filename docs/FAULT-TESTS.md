@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-28 were added for v1.3.0 to v1.6.0
+and re-run unchanged for v1.4.0; rows 10-31 were added for v1.3.0 to v1.7.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -38,6 +38,14 @@ and re-run unchanged for v1.4.0; rows 10-28 were added for v1.3.0 to v1.6.0
 | 26 | A page sending a shape the library cannot read, while a shape is already set | the old shape stays - picture and mouse both - instead of falling back to the whole window | PASS |
 | 27 | A page sending on, and requesting from, a reserved `__wo.` channel | neither reaches the mod, and the request is answered with null rather than left open | PASS |
 | 28 | `SetShape` on a framed window | the region starts below the title bar, so the frame stays usable whatever the page asks for | PASS |
+| 29 | A deferred request answered from a background thread a second later, and one whose handler throws | both reach the page - the late answer with its value, the throwing one with null | PASS |
+| 30 | The transparency a page is told about, with and without the theme | `wo-composed` / `wo-opaque` on the root element, `overlay.env` agreeing with the handle, palette variables only when asked for | PASS |
+| 31 | `Show()` while the display-mode probe reports exclusive fullscreen, then not | refused and logged, then shown again - without a `Failed` in between | PASS |
+
+Two modes record a defect rather than a guarantee: `mixed` shows that a
+windowed overlay cannot be created while the only live overlays are transparent
+ones, and `mixed-reverse` shows the same combination working in the other
+order. They are expected to fail until that is fixed; see the changelog.
 
 Not automated (manually covered in game during development, or accepted):
 
@@ -51,7 +59,9 @@ Not automated (manually covered in game during development, or accepted):
   from outside).
 - Shutdown during environment start (guarded by `stopping` checks; exercised
   implicitly at every game exit).
-- Exclusive fullscreen (guarded by `WebOverlayPlugin.IsDisplayModeSupported`).
+- Freeing the cursor while the game holds it: needs Unity and a game that
+  captures the mouse, so it is covered in game rather than here.
+- The `KeyCode` to virtual-key table, which is a table.
 
 The probe source lives outside the repository (a throwaway harness); re-create
 it from this table when re-running the matrix for a future release. Its modes
@@ -59,4 +69,4 @@ map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
 `nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
-`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`.
+`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`.

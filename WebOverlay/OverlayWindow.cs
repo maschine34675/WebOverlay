@@ -135,6 +135,7 @@ namespace WebOverlay
         private bool expectInlineNavigation;
         private bool closed;
         private bool everPositioned;
+        private bool warnedAboutFullscreen;
         private int renderRecoveries;
         private int overflowDropped;
 
@@ -211,6 +212,17 @@ namespace WebOverlay
         private volatile bool pageLoaded;
 
         public bool IsPageLoaded => pageLoaded;
+
+        /// <summary>
+        /// Which transparency this overlay ended up with - decided before the
+        /// window exists, so it is already true when the page is injected.
+        /// </summary>
+        public OverlayTransparency Transparency => !options.Transparent
+            ? OverlayTransparency.None
+            : usesComposition ? OverlayTransparency.Composition : OverlayTransparency.ChromaKey;
+
+        /// <summary>Read once per frame by the plugin; see the option.</summary>
+        internal bool WantsFreeCursor => options.FreeCursorWhileShown && isVisible;
 
         public OverlayFailure Failure { get; private set; } = OverlayFailure.Unknown;
 
@@ -434,7 +446,8 @@ namespace WebOverlay
 
             int result = WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(
                 webView, WebView2Api.WebView_AddScriptToExecuteOnDocumentCreated)(
-                webView, ChannelProtocol.Shim, channelShimCallback.Pointer);
+                webView, ChannelProtocol.ShimFor(Transparency, options.InjectTheme),
+                channelShimCallback.Pointer);
             if (result != WebView2Api.S_OK)
                 OverlayHost.LogWarning("could not install the channel shim, hr=0x" + result.ToString("X8")
                     + "; named channels will not work on this overlay.");
@@ -1512,6 +1525,22 @@ namespace WebOverlay
             desiredVisible = true;
             if (window == IntPtr.Zero || state == CreationState.Failed)
                 return;
+            if (!OverlayHost.DisplayModeSupported)
+            {
+                // A window over an exclusive-fullscreen game minimises it, and
+                // every consumer has more than one show path to remember this
+                // on. Refusing here costs a log line; forgetting it once costs
+                // the player their raid start. Not a failure - the player can
+                // switch back - so the overlay stays alive and simply hidden.
+                if (!warnedAboutFullscreen)
+                {
+                    warnedAboutFullscreen = true;
+                    OverlayHost.LogWarning("not showing the overlay: the game is in exclusive fullscreen,"
+                        + " where a window over it would minimise it. Use borderless windowed.");
+                }
+                desiredVisible = false;
+                return;
+            }
             // Repositioning on every Show is what reset the window each toggle.
             // A panel keeps the spot the player gave it; only the first show,
             // a spot that ended up off every screen, and HUDs (which follow

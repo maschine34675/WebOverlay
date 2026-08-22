@@ -201,6 +201,9 @@ namespace WebOverlay.Demo
                 Interactive = true,
                 Width = 360,
                 Height = 240,
+                // Take the library palette, so this panel looks like the rest
+                // without repeating hex values.
+                InjectTheme = true,
                 // The other threading style: with this the library raises
                 // this overlay's events from the game's own Update, so the
                 // handler below may touch game state directly - no queue, no
@@ -225,6 +228,15 @@ namespace WebOverlay.Demo
             // The page may ask the game for a value and await the answer.
             created.OnRequest("fps", _ =>
                 Mathf.RoundToInt(1f / Mathf.Max(0.0001f, Time.deltaTime)).ToString(CultureInfo.InvariantCulture));
+
+            // And for an answer that is not ready yet, the deferred form: the
+            // reply goes out whenever the work is done, from wherever.
+            created.OnRequest("slow-count", (payload, reply) =>
+            {
+                int target = Mathf.Clamp(int.TryParse(payload, NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out int n) ? n : 3, 1, 10);
+                this.StartCoroutine(countThen(target, reply));
+            });
 
             // And the game may ask the page - here once its content exists.
             created.PageLoaded += () =>
@@ -295,7 +307,14 @@ namespace WebOverlay.Demo
                 Width = 720,
                 Height = 460,
                 DevTools = true,
-                CloseKeys = new[] { 0x1B, 0x79 } // Escape and F10
+                // Escape plus whatever key opened it - derived from the
+                // configured shortcut rather than hard-coded, which is the
+                // mistake this helper exists to prevent.
+                CloseKeys = WebOverlayPlugin.CloseKeysFor(toggleKey.Value),
+                // A framed window takes the foreground; without this the game
+                // would keep the cursor captured and the panel unreachable in
+                // a raid.
+                FreeCursorWhileShown = true,
             });
 
             if (overlay == null)
@@ -339,6 +358,16 @@ namespace WebOverlay.Demo
             // Through the local: the latched Failed handler may already have
             // run during the subscription and nulled the field.
             created.LoadHtml(Page);
+        }
+
+        /// <summary>
+        /// Stands in for real work that takes a while - a scan, a file, a
+        /// server round trip. The page waits on its promise meanwhile.
+        /// </summary>
+        private System.Collections.IEnumerator countThen(int seconds, Action<string> reply)
+        {
+            yield return new WaitForSeconds(seconds);
+            reply("waited " + seconds.ToString(CultureInfo.InvariantCulture) + " s");
         }
 
         private void drainPageMessages()
@@ -438,7 +467,8 @@ namespace WebOverlay.Demo
 <meta charset='utf-8'>
 <style>
   body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; overflow:hidden; }
-  .card { position:absolute; inset:12px; background:rgba(16,17,13,0.66);
+  /* The library's palette, injected because this overlay asked for it. */
+  .card { position:absolute; inset:12px; background:var(--wo-ink, rgba(16,17,13,0.66));
           border:1px solid rgba(194,173,109,0.4); border-radius:10px;
           box-shadow:0 6px 24px rgba(0,0,0,0.5); color:#d0cdbd; padding:16px; }
   h1 { color:#c2ad6d; font-size:1rem; letter-spacing:.1em; margin:0 0 4px; }
@@ -453,6 +483,7 @@ namespace WebOverlay.Demo
   <p>The game shows through this card - and the buttons still work.</p>
   <button onclick=""overlay.send('button', 'one')"">Send to game</button>
   <button onclick=""askFps()"">Ask the game</button>
+  <button onclick=""askSlow()"">Ask something slow</button>
   <div id='answer'></div>
 </div>
 <script>
@@ -463,6 +494,14 @@ namespace WebOverlay.Demo
   function askFps() {
     overlay.request('fps', '').then(function (value) {
       document.getElementById('answer').textContent = 'the game says ' + value + ' fps';
+    });
+  }
+  function askSlow() {
+    // Three seconds is longer than the default deadline, so the page says
+    // how long it is willing to wait.
+    document.getElementById('answer').textContent = 'asking...';
+    overlay.request('slow-count', '3', 10000).then(function (value) {
+      document.getElementById('answer').textContent = 'the game ' + value;
     });
   }
 </script>";

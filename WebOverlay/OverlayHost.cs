@@ -168,6 +168,50 @@ namespace WebOverlay
             set => mainThreadPumpAvailable = value;
         }
 
+        /// <summary>
+        /// Whether a window over the game can be shown at all. The plugin
+        /// registers this, because only Unity knows the display mode and this
+        /// half of the library stays free of it; without a probe every mode is
+        /// assumed fine, which is what a non-Unity host wants.
+        /// </summary>
+        internal static Func<bool> DisplayModeProbe;
+
+        internal static bool DisplayModeSupported
+        {
+            get
+            {
+                Func<bool> probe = DisplayModeProbe;
+                if (probe == null)
+                    return true;
+                try
+                {
+                    return probe();
+                }
+                catch
+                {
+                    return true;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Whether any visible overlay asked for the cursor to be freed while
+        /// the game is unfocused. Asked once per frame by the plugin, which
+        /// owns the Unity side of that.
+        /// </summary>
+        internal static bool WantsFreeCursor()
+        {
+            lock (windows)
+            {
+                foreach (OverlayWindow window in windows)
+                {
+                    if (window.WantsFreeCursor)
+                        return true;
+                }
+            }
+            return false;
+        }
+
         /// <summary>Delivers queued events. Call this from the main thread only.</summary>
         internal static void PumpMainThread()
         {

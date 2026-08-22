@@ -36,17 +36,62 @@ namespace WebOverlay
         public const string KindAnswer = "a";
 
         /// <summary>
+        /// The shim for one overlay: the constant below with its environment
+        /// filled in. What the page is told is what the overlay actually got,
+        /// decided before any of this is injected.
+        /// </summary>
+        public static string ShimFor(OverlayTransparency transparency, bool injectTheme)
+        {
+            string mode = transparency == OverlayTransparency.Composition ? "composition"
+                : transparency == OverlayTransparency.ChromaKey ? "chroma"
+                : "none";
+            return Shim
+                .Replace("/*!WO_THEME!*/", injectTheme ? ThemeTokens : "")
+                .Replace("/*!WO_ENV!*/",
+                "{ transparency: '" + mode + "', theme: " + (injectTheme ? "true" : "false") + " }");
+        }
+
+        /// <summary>The library palette, applied only when a mod asks for it.</summary>
+        private const string ThemeTokens = @"
+      root.style.setProperty('--wo-gold', '#c2ad6d');
+      root.style.setProperty('--wo-ink', 'rgba(16,17,13,0.74)');
+      root.style.setProperty('--wo-text', '#d0cdbd');
+      root.style.setProperty('--wo-dim', '#918e7e');
+      root.style.setProperty('--wo-accent', '#72ba80');
+      root.style.setProperty('--wo-border', 'rgba(194,173,109,0.35)');
+      root.style.setProperty('--wo-radius', '8px');
+      root.style.setProperty('--wo-font', ""'Segoe UI',system-ui,sans-serif"");";
+
+        /// <summary>
         /// Runs before any page script, on every document, so `window.overlay`
         /// is there by the time a page wants it. It only wraps the existing
         /// message bridge - it grants a page nothing the bridge did not
         /// already give it, and the source filter still decides who may talk.
+        /// Injected through <see cref="ShimFor"/>, never raw.
         /// </summary>
         public const string Shim = @"(function () {
   if (!window.chrome || !window.chrome.webview || window.overlay) return;
   var handlers = {}, responders = {}, pending = {}, next = 1;
+  var env = /*!WO_ENV!*/;
   function send(o) { window.chrome.webview.postMessage(JSON.stringify(o)); }
   function text(v) { return v === null || v === undefined ? null : String(v); }
+  // The page learns what it is running in without asking the mod: a class on
+  // the root element, and the palette when the mod asked for it. The document
+  // element may not exist yet at this point, hence the retry.
+  function describe() {
+    var root = document.documentElement;
+    if (!root) return false;
+    root.classList.add(env.transparency === 'composition' ? 'wo-composed'
+      : env.transparency === 'chroma' ? 'wo-chroma' : 'wo-opaque');
+    if (env.theme) {/*!WO_THEME!*/}
+    return true;
+  }
+  if (!describe()) {
+    document.addEventListener('readystatechange', describe);
+    document.addEventListener('DOMContentLoaded', describe);
+  }
   window.overlay = {
+    env: env,
     on: function (channel, fn) {
       (handlers[channel] = handlers[channel] || []).push(fn);
     },

@@ -9,6 +9,59 @@ field, followed by the detailed record for anyone reading the source later.
 
 ## [Unreleased]
 
+### Known
+
+- A windowed overlay cannot be created while the only live overlays are
+  transparent ones: WebView2 refuses to mix windowed and visual hosting in one
+  environment, and the second creation fails with `ViewFailed`
+  (`ERROR_INVALID_STATE`). Present since 1.2.0, measured 2026-08-22. The other
+  order works, so a mod whose panel opens before any HUD is unaffected.
+
+## [1.7.0]
+
+### Forge version notes
+
+Nothing changes for players - this release is for the mods that use the
+library.
+
+- Overlays can be told to hand the mouse cursor back while they are open, so a
+  window opened during a raid can actually be used instead of leaving the
+  cursor captured by the game.
+- The library now refuses to open a window over a game in exclusive fullscreen
+  rather than relying on every mod to check first, which is what used to
+  minimise the game.
+
+### Added
+
+- `OnRequest(channel, (payload, reply) => ...)` for answers that are not ready
+  yet: reply once, later, from wherever the answer arrives.
+- `IWebOverlay.Transparency`, and the same fact for the page without any mod
+  code - `wo-composed` / `wo-chroma` / `wo-opaque` on the root element and
+  `overlay.env.transparency` - so a stylesheet can adapt to the kind of
+  transparency it actually got.
+- `OverlayOptions.InjectTheme`, putting the library palette on the page as CSS
+  variables, documented in `docs/STYLE.md`.
+- `OverlayOptions.FreeCursorWhileShown`, releasing the cursor while such an
+  overlay is up and the game is unfocused - the library undoing its own side
+  effect, since a framed overlay takes the foreground while the game keeps the
+  mouse captured.
+- `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`,
+  the table two consumers had each written for themselves.
+
+### Changed
+
+- `Show()` refuses exclusive fullscreen itself, logging once, instead of
+  leaving it to every consumer's every show path. `IsDisplayModeSupported`
+  stays public for a mod that wants to explain the situation in its own
+  interface.
+- `DispatchOnMainThread` now says in its documentation whose frame budget a
+  dispatched handler spends: it runs inside this library's `Update`, so a
+  profiler bills it here and its position in the frame follows plugin load
+  order.
+- The demo derives its close keys from the configured hotkey rather than
+  hard-coding them, frees the cursor, takes the theme, and shows a deferred
+  answer.
+
 ## [1.6.0]
 
 ### Forge version notes
