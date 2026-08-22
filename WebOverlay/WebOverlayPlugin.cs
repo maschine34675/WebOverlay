@@ -65,7 +65,10 @@ namespace WebOverlay
         /// </summary>
         private void freeCursorIfWanted()
         {
-            if (Application.isFocused || !OverlayHost.WantsFreeCursor())
+            // Whether the overlay is the window in front, asked of the OS -
+            // Unity's own notion of focus does not have to agree, and the game
+            // keeps its cursor regardless of what it thinks.
+            if (!OverlayHost.WantsFreeCursor())
                 return;
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;

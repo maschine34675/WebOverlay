@@ -421,7 +421,9 @@ absent) - target WebGL.
 - A framed overlay takes the foreground, and a game that captures the mouse
   keeps capturing it - which leaves the window unreachable mid-raid. Set
   `FreeCursorWhileShown` and the library hands the cursor back while such an
-  overlay is up and the game is unfocused.
+  overlay is the window in front. A game that re-hides the cursor from its own
+  code every frame can still win that argument; silencing the game's input
+  handling is a mod's business, not this library's.
 - `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`
   turn a configurable hotkey into the virtual-key codes `CloseKeys` wants.
 - While the overlay holds the keyboard the game does not see key presses, and

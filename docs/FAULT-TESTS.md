@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-34 were added for v1.3.0 to v1.7.0
+and re-run unchanged for v1.4.0; rows 10-35 were added for v1.3.0 to v1.7.0
 (runtime 151.0.4129.93).
 
 | # | Scenario | Expectation | Result |
@@ -44,6 +44,7 @@ and re-run unchanged for v1.4.0; rows 10-34 were added for v1.3.0 to v1.7.0
 | 32 | A transparent overlay first, then a windowed one, then more of both | all come up: the windowed one gets a second browser, since a browser hosting composed views refuses windowed ones | PASS |
 | 33 | The same overlays in the other order | all come up in one browser - no second browser is created when the first one can still serve windowed views | PASS |
 | 34 | Browser processes and memory with a window, then with a HUD added | one extra process and 53 MB, because that order needs no second browser (the collision order costs about six processes and 258 MB) | PASS |
+| 35 | Talking to an overlay that is already up while a second browser starts for another one | the message arrives - only overlay creation waits for a browser, commands do not | PASS |
 
 Not automated (manually covered in game during development, or accepted):
 
@@ -54,7 +55,11 @@ Not automated (manually covered in game during development, or accepted):
   `docs/CONSUMER-API-WISHLIST-ANSWERS.md`.
 - A failing browser-environment HRESULT (the classification and the "first
   cause wins" rule are code-reviewed; the callback cannot be forced to fail
-  from outside).
+  from outside). The same applies to the second browser failing to start: an
+  invalid folder is either accepted and fails later somewhere else, or rejected
+  synchronously, so what the probe would exercise is not the path that matters.
+  That a failure is not remembered - the next windowed overlay tries again -
+  is code-reviewed.
 - Shutdown during environment start (guarded by `stopping` checks; exercised
   implicitly at every game exit).
 - Freeing the cursor while the game holds it: needs Unity and a game that
@@ -67,4 +72,4 @@ map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
 `glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
 `nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
-`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `footprint`.
+`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `footprint`, `spare-browser`.

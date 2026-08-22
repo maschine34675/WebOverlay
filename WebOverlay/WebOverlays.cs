@@ -769,7 +769,10 @@ namespace WebOverlay
         internal bool Start()
         {
             OverlayHost.Register(window);
-            OverlayHost.Post(() => window.Create());
+            // Creation goes in its own queue: it is the one thing that may
+            // have to wait for a browser, and everything else must keep
+            // flowing while it does.
+            OverlayHost.PostCreation(() => window.Create());
             return true;
         }
 

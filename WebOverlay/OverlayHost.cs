@@ -22,6 +22,12 @@ namespace WebOverlay
     internal static class OverlayHost
     {
         private static readonly ConcurrentQueue<Action> work = new ConcurrentQueue<Action>();
+
+        // Creating an overlay is the only work that may have to wait for a
+        // browser to start, and waiting means pumping messages. Keeping it in
+        // its own queue is what lets everything else - a Post, a Hide, a
+        // Dispose on an overlay that is already up - keep flowing meanwhile.
+        private static readonly ConcurrentQueue<Action> creations = new ConcurrentQueue<Action>();
         private static readonly List<OverlayWindow> windows = new List<OverlayWindow>();
         private static readonly object startSync = new object();
 
@@ -115,14 +121,29 @@ namespace WebOverlay
             return true;
         }
 
+        internal static void PostCreation(Action action)
+        {
+            if (stopping)
+                return;
+            creations.Enqueue(action);
+            wake();
+        }
+
         internal static void Post(Action action)
         {
             if (stopping)
                 return;
             work.Enqueue(action);
-            // Before the environment attempt finishes the pump already runs (it
-            // must, for the completion callback), so the dispatcher must not
-            // drain overlay work yet - the queue holds it until then.
+            wake();
+        }
+
+        /// <summary>
+        /// Before the first environment attempt finishes the pump already runs
+        /// (it must, for the completion callback), so the dispatcher must not
+        /// drain overlay work yet - the queues hold it until then.
+        /// </summary>
+        private static void wake()
+        {
             if (dispatcherWindow != IntPtr.Zero && acceptingWork)
                 PostMessage(dispatcherWindow, WM_APP_WORK, IntPtr.Zero, IntPtr.Zero);
         }
@@ -151,7 +172,10 @@ namespace WebOverlay
                 return environment;
             if (spareEnvironment == IntPtr.Zero)
                 createSpareEnvironment();
-            return spareEnvironment;
+            // Still nothing means the second browser could not be started; the
+            // main one is what is left, and it will refuse with a message that
+            // says so.
+            return spareEnvironment != IntPtr.Zero ? spareEnvironment : environment;
         }
 
         /// <summary>
@@ -207,17 +231,18 @@ namespace WebOverlay
 
             if (spareEnvironment == IntPtr.Zero)
             {
-                // Falling back to the main browser is the old behaviour,
-                // including its defect - better than refusing outright.
-                LogWarning("no second browser; this overlay will fail to open while"
-                    + " a transparent one is up.");
-                spareEnvironment = environment;
+                // Deliberately not remembered as "the main browser will do":
+                // that would turn one bad moment - a timeout, a transient
+                // HRESULT - into the old defect for the rest of the session.
+                // This overlay falls back and probably fails; the next one
+                // tries for a second browser again.
+                LogWarning("no second browser this time; this overlay will fail to open"
+                    + " while a transparent one is up, and the next one will try again.");
             }
 
-            // Work that arrived while the queue was held needs a nudge, since
-            // the message that would have drained it is long gone.
-            if (dispatcherWindow != IntPtr.Zero)
-                PostMessage(dispatcherWindow, WM_APP_WORK, IntPtr.Zero, IntPtr.Zero);
+            // Creations that arrived while they were held need a nudge, since
+            // the message that would have drained them is long gone.
+            wake();
         }
 
         /// <summary>
@@ -308,11 +333,14 @@ namespace WebOverlay
         /// </summary>
         internal static bool WantsFreeCursor()
         {
+            IntPtr foreground = GetForegroundWindow();
+            if (foreground == IntPtr.Zero || foreground == GameWindow)
+                return false;
             lock (windows)
             {
                 foreach (OverlayWindow window in windows)
                 {
-                    if (window.WantsFreeCursor)
+                    if (window.WantsFreeCursor(foreground))
                         return true;
                 }
             }
@@ -470,9 +498,10 @@ namespace WebOverlay
         }
 
         /// <summary>
-        /// The browser every windowed overlay is built from. The second one,
-        /// for transparent overlays, waits until something actually asks for
-        /// it - see <see cref="EnvironmentFor"/>.
+        /// The browser every overlay is built from to begin with - transparent
+        /// ones always. Only a windowed overlay that runs into a browser busy
+        /// hosting transparent ones gets a second browser, and only then; see
+        /// <see cref="EnvironmentFor"/>.
         /// </summary>
         private static bool createEnvironments()
         {
@@ -493,15 +522,18 @@ namespace WebOverlay
         {
             IntPtr created = IntPtr.Zero;
             bool refused = false;
+            bool abandoned = false;
             callback = new ComCallback(WebView2Api.IID_EnvironmentCompleted, (int result, IntPtr pointer) =>
             {
-                // A completion that arrives after the start already timed out
-                // must not adopt the environment: nobody would ever use it,
-                // and the browser process would idle until game exit. Not
-                // storing it lets the browser shut itself down.
-                if (startFailed || stopping)
+                // A completion that arrives after this wait gave up must not
+                // adopt the environment: nobody would ever use it, and the
+                // browser process would idle until game exit. Not storing it -
+                // and not adding a reference - lets the browser shut itself
+                // down. `startFailed` covers only the very first environment,
+                // which is why this has a flag of its own.
+                if (abandoned || startFailed || stopping)
                 {
-                    LogWarning("a late environment arrived after the timeout; discarding it.");
+                    LogWarning("a late environment arrived after the wait; discarding it.");
                     return WebView2Api.S_OK;
                 }
 
@@ -547,6 +579,8 @@ namespace WebOverlay
             if (created == IntPtr.Zero && !stopping && !refused)
                 report(required, OverlayFailure.EnvironmentFailed,
                     what + " did not start within 30 seconds.");
+            // From here nothing owns what the completion might still bring.
+            abandoned = created == IntPtr.Zero;
             return created;
         }
 
@@ -564,21 +598,33 @@ namespace WebOverlay
 
         private static void drainWork()
         {
-            // Held while an environment is being created: that wait pumps
-            // messages, and running the next overlay's creation from inside
-            // this one is exactly what the hold prevents.
-            if (creatingEnvironment)
-                return;
-            while (work.TryDequeue(out Action action))
+            drainQueue(work);
+            // Creations wait while an environment is being created: that wait
+            // pumps messages, and starting the next overlay from inside the
+            // current one is exactly what the hold prevents. Commands are not
+            // held - an overlay that is already up stays answerable.
+            while (!creatingEnvironment && creations.TryDequeue(out Action creation))
             {
-                try
-                {
-                    action();
-                }
-                catch (Exception ex)
-                {
-                    LogWarning("an overlay action failed (" + ex.GetType().Name + ": " + ex.Message + ").");
-                }
+                run(creation);
+                drainQueue(work);
+            }
+        }
+
+        private static void drainQueue(ConcurrentQueue<Action> queue)
+        {
+            while (queue.TryDequeue(out Action action))
+                run(action);
+        }
+
+        private static void run(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                LogWarning("an overlay action failed (" + ex.GetType().Name + ": " + ex.Message + ").");
             }
         }
 
@@ -742,5 +788,8 @@ namespace WebOverlay
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         internal static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
     }
 }

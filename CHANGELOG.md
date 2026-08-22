@@ -37,9 +37,10 @@ library.
 - `OverlayOptions.InjectTheme`, putting the library palette on the page as CSS
   variables, documented in `docs/STYLE.md`.
 - `OverlayOptions.FreeCursorWhileShown`, releasing the cursor while such an
-  overlay is up and the game is unfocused - the library undoing its own side
-  effect, since a framed overlay takes the foreground while the game keeps the
-  mouse captured.
+  overlay is the window in front - the library undoing its own side effect,
+  since a framed overlay takes the foreground while the game keeps the mouse
+  captured. The condition is the foreground window as the system reports it,
+  not Unity's idea of focus, which does not have to agree.
 - `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`,
   the table two consumers had each written for themselves.
 
@@ -57,7 +58,10 @@ library.
   takes the windowed overlay, because it costs about six processes and a
   quarter of a gigabyte (measured). A game whose mods only use HUDs, only use
   windows, or open the window first never pays for it - measured at one extra
-  process and 53 MB for a window plus a HUD in that order.
+  process and 53 MB for a window plus a HUD in that order. While that browser
+  starts, only overlay *creation* waits: an overlay that is already up keeps
+  answering. A browser that fails to start is not remembered, so the next
+  overlay tries again instead of inheriting the defect for the session.
 
 ### Changed
 

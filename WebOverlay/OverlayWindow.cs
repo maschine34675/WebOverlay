@@ -222,8 +222,14 @@ namespace WebOverlay
             ? OverlayTransparency.None
             : usesComposition ? OverlayTransparency.Composition : OverlayTransparency.ChromaKey;
 
-        /// <summary>Read once per frame by the plugin; see the option.</summary>
-        internal bool WantsFreeCursor => options.FreeCursorWhileShown && isVisible;
+        /// <summary>
+        /// Read once per frame by the plugin. The question is whether this
+        /// overlay is the window in front - not whether Unity thinks it lost
+        /// focus, which is a different thing and, in a game that keeps the
+        /// cursor, not the one that decides.
+        /// </summary>
+        internal bool WantsFreeCursor(IntPtr foreground) =>
+            options.FreeCursorWhileShown && isVisible && window != IntPtr.Zero && window == foreground;
 
         public OverlayFailure Failure { get; private set; } = OverlayFailure.Unknown;
 
@@ -1738,10 +1744,14 @@ namespace WebOverlay
                 {
                     IntPtr toClose = controller;
                     controller = IntPtr.Zero;
-                    WebView2Api.Method<WebView2Api.NoArgsDelegate>(toClose, WebView2Api.Controller_Close)(toClose);
-                    Marshal.Release(toClose);
+                    // Counted down before the calls that could throw: this view
+                    // is gone either way, and leaving the count high would give
+                    // every later windowed overlay a second browser it does not
+                    // need.
                     if (!usesComposition)
                         OverlayHost.WindowedControllerClosed(windowedInMainEnvironment);
+                    WebView2Api.Method<WebView2Api.NoArgsDelegate>(toClose, WebView2Api.Controller_Close)(toClose);
+                    Marshal.Release(toClose);
                 }
             }
             catch
@@ -1781,8 +1791,9 @@ namespace WebOverlay
                 {
                     IntPtr toRelease = compositionController;
                     compositionController = IntPtr.Zero;
-                    Marshal.Release(toRelease);
+                    // Before the release, for the same reason as above.
                     OverlayHost.ComposedControllerClosed();
+                    Marshal.Release(toRelease);
                 }
             }
             catch
