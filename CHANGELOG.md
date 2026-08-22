@@ -63,6 +63,12 @@ library.
   answering. A browser that fails to start is not remembered, so the next
   overlay tries again instead of inheriting the defect for the session.
 
+- A browser data folder that cannot be created is refused by the library
+  instead of by the browser. Told to use a folder it cannot create, WebView2
+  puts a modal error box on the player's screen - not something a mod should be
+  able to cause. Both folders are now made and checked here first, and a
+  failure is a log line and a classified failure instead.
+
 ### Changed
 
 - `Show()` refuses exclusive fullscreen itself, logging once, instead of

@@ -215,13 +215,25 @@ namespace WebOverlay
 
             LogInfo("a transparent overlay is open, so this windowed overlay needs a second browser.");
 
+            // Checked here rather than left to the browser: when WebView2
+            // cannot create its data folder it puts a modal error box on the
+            // player's screen, which is not something a mod should be able to
+            // cause. If the folder is not usable, no browser is asked for.
+            string folder = userDataFolder + SpareSuffix;
+            if (!prepareFolder(folder))
+            {
+                LogWarning("no second browser: its data folder could not be created (" + folder
+                    + "). This overlay will fail to open while a transparent one is up.");
+                return;
+            }
+
             // Waiting for an environment means pumping messages, and pumping
             // would otherwise let the next queued overlay start on top of the
             // one being created. The queue keeps until this returns.
             creatingEnvironment = true;
             try
             {
-                spareEnvironment = createEnvironment(userDataFolder + SpareSuffix,
+                spareEnvironment = createEnvironment(folder,
                     "the second browser", out spareEnvironmentCallback, required: false);
             }
             finally
@@ -509,7 +521,12 @@ namespace WebOverlay
             string userData = Path.Combine(
                 System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
                 "WebOverlay", "BrowserData");
-            Directory.CreateDirectory(userData);
+            if (!prepareFolder(userData))
+            {
+                startFailure(OverlayFailure.EnvironmentFailed,
+                    "the browser's data folder could not be created: " + userData + ".");
+                return false;
+            }
             userDataFolder = userData;
 
             environment = createEnvironment(userData, "the browser environment",
@@ -582,6 +599,26 @@ namespace WebOverlay
             // From here nothing owns what the completion might still bring.
             abandoned = created == IntPtr.Zero;
             return created;
+        }
+
+        /// <summary>
+        /// A browser told to use a folder it cannot create shows the player a
+        /// modal error box of its own, so the folder is made here first and a
+        /// failure stays a log line.
+        /// </summary>
+        private static bool prepareFolder(string path)
+        {
+            try
+            {
+                Directory.CreateDirectory(path);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogWarning("cannot use " + path + " as a browser data folder ("
+                    + ex.GetType().Name + ": " + ex.Message + ").");
+                return false;
+            }
         }
 
         /// <summary>
