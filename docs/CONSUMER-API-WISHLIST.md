@@ -226,3 +226,136 @@ Ordered by how much it would change that design:
    state.
 
 Everything else I can live without as designed.
+
+---
+
+# Second round (2026-08-22, from the ModProfiler side)
+
+Written after moving ModProfiler's profiler window onto the library as it is
+after 1.6 - channels, request/reply, main-thread dispatch, failure causes -
+with the IMGUI overlay kept as the fallback. Entries 1-9 above are answered in
+`CONSUMER-API-WISHLIST-ANSWERS.md`; this round starts at 10 so the two
+documents keep one numbering. As before: nothing here is a bug report, and
+several entries may deserve a conscious "no".
+
+## 10. Deferred (asynchronous) request replies
+
+**Today:** `OnRequest(channel, Func<string, string>)` must answer inside the
+dispatched callback. The page side already resolves a promise; only the mod
+side lacks the asynchronous half.
+
+**Why it hurts:** a request whose answer takes real work - ModProfiler's
+rescan (seconds of Harmony patching) or its CSV write - either blocks inside
+the dispatch or does what ModProfiler now does: reply `"scheduled"` and send
+the real outcome later on a separate `status` channel. One question becomes
+two channels, and the page's promise resolves with a placeholder instead of
+the answer.
+
+**Sketch:**
+
+```csharp
+void OnRequest(string channel, Action<string /*payload*/, Action<string> /*reply*/> handler);
+```
+
+Reply exactly once, later, from wherever the consumer likes; the existing
+timeout still bounds the page's wait (it can raise it through the shim's third
+argument), and a consumer that never replies is answered `null` by the timeout
+as today. Same guarantee, one more shape.
+
+## 11. Who pays for dispatched callbacks - and a manual pump
+
+**Today:** with `DispatchOnMainThread` every consumer callback - `ChannelMessage`,
+`OnRequest` handlers, the events - runs inside `WebOverlayPlugin.Update`.
+
+**Why it hurts:** measured in ModProfiler, which instruments every mod's
+`Update` including the library's: a rescan executed inside the request handler
+was booked to the *Anvil-WebOverlay* row - hundreds of milliseconds of Max and
+total, even spike-log blame. Any profiler-like consumer sees the same; every
+other consumer has its handler cost land in the library's frame slice at a
+point in the frame it does not control (before or after its own `Update`,
+depending on plugin load order). ModProfiler works around it by keeping the
+handlers trivial and doing the work from its own `Update`.
+
+**Sketch:** (a) say it in the `DispatchOnMainThread` docs; (b) offer a manual
+pump so a consumer can drain from its own `Update` and own both the cost and
+the ordering:
+
+```csharp
+public enum EventDispatch { OverlayThread, MainThread, Manual }
+public EventDispatch Dispatch { get; set; }     // OverlayOptions
+void PumpEvents();                              // IWebOverlay, Manual only
+```
+
+## 12. Free the cursor while a framed window holds the focus (in raid)
+
+**Today:** a framed overlay takes the foreground on `Show`. In a raid EFT keeps
+the cursor locked, hidden and clipped even though a foreign window of the same
+process now has the focus (measured in ModProfiler's in-game test): the pointer
+can never reach the window, the game is unfocused, and the player is stuck
+until Escape. Every consumer that opens a framed window mid-raid hits this.
+
+**Sketch:** Unity-plugin layer only, so the core stays Unity-free:
+
+```csharp
+public bool FreeCursorWhileFocused { get; set; }   // OverlayOptions, default false
+```
+
+While such an overlay is visible and `!Application.isFocused`, the plugin sets
+`Cursor.lockState = None` / `Cursor.visible = true` in `Update` **and**
+`LateUpdate` (EFT relocks from late components), and stops the moment the game
+window is focused again - EFT relocks on its own. ModProfiler ships exactly
+this logic privately. (It also mutes EFT's input commands meanwhile through a
+Harmony prefix on `InputManager` - that part is game-specific and does not
+belong in the library.)
+
+## 13. `VirtualKey(KeyCode)` helper for `CloseKeys`
+
+**Today:** `CloseKeys` are Win32 virtual-key codes; a consumer with a
+configurable BepInEx hotkey (`KeyboardShortcut` -> Unity `KeyCode`) maps
+`KeyCode` -> VK itself.
+
+**Why it hurts:** CraftQueue and ModProfiler carry the same ~20-line table
+(F1-F15, A-Z, 0-9, Escape/Tab/Home/End/Insert/Delete/PageUp/PageDown/Pause) -
+and the second copy only exists because a review caught the close key
+hard-coded to F10 while the toggle key was rebindable. The next consumer will
+make the same mistake.
+
+**Sketch:** a static helper next to the plugin (Unity side, same assembly):
+
+```csharp
+public static int VirtualKey(KeyCode key);                 // 0 when unmapped
+public static int[] CloseKeysFor(KeyboardShortcut shortcut); // Escape + the key
+```
+
+documented beside `CloseKeys`. Both consumers would delete their copy.
+
+## 14. A soft-dependency guide (documentation)
+
+**Today:** every consumer re-derives the same rules, and since 1.4+ there is a
+new one. The proven set: all library-touching members `NoInlining` and called
+only behind a presence check; closure-captured handles typed `object` (a field
+of a library type in a compiler-generated closure class makes
+`Assembly.GetTypes()` over the plugin throw for every other mod when the
+library is absent); and now a **minimum-version gate** - additive APIs mean a
+gate body that uses a 1.6 member fails at JIT time on a 1.3 install, so the
+check is `Chainloader.PluginInfos[guid].Metadata.Version >= new Version(1, 6, 0)`
+rather than mere presence, with a log line and a fallback below it. Worth
+adding: `[BepInDependency(guid, DependencyFlags.SoftDependency)]` so the
+library loads - and therefore `Update`s - before the consumer, and a build-time
+check (Mono.Cecil: no field, base type, interface or method signature in the
+plugin may reference the library).
+
+**Sketch:** `docs/SOFT-DEPENDENCY.md` with that pattern and a pointer to the two
+shipping gates (CraftQueue `UI/WebOverlayGate.cs`, ModProfiler
+`UI/WebOverlayGate.cs`), plus one sentence in the changelog contract: minors are
+additive, so consumers gate on "at least X.Y".
+
+## 15. Checked, needs nothing
+
+- Request-handler exceptions are isolated: caught, logged, and the page is
+  answered `null` - a throwing consumer never hangs a page.
+- The shim's `request(channel, payload, timeoutMs)` already lets a page wait
+  longer for a slow answer; fine for long actions once entry 10 exists.
+- `window.overlay` is absent outside the library (a page opened in a plain
+  browser); a one-line guard in the page is enough, and a README sentence
+  would spare the first confused console.
