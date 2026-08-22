@@ -471,6 +471,16 @@ the game, and gives this repository its own test harness back. It is a net9
 console project that is not part of any release zip, and it needs a pass to
 drop session-specific modes and paths to other mods' pages before it moves.
 
+**Done**, as `tools/Probe` - the name says what it mostly is, and `preview` is
+one mode of it rather than the whole program. The modes that drove QuestMarkers'
+and ModProfiler's own pages stayed behind, where they belong. Two things
+surfaced during the move that the throwaway version had been hiding: the two
+modes that test a missing `WebView2Loader.dll` were only passing because that
+harness happened not to copy the loader, so they now stage the incomplete
+folder themselves and put it back afterwards; and a page that listens to raw
+`chrome.webview` messages *and* uses channels sees every channel envelope
+twice, which the sample page now demonstrates stepping over.
+
 ## 21. Shared design tokens - yes, with 19
 
 `docs/STYLE.md` is worth writing on its own. The injected variables are the

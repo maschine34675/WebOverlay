@@ -9,6 +9,20 @@ field, followed by the detailed record for anyone reading the source later.
 
 ## [Unreleased]
 
+Nothing in the shipped library. The repository gained the host it was tested
+with:
+
+- `tools/Probe` - the standalone host that drives the built DLL outside the
+  game, previously a throwaway harness kept out of the tree. Every row of
+  `docs/FAULT-TESTS.md` is one of its modes, and every hand-bound vtable slot
+  in this library was proven by one of them. `fault-loader` and `failure-kind`
+  now stage their own incomplete plugin folder instead of depending on how the
+  harness happened to be laid out.
+- `preview` - the mode for mod authors rather than for the library: it shows a
+  page in a real overlay, feeds it channel messages, prints what it sends back
+  and screenshots the result, so a HUD can be built without launching a raid.
+  `tools/Probe/sample-page.html` is a worked example.
+
 ## [1.8.0]
 
 ### Forge version notes

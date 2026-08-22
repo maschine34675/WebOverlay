@@ -1,0 +1,102 @@
+<!doctype html>
+<!--
+  A page to point `preview` at when you want to see the plumbing work rather
+  than your own layout - and a small worked example of the three things every
+  overlay page does: read the environment, take messages, answer questions.
+
+    dotnet run --project tools/Probe -c Release -- preview tools/Probe/sample-page.html \
+      --transparent --post status "ready" --seconds 20
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Anvil-WebOverlay sample</title>
+<style>
+  /* The library injects these tokens with OverlayOptions.InjectTheme; the
+     fallbacks keep the page readable in a plain browser too. */
+  html, body { margin: 0; height: 100%; background: transparent; }
+  body {
+    font: 14px/1.5 var(--wo-font, "Segoe UI", system-ui, sans-serif);
+    color: var(--wo-text, #d0cdbd);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .panel {
+    min-width: 380px; padding: 18px 20px;
+    border-radius: var(--wo-radius, 8px);
+    background: var(--wo-ink, rgba(16, 17, 13, 0.74));
+    border: 1px solid var(--wo-border, rgba(194, 173, 109, 0.35));
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  }
+  /* Without per-pixel alpha the page is composited by colour key, so a
+     translucent background would key out unevenly: go opaque instead. */
+  .wo-chroma .panel { background: #14160f; box-shadow: none; }
+  h1 { margin: 0 0 12px; font-size: 13px; letter-spacing: .08em;
+       text-transform: uppercase; color: var(--wo-gold, #c2ad6d); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 0; }
+  dt { color: var(--wo-dim, #918e7e); }
+  dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  button { margin-top: 14px; width: 100%; padding: 7px; cursor: pointer;
+           color: inherit; border-radius: var(--wo-radius, 8px);
+           background: rgba(114, 186, 128, 0.14);
+           border: 1px solid var(--wo-border, rgba(194, 173, 109, 0.35)); }
+  button:hover { background: rgba(114, 186, 128, 0.26);
+                 border-color: var(--wo-accent, #72ba80); }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <h1>Anvil-WebOverlay sample</h1>
+    <dl>
+      <dt>transparency</dt><dd id="mode">-</dd>
+      <dt>theme tokens</dt><dd id="theme">-</dd>
+      <dt>last message</dt><dd id="last">none yet</dd>
+      <dt>messages seen</dt><dd id="count">0</dd>
+    </dl>
+    <button id="ask">ask the mod something</button>
+  </div>
+<script>
+  // window.overlay only exists inside an overlay. Guarding it means the same
+  // file can be opened in a normal browser while the layout is being worked on.
+  const bridge = window.overlay;
+  const text = (id, value) => document.getElementById(id).textContent = value;
+
+  if (!bridge) {
+    text('mode', 'not in an overlay');
+  } else {
+    const env = bridge.env || {};
+    text('mode', env.transparency || 'unknown');
+    text('theme', env.theme ? 'injected' : 'off - using the fallbacks');
+
+    let seen = 0;
+    // A named channel: the mod side is Post("status", payload).
+    bridge.on('status', payload => {
+      text('last', payload);
+      text('count', ++seen);
+    });
+
+    // The plain, channel-less send: Post(message). Channel traffic travels
+    // over this same event as a JSON envelope, so a page that listens raw
+    // *and* uses channels has to step over the envelopes - otherwise every
+    // channel message is counted twice.
+    window.chrome?.webview?.addEventListener('message', event => {
+      const data = String(event.data);
+      if (data.charCodeAt(0) === 123 && data.indexOf('"__wo"') >= 0) return;
+      text('last', data);
+      text('count', ++seen);
+    });
+
+    // The mod may ask the page questions; answer them here.
+    bridge.onRequest('layout', () => JSON.stringify({
+      width: document.body.clientWidth,
+      height: document.body.clientHeight,
+    }));
+
+    // And the page may ask the mod. `preview` answers this one itself.
+    document.getElementById('ask').onclick = async () => {
+      const answer = await bridge.request('preview', '"what am I running under?"');
+      text('last', answer === null ? 'no answer' : String(answer));
+    };
+  }
+</script>
+</body>
+</html>

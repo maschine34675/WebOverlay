@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Not part of any release: this drives the built library outside the game,
+       so it targets a modern runtime rather than the net472 the plugin needs. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Probe</AssemblyName>
+    <RootNamespace>Probe</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The built library itself, not a project reference: the probe must run
+         against exactly the binary that ships. -->
+    <Reference Include="Anvil-WebOverlay">
+      <HintPath>..\..\WebOverlay\bin\Release\Anvil-WebOverlay.dll</HintPath>
+    </Reference>
+    <!-- The library looks for the loader next to itself, so it has to land in
+         the output folder the same way it does in a plugin folder. -->
+    <None Include="..\..\ThirdParty\WebView2\WebView2Loader.dll">
+      <Link>WebView2Loader.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

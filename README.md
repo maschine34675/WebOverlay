@@ -353,6 +353,23 @@ refused. Otherwise a host name that happens to resolve would quietly fetch a
 real site from the internet under an origin your page - and this library's
 message bridge - treat as your own folder.
 
+## Previewing a page without starting the game
+
+Building a HUD by launching a raid to look at it gets old fast. The repository
+carries the host this library was tested with, and one of its modes shows your
+page in a real overlay - same window, same transparency, same message bridge:
+
+```bash
+dotnet build WebOverlay/WebOverlay.csproj -c Release
+dotnet run --project tools/Probe -c Release -- preview path/to/page.html --transparent
+```
+
+It serves the file from its own folder, so relative assets and storage behave
+as they will in the mod; `--post <channel> <text>` feeds the page messages,
+whatever the page sends back is printed, and `--screenshot` saves what it
+looks like. `tools/Probe/sample-page.html` is a worked example to start from,
+and [`tools/Probe/README.md`](tools/Probe/README.md) has the rest.
+
 ## Security defaults
 
 The overlay is meant for pages the mod itself provides, and the defaults
@@ -541,7 +558,12 @@ sits in `<your SPT folder>/Development/WebOverlay` needs no argument at all -
 and the build only copies its output into a folder that really is an SPT
 installation. `scripts/New-ReleasePackage.ps1` produces the release zips
 including the license files, verified against a manifest allowlist.
-`docs/FAULT-TESTS.md` records the fault-injection matrix run for a release.
+
+`tools/Probe` is the host that drives the built DLL outside the game - the
+proof behind every hand-bound vtable slot in this library, and the source of
+every row in `docs/FAULT-TESTS.md`. It is not part of any release. Its
+`preview` mode is the one meant for consumers rather than for the library
+itself.
 
 ## Third-party components
 

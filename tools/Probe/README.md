@@ -1,0 +1,103 @@
+# The probe
+
+A plain .NET host that drives the built `Anvil-WebOverlay.dll` outside the
+game. It exists for two reasons:
+
+- **Proof.** Every hand-bound vtable slot in this library was verified here
+  before it was trusted. A slot number read off a header is a guess until
+  something observable changes because of it — a pixel, a click, a message.
+  Every row of [`docs/FAULT-TESTS.md`](../../docs/FAULT-TESTS.md) is one mode
+  of this program.
+- **Preview.** The `preview` mode shows *your* page in a real overlay, with
+  the same window, the same transparency and the same message bridge as in a
+  raid — so a layout can be worked on without starting the game.
+
+It is not part of any release. It targets net9.0 rather than the net472 the
+plugin needs, because nothing here runs inside Unity.
+
+## Building
+
+Build the library first: the probe references the built DLL rather than the
+project, so that it tests exactly the binary that ships.
+
+```bash
+dotnet build WebOverlay/WebOverlay.csproj -c Release
+dotnet build tools/Probe/Probe.csproj -c Release
+```
+
+`--no-build` on a later `dotnet run` reuses the DLL copied into the probe's
+output folder, so after changing the library, build both again.
+
+## Previewing a page
+
+```bash
+dotnet run --project tools/Probe -c Release -- preview path/to/page.html --transparent
+```
+
+| Option | |
+|---|---|
+| `--transparent` | no frame, alpha against a coloured backdrop |
+| `--interactive` | transparent and clickable — a HUD that takes input |
+| `--size WxH` | default 900x600 |
+| `--host <name>` | serve the folder under this host name instead of `preview.local`; match your mod's own `VirtualHost` when the page uses absolute URLs or `localStorage` |
+| `--theme` | inject the `--wo-*` colour tokens |
+| `--post <ch> <text>` | send on a channel once the page has loaded (repeatable) |
+| `--send <text>` | the same without a channel (repeatable) |
+| `--screenshot <file>` | save a PNG of the window, then keep showing it |
+| `--seconds <n>` | how long to leave it open (default 10) |
+| `--devtools` | open the browser developer tools |
+
+A local file is served from its own folder, so relative assets and storage
+work as they do in a mod. Anything the page sends back is printed, and
+`overlay.request('preview', ...)` is answered, so a page can be tried out
+before the mod behind it exists.
+
+A page the mod assembles at run time — one with placeholders spliced in before
+`LoadHtml` — cannot be shown as it sits on disk. Preview the file the mod
+would produce, or keep the parts separate and let the page fetch them.
+
+[`sample-page.html`](sample-page.html) is a small worked example of the three
+things every overlay page does: read the environment, take messages, answer
+questions.
+
+```bash
+dotnet run --project tools/Probe -c Release -- preview tools/Probe/sample-page.html \
+  --transparent --theme --post status "raid: Customs"
+```
+
+## Running the matrix
+
+Each mode is one row of the fault table; it prints `PASS`/`FAIL` lines and
+exits non-zero on a failure.
+
+```bash
+dotnet run --project tools/Probe -c Release -- channels
+```
+
+Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
+`fault-redirect`, `script-roundtrip`, `bounds-save`, `bounds-verify`,
+`latency`, `glass`, `glass-click`, `cube`, `storage`, `vhost`, `dispatch`,
+`failure-kind`, `vhost-fail`, `nav-reject`, `script-result`, `visibility`,
+`close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
+`shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
+`spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`.
+Running the program with no mode takes the normal path: create, load, render,
+message back.
+
+Two things to know before reading a failure:
+
+- **`glass`, `glass-click` and `cube` need an attached interactive session.**
+  They sample real screen pixels and send real mouse input. Over RDP, a
+  disconnected session makes every sample come back `rgb(0,0,0)` and every
+  click land nowhere — a whole-mode failure that looks alarming and means
+  nothing. `query session` should show your session as `Active`, not
+  `Disc`. Even attached, the compositor occasionally drops a frame during a
+  capture, so re-run before believing a single pixel failure.
+- **`fault-loader` and `failure-kind` move `WebView2Loader.dll` aside** for
+  the length of the run, because they test what an incomplete plugin folder
+  does. They put it back afterwards, including after an earlier run that was
+  killed mid-block. If a build ran in between, the fresh copy wins.
+
+`bounds-save` and `bounds-verify` are one row in two halves: run `bounds-save`,
+then `bounds-verify` in a second process, which is the point — the store has to
+survive the process, not just the window.

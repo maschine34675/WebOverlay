@@ -70,10 +70,28 @@ Not automated (manually covered in game during development, or accepted):
   captures the mouse, so it is covered in game rather than here.
 - The `KeyCode` to virtual-key table, which is a table.
 
-The probe source lives outside the repository (a throwaway harness); re-create
-it from this table when re-running the matrix for a future release. Its modes
-map to the rows above: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
-`fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `glass`,
-`glass-click`, `normal`, `cube`, `storage`, `vhost`, `vhost-fail`,
-`nav-reject`, `dispatch`, `script-result`, `visibility`, `close-race`,
-`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `footprint`, `spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`.
+## Running it
+
+The probe lives in the repository at [`tools/Probe`](../tools/Probe), and each
+row above is one of its modes:
+
+```bash
+dotnet build WebOverlay/WebOverlay.csproj -c Release
+dotnet run --project tools/Probe -c Release -- channels
+```
+
+Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
+`fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `latency`,
+`glass`, `glass-click`, `cube`, `storage`, `vhost`, `vhost-fail`,
+`nav-reject`, `dispatch`, `failure-kind`, `script-result`, `visibility`,
+`close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
+`shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
+`spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`; no
+mode at all is the normal path.
+
+`glass`, `glass-click` and `cube` sample real screen pixels and send real
+mouse input, so they need an interactive session that is actually attached -
+over RDP a disconnected session returns `rgb(0,0,0)` for every sample and
+swallows every click. See [`tools/Probe/README.md`](../tools/Probe/README.md)
+for that and for `preview`, the mode meant for building your own pages rather
+than for testing the library.
