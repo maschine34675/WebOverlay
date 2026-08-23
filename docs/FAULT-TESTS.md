@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-49 were added for v1.3.0 to v1.8.3
+and re-run unchanged for v1.4.0; rows 10-52 were added for v1.3.0 to v1.8.3
 (runtime 151.0.4129.93).
 
 The Result column says how the row is evidenced. `PASS` means the probe
@@ -62,6 +62,9 @@ row that claims more than the automation delivers is worse than no row.
 | 47 | `Navigate` to the page already showing, with retained state set | treated as a reload rather than a retarget: the state survives, as it does when the page reloads itself | PASS |
 | 48 | A page asks a question, the document changes while the mod is still holding the answer, and the new page asks its own | the new page gets its own answer and never the one owed to its predecessor, although both questions carry the same page-side id | PASS |
 | 49 | `Show()` refused by the display-mode probe on an already hidden overlay | no `VisibilityChanged` is invented for the refusal, so the event stays trustworthy as state | PASS |
+| 50 | A `Navigate` the library's own origin filter cancels - a URI with no origin to trust | blocked and logged, the overlay stops waiting for a start that will never come, and the page that loads next is heard normally | PASS |
+| 51 | The same, with retained state set for the page that stays on screen | the refused page is not left as the target and its state is not thrown away: it reaches the page that does load | PASS |
+| 52 | A `Ready` handler that asks for its page immediately, while the channel shim is still being confirmed | exactly one `PageLoaded` and one run of the page's own scripts - the deferred first navigation does not start the same document again | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):

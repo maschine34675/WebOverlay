@@ -76,13 +76,23 @@ namespace WebOverlay
             // fighting - it is not being overruled, it agrees - and the one
             // write it does perform brings back the lock mode and the cursor
             // bitmap along with the visibility.
-            if (wanted != askedGameForCursor && GameCursorBridge.Show(wanted))
+            if (wanted != askedGameForCursor)
             {
-                askedGameForCursor = wanted;
+                if (GameCursorBridge.Show(wanted))
+                {
+                    askedGameForCursor = wanted;
+                    return;
+                }
+                // The game would not take the request - it changed shape under
+                // us, or went away. Stop believing it is holding the cursor,
+                // or the fallback below would never be reached again and the
+                // player would be left without one.
+                askedGameForCursor = false;
+            }
+            else if (askedGameForCursor)
+            {
                 return;
             }
-            if (askedGameForCursor)
-                return;
 
             // Fallback, for a game that does not have that lever: set it
             // directly and keep setting it. This is the flickering path, but a
@@ -104,7 +114,14 @@ namespace WebOverlay
             // showing one because of an overlay that no longer exists.
             if (askedGameForCursor)
             {
-                GameCursorBridge.Show(false);
+                // If the game will not take it back, put the cursor where it
+                // would have been anyway rather than leave one on screen for
+                // an overlay that no longer exists.
+                if (!GameCursorBridge.Show(false))
+                {
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
+                }
                 askedGameForCursor = false;
             }
             // Nothing may be handed to the main thread after this component

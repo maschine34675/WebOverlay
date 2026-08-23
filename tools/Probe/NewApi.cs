@@ -2055,8 +2055,94 @@ internal static partial class NewApi
         check("N9 re-navigating to the page already showing keeps its retained state",
             seen != null && seen.Contains("value"), "page saw " + (seen ?? "<null>"));
 
+        // A navigation the library's OWN filter cancels. The browser accepts
+        // the request - there is no origin here to put on the allowlist, so
+        // nothing is trusted - and only the filter turns it down, which means
+        // no navigation ever starts. The overlay must not go on waiting for
+        // one: while it does, every completion is taken for a superseded
+        // navigation's and dropped, and the next real page would load in
+        // silence with IsPageLoaded stuck false.
+        lock (warnings) warnings.Clear();
+        overlay.Navigate("file:///C:/nothing-here.html");
+        Thread.Sleep(2500);
+        string blocked;
+        lock (warnings)
+            blocked = warnings.Find(w => w.Contains("blocked navigation"));
+        check("N10 a navigation the filter refuses is blocked and logged",
+            blocked != null, blocked ?? "<silent>");
+
+        bool loadedAfter = false;
+        overlay.PageLoaded += () => loadedAfter = true;
+        overlay.Navigate("https://missing.assets/there.html");
+        wait(() => loadedAfter, 20000);
+        check("N11 and the overlay still hears the page that loads afterwards",
+            loadedAfter && overlay.IsPageLoaded,
+            "PageLoaded=" + loadedAfter + " IsPageLoaded=" + overlay.IsPageLoaded);
+
+        // The part that matters. A page the filter refused never became the
+        // target, so naming the next one is not walking away from it - and the
+        // state the mod set up beforehand still belongs to whichever page
+        // finally loads. Left as the target, the refused URL would make the
+        // next Navigate look like a retarget and throw that state away.
+        overlay.Post("cfg", "after-block", PostOptions.Retain);
+        Thread.Sleep(500);
+        loadedAfter = false;
+        overlay.Navigate("file:///C:/nothing-here-either.html");
+        Thread.Sleep(2000);
+        overlay.Navigate("https://missing.assets/there.html");
+        wait(() => loadedAfter, 20000);
+        Thread.Sleep(1200);
+        string kept = null;
+        overlay.ExecuteScript("window.__cfg || 'none'", r => kept = r);
+        wait(() => kept != null, 6000);
+        check("N12 and a refused page is not left as the target, so state survives it",
+            kept != null && kept.Contains("after-block"), "page saw " + (kept ?? "<null>"));
+
         overlay.Dispose();
         logWarning.SetValue(null, previous);
+        Thread.Sleep(300);
+        finish();
+    }
+
+    /// <summary>
+    /// The shape almost every consumer has: a Ready handler that asks for its
+    /// page straight away. That work item runs before the browser has
+    /// confirmed the channel shim, so the library must not then start the same
+    /// page a second time when the confirmation arrives.
+    /// </summary>
+    internal static void ReadyLoad()
+    {
+        int pageLoads = 0, starts = 0;
+        bool ready = false, failed = false;
+        IWebOverlay overlay = null;
+
+        overlay = WebOverlays.Create("ReadyLoadProbe", new OverlayOptions { Width = 400, Height = 300 });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.Failed += () => failed = true;
+        overlay.PageLoaded += () => Interlocked.Increment(ref pageLoads);
+        overlay.ChannelMessage += (c, p) => { if (c == "started") Interlocked.Increment(ref starts); };
+        overlay.Ready += () =>
+        {
+            ready = true;
+            // Exactly what a consumer writes, and exactly the timing that used
+            // to produce two documents.
+            overlay.LoadHtml(@"<!doctype html><html><body>ready<script>
+              overlay.send('started', '1');
+            </script></body></html>");
+        };
+
+        wait(() => ready || failed, 25000);
+        check("L1 the overlay reported ready", ready && !failed, failed ? "failed" : "ready=" + ready);
+        wait(() => pageLoads > 0, 25000);
+        // Long enough for a second, spurious navigation to have arrived.
+        Thread.Sleep(4000);
+        check("L2 the page the Ready handler asked for loaded once", pageLoads == 1,
+            "PageLoaded fired " + pageLoads + " time(s)");
+        check("L3 and its own scripts ran once", starts == 1, "page started " + starts + " time(s)");
+        check("L4 the shim was there for it", overlay.IsPageLoaded && starts == 1,
+            "IsPageLoaded=" + overlay.IsPageLoaded);
+
+        overlay.Dispose();
         Thread.Sleep(300);
         finish();
     }

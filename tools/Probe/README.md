@@ -81,7 +81,7 @@ Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
 `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
 `spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`,
-`failed-nav`, `generation`.
+`failed-nav`, `generation`, `ready-load`.
 Running the program with no mode takes the normal path: create, load, render,
 message back.
 
@@ -99,7 +99,7 @@ Two things to know before reading a failure:
     which suspends composition just as thoroughly. This one is the trap:
     the session state looks perfectly healthy.
 
-  Both were measured; restoring the window turns all three modes green again
+  Both were measured; restoring the window turns all five modes green again
   with no change to the library. Even with the desktop drawing, the compositor
   occasionally drops a frame during a capture, so re-run before believing a
   single pixel failure.

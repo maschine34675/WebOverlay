@@ -119,6 +119,12 @@ namespace WebOverlay
         // race in something a consumer can observe.
         private bool targetHandedToBrowser;
 
+        // Whether the navigation now in flight is leaving a page behind. Acted
+        // on when that navigation starts rather than when it was requested,
+        // because a request the browser takes can still be refused - by this
+        // library's own origin filter - and then nothing was left at all.
+        private bool forgetOnNavigationStart;
+
         // Set between handing a navigation to the browser and seeing it start.
         // Any completion in that window belongs to the navigation being
         // replaced, not to the one the mod is waiting for.
@@ -552,10 +558,8 @@ namespace WebOverlay
         /// run, which is the half of named channels a consumer cannot write
         /// for itself. It only wraps the existing message bridge, so it hands
         /// a page nothing it did not already have.
-        /// </summary>
-        /// <summary>
-        /// Puts `window.overlay` in place for every document. Installation is
-        /// asynchronous, and the browser only promises the script is installed
+        ///
+        /// Installation is asynchronous, and the browser only promises the script is installed
         /// once the completion has run - so the first navigation waits for it
         /// rather than racing it. Without that, the mod's own first page could
         /// come up without the object its very first script uses.
@@ -579,8 +583,15 @@ namespace WebOverlay
                         // The overlay may have been closed or failed while the
                         // browser was confirming the script; navigating a view
                         // in either state is pointless at best.
+                        // Unless the mod got there first. The usual consumer
+                        // shape is a Ready handler that posts LoadHtml, and
+                        // that work item runs on this thread before the
+                        // browser confirms the script - so the page is already
+                        // on its way. Navigating again would start the same
+                        // document twice: two generations, two PageLoaded, the
+                        // page's own first scripts twice.
                         if (!closed && state != CreationState.Failed && webView != IntPtr.Zero
-                            && !startPendingNavigation())
+                            && !targetHandedToBrowser && !startPendingNavigation())
                         {
                             forgetTarget();
                         }
@@ -777,6 +788,7 @@ namespace WebOverlay
             // Nothing was ever handed to the browser, so no start is owed.
             awaitingNavigationStart = false;
             targetHandedToBrowser = false;
+            forgetOnNavigationStart = false;
         }
 
         private bool applySettings()
@@ -1086,6 +1098,23 @@ namespace WebOverlay
             {
                 OverlayHost.LogWarning("blocked navigation to " + (uri ?? "<unknown>") + ".");
                 WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.NavArgs_PutCancel)(args, 1);
+                if (topLevel)
+                {
+                    // This navigation started and is over. The browser accepted
+                    // the request - a URI with no origin to allow, or a host
+                    // whose folder mapping failed - and only this filter turned
+                    // it down, so nothing else will ever end the wait. Leaving
+                    // it set would make the overlay ignore every completion
+                    // that follows, silently, until some later navigation
+                    // happened to clear it. The generation is NOT bumped: no
+                    // document changed, so nothing owed to the page showing is
+                    // stale.
+                    awaitingNavigationStart = false;
+                    // Nothing was left behind, so nothing of the page still on
+                    // screen is thrown away.
+                    forgetOnNavigationStart = false;
+                    forgetTarget();
+                }
                 return WebView2Api.S_OK;
             }
 
@@ -1103,6 +1132,13 @@ namespace WebOverlay
                 // A new top-level document supersedes the one that asked any
                 // question still in flight; see the generation check below.
                 documentGeneration++;
+                // And here, not at the call: the page being left is only left
+                // once the browser really starts going somewhere else.
+                if (forgetOnNavigationStart)
+                {
+                    forgetOnNavigationStart = false;
+                    forgetPageState();
+                }
             }
             return WebView2Api.S_OK;
         }
@@ -1267,13 +1303,15 @@ namespace WebOverlay
                 return;
             }
             targetHandedToBrowser = true;
-            // Only now: anything still buffered - and anything remembered -
-            // was meant for the previous page, and this is the moment it stops
-            // being the target. Choosing the FIRST page is not that: a mod
-            // that sets its state up before naming a page should keep it,
-            // which is the order the state is worth having in.
-            if (retargeting)
-                forgetPageState();
+            // Not yet: the browser has taken the request, but the filter below
+            // can still refuse it - and then this page stays on screen with
+            // the state that belongs to it. What is buffered and remembered is
+            // dropped when the new navigation actually STARTS, which is the
+            // moment the old page is really being left. Choosing the FIRST
+            // page is not that: a mod that sets its state up before naming a
+            // page should keep it, which is the order the state is worth
+            // having in.
+            forgetOnNavigationStart = retargeting;
         }
 
         /// <summary>
@@ -1328,8 +1366,10 @@ namespace WebOverlay
         private void restoreTarget(TargetState previous)
         {
             // The refused navigation will never start, so the overlay must not
-            // go on ignoring completions while it waits for one.
+            // go on ignoring completions while it waits for one - nor throw
+            // away what belongs to the page that is staying.
             awaitingNavigationStart = false;
+            forgetOnNavigationStart = false;
             pendingUrl = previous.Url;
             pendingHtml = previous.Html;
             htmlLoaded = previous.HtmlLoaded;
@@ -1369,8 +1409,7 @@ namespace WebOverlay
                 return;
             }
             targetHandedToBrowser = true;
-            if (retargeting)
-                forgetPageState();
+            forgetOnNavigationStart = retargeting;
         }
 
         /// <summary>

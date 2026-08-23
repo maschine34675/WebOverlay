@@ -41,6 +41,25 @@ every entry below names the version a member arrived in - see
   counter - two mods using it will take the cursor from each other, which the
   README says.
 
+- A page the mod asks for once, not twice. The usual consumer shape is a
+  `Ready` handler that calls `LoadHtml`, and that work item runs before the
+  browser confirms the channel shim - so the deferred first navigation started
+  the same document a second time: two generations, `PageLoaded` twice, the
+  page's own first scripts twice. The debt to the shim is settled by whichever
+  navigation actually reaches the browser first.
+- Page state is dropped when a navigation *starts*, not when it is asked for.
+  The browser can accept a request that this library's own origin filter then
+  refuses - a URL with no origin to trust, a host whose folder mapping failed -
+  and the page on screen stays exactly where it was. Forgetting its retained
+  state and its outbox at the moment of the request threw that away anyway,
+  which is the same silent loss as a synchronously rejected navigation, reached
+  through the asynchronous refusal instead. A refused navigation now leaves
+  neither the target nor the state behind, and the overlay stops waiting for a
+  start that will never come.
+- Should the game refuse to take the cursor back, `FreeCursorWhileShown` falls
+  back to setting it directly instead of believing the game still holds it -
+  which would have left the player without a cursor, the exact opposite of the
+  fallback the bridge documents.
 - Retargeting means the browser had actually taken the previous page, not
   merely that a target had been recorded. A page named while the browser is
   still starting is only written down, and replacing a note is not leaving a
@@ -55,7 +74,9 @@ every entry below names the version a member arrived in - see
 - Probe rows C0-C2 in `api17` cover the fallback: outside the game the bridge
   reports itself unavailable and refuses quietly instead of throwing at a
   caller that only wanted a cursor. Row 41 covers the retarget rule, and is
-  what caught the race.
+  what caught the race; rows 50-52 and the new `ready-load` mode cover the
+  refused navigation and the single first page. Both were verified by watching
+  them fail first - `ready-load` reports two `PageLoaded` without the fix.
 
 ## [1.8.2]
 
