@@ -14,6 +14,49 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.3]
+
+### Forge version notes
+
+- The mouse cursor no longer flickers while an overlay that frees it is open.
+
+### Fixed
+
+- `FreeCursorWhileShown` asks the game to show the cursor instead of overruling
+  it every frame. The game decides once per frame what the cursor state should
+  be and writes it only when the live state disagrees, so setting
+  `Cursor.visible` is precisely what makes it disagree - the two then alternate
+  at frame rate, which is the flicker. Worse, the game's write swaps the cursor
+  bitmap for a transparent one, which forcing the property never restores. The
+  library now sets the game's own "show the cursor" flag, once per change of
+  state rather than once per frame; the game then agrees, stops writing, and
+  the single write it did perform restored visibility, lock mode and bitmap
+  together. Released again when no overlay wants it and when the plugin shuts
+  down.
+
+  Found and read out of the game's own code: it uses the same flag where its
+  world needs a cursor mid-raid. Reached by reflection, so this library still
+  references nothing but BepInEx and Unity, and a game without it falls back to
+  the previous behaviour rather than breaking. The flag is global and has no
+  counter - two mods using it will take the cursor from each other, which the
+  README says.
+
+- Retargeting means the browser had actually taken the previous page, not
+  merely that a target had been recorded. A page named while the browser is
+  still starting is only written down, and replacing a note is not leaving a
+  page - so state the mod set up beforehand still belongs to whichever page
+  finally loads. This surfaced as a race introduced by the change above: with
+  the first navigation now waiting for the shim, whether that state survived
+  depended on which of the two won, and that is not something a consumer
+  should be able to observe.
+
+### Notes
+
+- Probe rows C0-C2 in `api17` cover the fallback: outside the game the bridge
+  reports itself unavailable and refuses quietly instead of throwing at a
+  caller that only wanted a cursor. Row 41 covers the retarget rule, and is
+  what caught the race.
+
 ## [1.8.2]
 
 ### Forge version notes

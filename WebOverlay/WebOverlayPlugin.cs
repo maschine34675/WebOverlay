@@ -47,8 +47,9 @@ namespace WebOverlay
         }
 
         /// <summary>
-        /// The game relocks the cursor from late components, so once per frame
-        /// is not enough to keep it free.
+        /// Only for the fallback path, where the cursor is set directly and
+        /// the game keeps setting it back; asking the game for the cursor is a
+        /// state change and needs no second call per frame.
         /// </summary>
         private void LateUpdate()
         {
@@ -68,14 +69,44 @@ namespace WebOverlay
             // Whether the overlay is the window in front, asked of the OS -
             // Unity's own notion of focus does not have to agree, and the game
             // keeps its cursor regardless of what it thinks.
-            if (!OverlayHost.WantsFreeCursor())
+            bool wanted = OverlayHost.WantsFreeCursor();
+
+            // Preferred: ask the game to want the cursor too, which is a state
+            // and so only worth saying when it changes. Then the game stops
+            // fighting - it is not being overruled, it agrees - and the one
+            // write it does perform brings back the lock mode and the cursor
+            // bitmap along with the visibility.
+            if (wanted != askedGameForCursor && GameCursorBridge.Show(wanted))
+            {
+                askedGameForCursor = wanted;
+                return;
+            }
+            if (askedGameForCursor)
+                return;
+
+            // Fallback, for a game that does not have that lever: set it
+            // directly and keep setting it. This is the flickering path, but a
+            // flickering cursor beats an unreachable window.
+            if (!wanted)
                 return;
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
         }
 
+        // Whether the game is currently holding the cursor visible on this
+        // plugin's behalf. Released again in OnDestroy, or the player would
+        // keep a cursor nobody asked for.
+        private bool askedGameForCursor;
+
         private void OnDestroy()
         {
+            // Give the cursor back before going away, or the game keeps
+            // showing one because of an overlay that no longer exists.
+            if (askedGameForCursor)
+            {
+                GameCursorBridge.Show(false);
+                askedGameForCursor = false;
+            }
             // Nothing may be handed to the main thread after this component
             // stops running, or the events would queue up forever.
             OverlayHost.MainThreadPumpAvailable = false;

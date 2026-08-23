@@ -537,9 +537,28 @@ absent) - target WebGL.
 - A framed overlay takes the foreground, and a game that captures the mouse
   keeps capturing it - which leaves the window unreachable mid-raid. Set
   `FreeCursorWhileShown` and the library hands the cursor back while such an
-  overlay is the window in front. A game that re-hides the cursor from its own
-  code every frame can still win that argument; silencing the game's input
-  handling is a mod's business, not this library's.
+  overlay is the window in front.
+
+  It does that by asking the game to want the cursor, not by overruling it.
+  The game decides once per frame what the cursor state should be and writes
+  it only when the live state disagrees - so a mod that simply sets
+  `Cursor.visible` creates that disagreement every frame, and the two
+  alternate at frame rate. That is the flickering cursor every overlay mod
+  runs into, and it is worse than it looks: the game's write also swaps the
+  cursor bitmap for a transparent one, which a mod forcing the property never
+  restores. Setting the game's own "show the cursor" flag instead means there
+  is nothing to disagree about, and the single write the game then performs
+  restores visibility, lock mode and bitmap together.
+
+  The flag is reached by reflection, so this library still references nothing
+  but BepInEx and Unity. A game that does not have it falls back to setting the
+  properties directly, which flickers - better than an unreachable window. Note
+  that the flag is global and has no counter: a second mod releasing it takes
+  the cursor from the first. A mod doing this itself, rather than through this
+  library, should raise `EFT.GlobalEvents.ToggleShowInGameCursorEvent` the way
+  the game does - or register an input node whose `ShouldLockCursor()` returns
+  `ECursorResult.ShowCursor`, which composes properly because the input tree
+  takes the maximum across nodes.
 - `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`
   turn a configurable hotkey into the virtual-key codes `CloseKeys` wants.
 - While the overlay holds the keyboard the game does not see key presses, and

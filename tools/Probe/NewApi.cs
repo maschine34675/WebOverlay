@@ -1052,6 +1052,26 @@ internal static partial class NewApi
     /// </summary>
     internal static void ConsumerApi17()
     {
+        // FreeCursorWhileShown asks the game to want the cursor, through the
+        // game's own event, found by reflection. Here there is no game, which
+        // is the case the fallback exists for: the bridge must report itself
+        // unavailable and refuse quietly rather than throw into a caller that
+        // only wanted a cursor.
+        Type bridge = typeof(WebOverlays).Assembly.GetType("WebOverlay.GameCursorBridge");
+        check("C0 the cursor bridge exists", bridge != null, bridge == null ? "missing" : bridge.Name);
+        if (bridge != null)
+        {
+            PropertyInfo available = bridge.GetProperty("Available",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            MethodInfo show = bridge.GetMethod("Show", BindingFlags.NonPublic | BindingFlags.Static);
+            bool isAvailable = available != null && (bool)available.GetValue(null, null);
+            check("C1 and reports itself unavailable without the game", !isAvailable,
+                "Available=" + isAvailable);
+            bool asked = show != null && (bool)show.Invoke(null, new object[] { true });
+            check("C2 so asking for the cursor fails quietly instead of throwing", !asked,
+                "Show(true)=" + asked);
+        }
+
         var answers = new System.Collections.Generic.List<string>();
         bool loaded = false, failed = false;
         string report = null;

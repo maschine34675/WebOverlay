@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-49 were added for v1.3.0 to v1.8.2
+and re-run unchanged for v1.4.0; rows 10-49 were added for v1.3.0 to v1.8.3
 (runtime 151.0.4129.93).
 
 The Result column says how the row is evidenced. `PASS` means the probe
@@ -53,7 +53,7 @@ row that claims more than the automation delivers is worse than no row.
 | 38 | 200 latest-only messages before the page can receive any, plus a page asking for `{ latest: true }` | the library delivers one - the newest - while an ordinary message beside them is untouched; the page gets a handful instead of fifty | PASS |
 | 39 | `Dispatch = Manual` | nothing arrives, including `PageLoaded`, until `PumpEvents()`; then on the pumping thread | PASS |
 | 40 | `Post(..., Retain)` with a page live, then a rejected retarget, then a page-initiated reload | the retained payload survives the rejection and replays to the reloaded page exactly once - the page that stays on screen keeps the state that belongs to it | PASS |
-| 41 | A page named before the browser exists whose navigation is then rejected at creation, followed by a real page | the refused page is not left as the target: the next `LoadHtml` is a first navigation, not a retarget, so state set up beforehand still reaches the page that does load | PASS |
+| 41 | A page named before the browser exists, followed by a real page - whether or not the first one is ever attempted | a target the browser never took is not a page being left, so state set up beforehand still reaches the page that does load, and the answer does not depend on which of the two happened first | PASS |
 | 42 | `Navigate` to a file that is not in the mapped folder, and to a connection nothing answers | a warning naming the page and the browser's error status - one per completed attempt, and the browser may retry a target by itself, so a single `Navigate` can produce more than one; `IsPageLoaded` stays false, the target stands, and a working page afterwards still loads | PASS |
 | 43 | The web-error-status slot on the NavigationCompleted args | the neighbouring slot returns sequential navigation ids while this one returns differing statuses - `UNKNOWN` (0) for the missing file, `CONNECTION_ABORTED` (9) for the refused connection - which no wrong slot could produce | **measured by hand**, once, during v1.8.1: the probe reads no navigation id, so it asserts only that a status arrives inside the documented range |
 | 44 | `Dispatch = Manual` with a script answer already waiting in the queue when the handle is disposed | the answer is handed over rather than dropped with the events; events stay droppable, answers do not | PASS |

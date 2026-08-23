@@ -110,6 +110,15 @@ namespace WebOverlay
         // retired right after so they do not accumulate.
         private readonly List<ScriptCall> pendingScripts = new List<ScriptCall>();
 
+        // Whether the current target was ever actually handed to the browser.
+        // A page named while the browser was still starting is only recorded,
+        // and replacing a recording is not leaving a page - so the state the
+        // mod set up beforehand still belongs to whichever page finally loads.
+        // Without this the answer would depend on whether the deferred first
+        // navigation happened to run before the mod's next call, which is a
+        // race in something a consumer can observe.
+        private bool targetHandedToBrowser;
+
         // Set between handing a navigation to the browser and seeing it start.
         // Any completion in that window belongs to the navigation being
         // replaced, not to the one the mod is waiting for.
@@ -731,6 +740,7 @@ namespace WebOverlay
                     forgetTarget();
                     return false;
                 }
+                targetHandedToBrowser = true;
             }
             else if (pendingUrl != null)
             {
@@ -743,6 +753,7 @@ namespace WebOverlay
                     forgetTarget();
                     return false;
                 }
+                targetHandedToBrowser = true;
             }
             return true;
         }
@@ -765,6 +776,7 @@ namespace WebOverlay
             expectInlineNavigation = false;
             // Nothing was ever handed to the browser, so no start is owed.
             awaitingNavigationStart = false;
+            targetHandedToBrowser = false;
         }
 
         private bool applySettings()
@@ -1229,7 +1241,7 @@ namespace WebOverlay
             // reload keeps the state the mod set up for that page - which is
             // what happens when the page reloads itself. Two routes to the
             // same visible outcome must not end up in different states.
-            bool retargeting = (previous.Url != null || previous.Html != null)
+            bool retargeting = previous.HandedOver
                 && !(previous.Html == null && string.Equals(previous.Url, url, StringComparison.Ordinal));
             pendingUrl = url;
             pendingHtml = null;
@@ -1254,6 +1266,7 @@ namespace WebOverlay
                 restoreTarget(previous);
                 return;
             }
+            targetHandedToBrowser = true;
             // Only now: anything still buffered - and anything remembered -
             // was meant for the previous page, and this is the moment it stops
             // being the target. Choosing the FIRST page is not that: a mod
@@ -1298,6 +1311,7 @@ namespace WebOverlay
             public bool ExpectInline;
             public bool PageReady;
             public bool PageLoaded;
+            public bool HandedOver;
         }
 
         private TargetState captureTarget() => new TargetState
@@ -1308,6 +1322,7 @@ namespace WebOverlay
             ExpectInline = expectInlineNavigation,
             PageReady = pageReady,
             PageLoaded = pageLoaded,
+            HandedOver = targetHandedToBrowser,
         };
 
         private void restoreTarget(TargetState previous)
@@ -1321,6 +1336,7 @@ namespace WebOverlay
             expectInlineNavigation = previous.ExpectInline;
             pageReady = previous.PageReady;
             pageLoaded = previous.PageLoaded;
+            targetHandedToBrowser = previous.HandedOver;
         }
 
         /// <summary>Shows markup directly, so a mod needs no web server at all.</summary>
@@ -1331,7 +1347,7 @@ namespace WebOverlay
             TargetState previous = captureTarget();
             // Same rule as Navigate: identical markup is a reload of the page
             // already showing, not a move away from it.
-            bool retargeting = (previous.Url != null || previous.Html != null)
+            bool retargeting = previous.HandedOver
                 && !(previous.Url == null && string.Equals(previous.Html, html, StringComparison.Ordinal));
             pendingHtml = html;
             pendingUrl = null;
@@ -1352,6 +1368,7 @@ namespace WebOverlay
                 restoreTarget(previous);
                 return;
             }
+            targetHandedToBrowser = true;
             if (retargeting)
                 forgetPageState();
         }

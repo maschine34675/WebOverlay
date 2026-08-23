@@ -45,6 +45,7 @@
     <Compile Include="Branding.cs" />
     <Compile Include="BoundsStore.cs" />
     <Compile Include="ChannelProtocol.cs" />
+    <Compile Include="GameCursorBridge.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Interop\ComCallback.cs" />
     <Compile Include="Interop\DCompApi.cs" />
