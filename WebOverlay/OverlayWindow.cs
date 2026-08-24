@@ -252,6 +252,7 @@ namespace WebOverlay
         {
             if (isVisible == value)
                 return;
+            OverlayHost.LogDiagnostic("overlay '" + title + "': shown -> " + value);
             isVisible = value;
             if (notify)
                 VisibilityChanged?.Invoke(value);
@@ -1990,8 +1991,16 @@ namespace WebOverlay
         public void Show()
         {
             desiredVisible = true;
+            OverlayHost.LogDiagnostic("overlay '" + title + "': Show() entered, window="
+                + window.ToString("X") + " state=" + state
+                + " displayMode=" + OverlayHost.DisplayModeSupported);
             if (window == IntPtr.Zero || state == CreationState.Failed)
+            {
+                // Nothing to show yet - creation will call this again once the
+                // window exists, because desiredVisible is now set.
+                OverlayHost.LogDiagnostic("overlay '" + title + "': Show() deferred");
                 return;
+            }
             if (!OverlayHost.DisplayModeSupported)
             {
                 // A window over an exclusive-fullscreen game minimises it, and

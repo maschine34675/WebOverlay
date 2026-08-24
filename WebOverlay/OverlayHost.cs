@@ -70,6 +70,19 @@ namespace WebOverlay
         // cap is far above one frame's worth of events at any sane rate.
         private const int MainThreadQueueLimit = 4096;
 
+        /// <summary>
+        /// Turns on the window-lifecycle reporting used to answer "the panel is
+        /// up but the library thinks it is hidden". Set from the plugin's
+        /// Diagnostics switch; costs nothing while off.
+        /// </summary>
+        internal static bool Diagnose;
+
+        internal static void LogDiagnostic(string line)
+        {
+            if (Diagnose)
+                LogInfo(line);
+        }
+
         internal static Action<string> LogInfo = _ => { };
         internal static Action<string> LogWarning = _ => { };
 

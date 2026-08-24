@@ -29,6 +29,8 @@ namespace WebOverlay
             DiagnoseCursor = Config.Bind("Diagnostics", "Log cursor state", false,
                 "Writes one line whenever the foreground window or the cursor state changes."
                 + " Only useful when reporting a problem with the mouse.");
+            OverlayHost.Diagnose = DiagnoseCursor.Value;
+            DiagnoseCursor.SettingChanged += (_, __) => OverlayHost.Diagnose = DiagnoseCursor.Value;
             OverlayHost.LogInfo = this.Logger.LogInfo;
             OverlayHost.LogWarning = this.Logger.LogWarning;
             OverlayHost.GameWindow = findGameWindow();
