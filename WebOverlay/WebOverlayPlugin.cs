@@ -90,6 +90,7 @@ namespace WebOverlay
             // observe a working overlay, only a broken one. An instrument with
             // a blind spot over exactly the state in question is worse than
             // none, because its silence reads as evidence.
+            observeMouseMovement();
             reportCursorState(wanted);
 
             // Preferred: ask the game to want the cursor too, which is a state
@@ -155,6 +156,7 @@ namespace WebOverlay
                     : overlayInFront ? "overlay" : "other")
                 + " | visible=" + Cursor.visible
                 + " | lock=" + Cursor.lockState
+                + " | mouse=" + (mouseMoving ? "moving" : "still")
                 + " | wanted=" + wanted
                 + " | asked=" + askedGameForCursor
                 // The identities themselves, because "other" only says the
@@ -171,6 +173,28 @@ namespace WebOverlay
         }
 
         private string lastCursorState;
+
+        // Whether Unity has seen the mouse move recently. The remaining
+        // question after both mods were cleared is whether the movement
+        // reaches the game at all: if Unity sees deltas and the player still
+        // does not turn, something inside the game is dropping them; if it
+        // sees none, the movement is not arriving at the game's window in the
+        // first place, and no amount of mod code can be the cause.
+        private float mouseSeenAt;
+
+        private void observeMouseMovement()
+        {
+            if (!DiagnoseCursor.Value)
+                return;
+            if (Mathf.Abs(Input.GetAxisRaw("Mouse X")) > 0.001f
+                || Mathf.Abs(Input.GetAxisRaw("Mouse Y")) > 0.001f)
+            {
+                mouseSeenAt = Time.unscaledTime;
+            }
+        }
+
+        /// <summary>Movement within the last second, which is what a player would call "the mouse works".</summary>
+        private bool mouseMoving => Time.unscaledTime - mouseSeenAt < 1f;
 
         /// <summary>Handle, class name and owner, enough to tell windows apart.</summary>
         private static string describeWindow(IntPtr window)
