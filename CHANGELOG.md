@@ -14,6 +14,32 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.4]
+
+### Forge version notes
+
+- Fixed: after closing an overlay, the mouse could be left invisible without
+  the game taking it back, so looking around stopped working until the game
+  was refocused.
+
+### Fixed
+
+- Handing the cursor back is checked, one frame later, and repaired if the game
+  did not complete it. Asking the game for the cursor rather than overruling it
+  is what stopped the flicker in 1.8.3, and it works because the game writes
+  the cursor state only when the live state disagrees with what it wants. The
+  cost of that is a state the game agrees with by accident, which it therefore
+  never corrects - and "hidden but not captured" is exactly such a state: the
+  pointer is invisible and the mouse moves it instead of turning the player, so
+  the game appears frozen to the mouse while the keyboard still works. It is
+  reachable because the lock mode and the visibility are set by different
+  parties at different moments; the game reapplies the lock from the *current*
+  visibility when its window regains focus, which is the same moment this
+  release happens. The library now looks once, after giving the cursor back,
+  and captures the mouse itself if nothing else did. One write, only when that
+  state is actually observed, and a warning the first time - so a report of it
+  says whether this is what happened rather than leaving it to be inferred.
+
 ## [1.8.3]
 
 ### Forge version notes

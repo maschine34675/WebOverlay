@@ -81,6 +81,9 @@ namespace WebOverlay
                 if (GameCursorBridge.Show(wanted))
                 {
                     askedGameForCursor = wanted;
+                    // Giving it back is the half that can go wrong quietly, so
+                    // it is watched for a few calls; see verifyCursorReturned.
+                    cursorReturnChecks = wanted ? 0 : ReturnChecks;
                     return;
                 }
                 // The game would not take the request - it changed shape under
@@ -94,6 +97,9 @@ namespace WebOverlay
                 return;
             }
 
+            if (cursorReturnChecks > 0)
+                verifyCursorReturned();
+
             // Fallback, for a game that does not have that lever: set it
             // directly and keep setting it. This is the flickering path, but a
             // flickering cursor beats an unreachable window.
@@ -103,10 +109,59 @@ namespace WebOverlay
             Cursor.visible = true;
         }
 
+        /// <summary>
+        /// Checks, one frame after the cursor was given back, that the game
+        /// really took it - and repairs the one state it cannot have meant.
+        ///
+        /// The game writes the cursor only when the live state disagrees with
+        /// what it wants, which is what makes asking it so much better than
+        /// overruling it. The cost is that a state it agrees with by accident
+        /// is a state it never corrects. Hidden but not captured is exactly
+        /// that: the pointer is invisible and the mouse moves it instead of
+        /// turning the player, so the game looks frozen to the mouse while the
+        /// keyboard still works. It can be reached because the lock mode and
+        /// the visibility are set by different parties at different moments -
+        /// the game itself reapplies the lock from the CURRENT visibility when
+        /// the window regains focus, which is the same moment this release
+        /// happens.
+        ///
+        /// One write, only when that state is actually observed. Hiding always
+        /// means capturing, so there is exactly one right answer here.
+        /// </summary>
+        private void verifyCursorReturned()
+        {
+            CursorLockMode found = Cursor.lockState;
+            if (Cursor.visible || found == CursorLockMode.Locked)
+            {
+                // Either the game has taken it back or it still intends to;
+                // both are its business and neither needs help.
+                cursorReturnChecks = 0;
+                return;
+            }
+            // Watched over several calls rather than judged on the first: this
+            // runs from Update and LateUpdate, and the game's own Update may
+            // not have had its turn yet in this frame. Only a state that is
+            // still wrong after all of them is one nobody is going to fix.
+            if (--cursorReturnChecks > 0)
+                return;
+            Cursor.lockState = CursorLockMode.Locked;
+            if (!warnedAboutCursorReturn)
+            {
+                warnedAboutCursorReturn = true;
+                Logger.LogWarning("the cursor was left hidden but not captured after handing it back"
+                    + " (lock mode was " + found + "); the game keeps the mouse now.");
+            }
+        }
+
         // Whether the game is currently holding the cursor visible on this
         // plugin's behalf. Released again in OnDestroy, or the player would
         // keep a cursor nobody asked for.
         private bool askedGameForCursor;
+        private int cursorReturnChecks;
+        private bool warnedAboutCursorReturn;
+
+        // Update and LateUpdate both call in, so this is a handful of frames.
+        private const int ReturnChecks = 8;
 
         private void OnDestroy()
         {
