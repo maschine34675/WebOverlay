@@ -103,13 +103,24 @@ Two things to know before reading a failure:
   with no change to the library. Even with the desktop drawing, the compositor
   occasionally drops a frame during a capture, so re-run before believing a
   single pixel failure.
-- **Run the modes that touch the screen one at a time.** `glass`,
-  `glass-click`, `cube`, `shape`, `shape-guards` and `click-through` sample
-  pixels, send real clicks and move windows to the front. Back to back in a
-  loop they interfere: the previous mode's window is still going away while the
-  next one measures, and all six fail together while each passes on its own -
-  measured, and the reason a batch run of the whole matrix should not be read
-  as six regressions. Give them a second or two between runs.
+- **Do not use the machine while `glass`, `glass-click`, `cube`, `shape`,
+  `shape-guards` or `click-through` are running.** They sample real screen
+  pixels and send real mouse input at real desktop coordinates. A window of
+  yours over the test area takes those clicks - which happened: a batch run
+  clicked inside a running application and hit a button in it, then the
+  application came to the front and the six modes failed together while each
+  passed on its own afterwards. The failures were the interference, not a
+  regression.
+
+  Since then a click is refused outright unless that point belongs to a
+  window the probe owns; the mode then prints `SKIP` and exits `3`, so "come
+  back when the desktop is free" is distinguishable from "this broke". The
+  guard asks about the *top-level* window rather than the one under the
+  pointer, because the page lives in a child window owned by the WebView2
+  browser process - checking the child refuses every real click instead.
+
+  It cannot make these modes safe to run alongside your own work. It only
+  stops them doing damage.
 - **`fault-loader` and `failure-kind` move `WebView2Loader.dll` aside** for
   the length of the run, because they test what an incomplete plugin folder
   does. They put it back afterwards, including after an earlier run that was

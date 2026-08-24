@@ -42,6 +42,28 @@ internal static class Program
             }));
 
         string mode = args.Length > 0 ? args[0] : "normal";
+        try
+        {
+            run(mode, args);
+        }
+        catch (DesktopBusyException busy)
+        {
+            // Not a result about the library: the desktop was not ours to
+            // measure. Say so plainly and use a code of its own, so a batch
+            // run can tell "come back later" apart from "this broke".
+            Console.WriteLine("SKIP " + mode + " - " + busy.Message);
+            Environment.Exit(3);
+        }
+    }
+
+    /// <summary>The desktop was in use, so the row could not be measured.</summary>
+    internal sealed class DesktopBusyException : Exception
+    {
+        internal DesktopBusyException(string message) : base(message) { }
+    }
+
+    private static void run(string mode, string[] args)
+    {
         switch (mode)
         {
             case "fault-loader": faultLoader(); return;
@@ -727,8 +749,36 @@ internal static class Program
         return Color.FromArgb((int)(colorRef & 0xFF), (int)((colorRef >> 8) & 0xFF), (int)((colorRef >> 16) & 0xFF));
     }
 
+    /// <summary>
+    /// Refuses to click anywhere but on a window this process owns. A
+    /// synthesized click goes to whatever happens to be at that point on the
+    /// real desktop, so a mode that runs while someone is using the machine
+    /// will otherwise click inside their application - which happened, and
+    /// cost a running chat its window. Better to fail the row loudly than to
+    /// press a stranger's button.
+    /// </summary>
+    private static void refuseForeignTarget(int screenX, int screenY)
+    {
+        // Ask about the top-level window, not the one directly under the
+        // point: the page itself lives in a child window owned by the
+        // WebView2 browser process, so its own process id is never ours even
+        // though the window belongs to an overlay we created.
+        IntPtr under = WindowFromPointP(screenX, screenY);
+        IntPtr root = under == IntPtr.Zero ? IntPtr.Zero : GetAncestorP(under, GA_ROOT);
+        uint owner;
+        GetWindowThreadProcessIdP(root, out owner);
+        if (root != IntPtr.Zero && owner == GetCurrentProcessIdP())
+            return;
+        throw new DesktopBusyException(
+            "refusing to click at " + screenX + "," + screenY + ": that point belongs to "
+            + (root == IntPtr.Zero ? "no window" : "process " + owner)
+            + ", not to this probe. Something is covering the test window - move it "
+            + "aside and run the mode again.");
+    }
+
     private static void sendRealClick(int screenX, int screenY)
     {
+        refuseForeignTarget(screenX, screenY);
         // Absolute coordinates are normalized to 0..65535.
         int nx = screenX * 65535 / (GetSystemMetrics(0) - 1);
         int ny = screenY * 65535 / (GetSystemMetrics(1) - 1);
@@ -807,6 +857,14 @@ internal static class Program
 
     [DllImport("user32.dll", EntryPoint = "WindowFromPoint")]
     private static extern IntPtr WindowFromPointNative(POINTP point);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+    private static extern uint GetWindowThreadProcessIdP(IntPtr window, out uint processId);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetCurrentProcessId")]
+    private static extern uint GetCurrentProcessIdP();
+
+    private const uint GA_ROOT = 2;
 
     [DllImport("user32.dll", EntryPoint = "GetAncestor")]
     private static extern IntPtr GetAncestorP(IntPtr hwnd, uint flags);
