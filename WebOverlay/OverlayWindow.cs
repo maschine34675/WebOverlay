@@ -282,6 +282,11 @@ namespace WebOverlay
         /// focus, which is a different thing and, in a game that keeps the
         /// cursor, not the one that decides.
         /// </summary>
+        /// <summary>Handle, title and the two conditions, for a diagnostic report.</summary>
+        internal string Describe() =>
+            window.ToString("X") + "(" + title + ",free=" + options.FreeCursorWhileShown
+                + ",shown=" + isVisible + ")";
+
         internal bool WantsFreeCursor(IntPtr foreground) =>
             options.FreeCursorWhileShown && isVisible && window != IntPtr.Zero && window == foreground;
 

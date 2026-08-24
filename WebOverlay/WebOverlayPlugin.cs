@@ -147,7 +147,14 @@ namespace WebOverlay
                     : overlayInFront ? "overlay" : "other")
                 + " | visible=" + Cursor.visible
                 + " | lock=" + Cursor.lockState
-                + " | asked=" + askedGameForCursor;
+                + " | asked=" + askedGameForCursor
+                // The identities themselves, because "other" only says the
+                // foreground is neither the game nor a window this library
+                // recognises - and which of those two it failed to match is
+                // the whole question.
+                + " | fg=" + describeWindow(foreground)
+                + " game=" + OverlayHost.GameWindow.ToString("X")
+                + " mine=" + OverlayHost.DescribeOverlayWindows();
             if (state == lastCursorState)
                 return;
             lastCursorState = state;
@@ -155,6 +162,21 @@ namespace WebOverlay
         }
 
         private string lastCursorState;
+
+        /// <summary>Handle, class name and owner, enough to tell windows apart.</summary>
+        private static string describeWindow(IntPtr window)
+        {
+            if (window == IntPtr.Zero)
+                return "none";
+            var name = new StringBuilder(64);
+            GetClassName(window, name, name.Capacity);
+            IntPtr owner = GetWindow(window, 4 /* GW_OWNER */);
+            GetWindowThreadProcessId(window, out uint process);
+            return window.ToString("X") + "(" + name + ",owner=" + owner.ToString("X")
+                + ",pid=" + process + ")";
+        }
+
+
 
         /// <summary>
         /// Checks, one frame after the cursor was given back, that the game
@@ -342,5 +364,8 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetWindow(IntPtr hwnd, uint command);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     }
 }

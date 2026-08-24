@@ -393,6 +393,25 @@ namespace WebOverlay
         /// </summary>
         internal static IntPtr ForegroundWindow() => GetForegroundWindow();
 
+        /// <summary>
+        /// Every live overlay window with the handle it actually has, so a
+        /// report can say which one the foreground failed to match.
+        /// </summary>
+        internal static string DescribeOverlayWindows()
+        {
+            var text = new System.Text.StringBuilder();
+            lock (windows)
+            {
+                foreach (OverlayWindow window in windows)
+                {
+                    if (text.Length > 0)
+                        text.Append(',');
+                    text.Append(window.Describe());
+                }
+            }
+            return text.Length == 0 ? "none" : text.ToString();
+        }
+
         /// <summary>Whether the foreground window belongs to an overlay of ours.</summary>
         internal static bool ForegroundIsOverlay(IntPtr foreground)
         {
