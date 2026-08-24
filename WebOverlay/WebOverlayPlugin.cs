@@ -84,6 +84,14 @@ namespace WebOverlay
             // keeps its cursor regardless of what it thinks.
             bool wanted = OverlayHost.WantsFreeCursor();
 
+            // First, and unconditionally. Every path below returns early, and
+            // the one that returns soonest is the one where this library is
+            // holding the cursor - so reporting further down could never
+            // observe a working overlay, only a broken one. An instrument with
+            // a blind spot over exactly the state in question is worse than
+            // none, because its silence reads as evidence.
+            reportCursorState(wanted);
+
             // Preferred: ask the game to want the cursor too, which is a state
             // and so only worth saying when it changes. Then the game stops
             // fighting - it is not being overruled, it agrees - and the one
@@ -113,8 +121,6 @@ namespace WebOverlay
             if (cursorReturnChecks > 0)
                 verifyCursorReturned();
 
-            reportCursorState();
-
             // Fallback, for a game that does not have that lever: set it
             // directly and keep setting it. This is the flickering path, but a
             // flickering cursor beats an unreachable window.
@@ -137,7 +143,7 @@ namespace WebOverlay
         /// wrong depends entirely on which window the OS thinks is in front.
         /// Guessing at that from here has cost two wrong answers already.
         /// </summary>
-        private void reportCursorState()
+        private void reportCursorState(bool wanted)
         {
             if (!DiagnoseCursor.Value)
                 return;
@@ -149,6 +155,7 @@ namespace WebOverlay
                     : overlayInFront ? "overlay" : "other")
                 + " | visible=" + Cursor.visible
                 + " | lock=" + Cursor.lockState
+                + " | wanted=" + wanted
                 + " | asked=" + askedGameForCursor
                 // The identities themselves, because "other" only says the
                 // foreground is neither the game nor a window this library
