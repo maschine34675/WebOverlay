@@ -439,6 +439,20 @@ namespace WebOverlay
             return false;
         }
 
+        /// <summary>
+        /// Lets the mouse through overlays that asked for it while the game is
+        /// in front. Called once per frame; each window only acts on a change.
+        /// </summary>
+        internal static void UpdateClickThrough()
+        {
+            IntPtr foreground = GetForegroundWindow();
+            lock (windows)
+            {
+                foreach (OverlayWindow window in windows)
+                    window.UpdateClickThrough(foreground);
+            }
+        }
+
         internal static bool WantsFreeCursor()
         {
             IntPtr foreground = GetForegroundWindow();

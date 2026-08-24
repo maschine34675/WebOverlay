@@ -83,6 +83,7 @@ namespace WebOverlay
                     : EventDispatch.OverlayThread,
                 InjectTheme = options.InjectTheme,
                 FreeCursorWhileShown = options.FreeCursorWhileShown,
+                ClickThroughWhenUnfocused = options.ClickThroughWhenUnfocused,
                 VirtualHosts = copy(options.VirtualHosts),
             };
         }
@@ -443,6 +444,26 @@ namespace WebOverlay
         /// the foreground.
         /// </summary>
         public bool FreeCursorWhileShown { get; set; }
+
+        /// <summary>
+        /// While the game is the window in front, let the mouse pass through
+        /// this overlay to the game instead of landing on it.
+        ///
+        /// For a panel that covers the middle of the screen this is the
+        /// difference between a playable game and a frozen one. The game locks
+        /// the cursor to the centre of its own window, and Windows delivers
+        /// mouse movement to whatever window sits under the pointer - so a
+        /// panel over that point receives the movement and the player cannot
+        /// turn, with nothing reporting an error: the cursor state is right and
+        /// the game has the foreground.
+        ///
+        /// The cost is that the panel can no longer be clicked to bring it back
+        /// to the front, because a click is mouse input like any other. Its
+        /// hotkey still works, which is how it was opened. Off by default for
+        /// that reason, and pointless for a HUD, which never takes the
+        /// foreground in the first place.
+        /// </summary>
+        public bool ClickThroughWhenUnfocused { get; set; }
 
         /// <summary>
         /// Folders served to the page as `https://&lt;host&gt;/`, so it can load

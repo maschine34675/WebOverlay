@@ -14,6 +14,42 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.6]
+
+### Forge version notes
+
+- Fixed: a mod's panel covering the middle of the screen could stop the mouse
+  from turning the player, with no way to tell why. Mods can now let the mouse
+  through to the game while the game is in front.
+
+### Added
+
+- `OverlayOptions.ClickThroughWhenUnfocused` - while the game is the window in
+  front, the mouse passes through the overlay to the game instead of landing on
+  it. Off by default.
+
+  It exists for a trap that took a whole evening to find and is invisible from
+  inside the library: the game locks the cursor to the centre of its own window
+  while it has focus, and Windows delivers mouse movement to whatever window
+  sits under the pointer - so a panel covering that point receives the movement
+  and the player cannot turn. Nothing reports an error, because nothing is in
+  error: the cursor state is correct, the game has the foreground, the input
+  simply arrives somewhere else. Holding a mouse button restores it, because
+  that gives the game window a capture, which is what made it look like a
+  cursor problem for so long.
+
+  The cost is that the panel can no longer be clicked to bring it back to the
+  front, since a click is mouse input like any other; its hotkey still works.
+  Pointless for a HUD, which never takes the foreground.
+
+### Notes
+
+- Probe mode `click-through`, rows 53-55: with the overlay in front the page
+  gets a real click; with another window in front the same click reaches the
+  window behind and the page does not see it; focusing the overlay again gives
+  it back. That last pair also settles a doubt the implementation raised - the
+  browser's own child window does not swallow the click.
+
 ## [1.8.5]
 
 ### Forge version notes

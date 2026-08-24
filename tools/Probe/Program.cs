@@ -82,6 +82,7 @@ internal static class Program
             case "failed-nav": NewApi.FailedNavigation(args.Length > 1 ? args[1] : null); return;
             case "generation": NewApi.Generation(args.Length > 1 ? args[1] : null); return;
             case "ready-load": NewApi.ReadyLoad(); return;
+            case "click-through": NewApi.ClickThrough(); return;
 
             // Not a fault-matrix row: the mode for looking at your own page.
             case "preview":
@@ -627,6 +628,28 @@ internal static class Program
     internal static void DestroyProbeWindow(IntPtr window) => DestroyWindow(window);
 
     internal static void SendRealClick(int x, int y) => sendRealClick(x, y);
+
+    /// <summary>
+    /// The per-frame pass the game plugin normally drives; the probe has no
+    /// Unity, so it calls it directly.
+    /// </summary>
+    internal static void UpdateClickThrough()
+    {
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        host.GetMethod("UpdateClickThrough", BindingFlags.NonPublic | BindingFlags.Static)
+            .Invoke(null, null);
+        Thread.Sleep(120);
+    }
+
+    /// <summary>Brings a window to the front, to stand in for the game taking focus.</summary>
+    internal static void Focus(IntPtr window)
+    {
+        SetForegroundWindow(window);
+        Thread.Sleep(400);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
 
     internal static IntPtr WindowFromPointPublic(int x, int y) => WindowFromPointP(x, y);
 

@@ -301,6 +301,49 @@ namespace WebOverlay
         /// moment is easy to hit, and the cursor then stayed captured for as
         /// long as the panel was up.
         /// </remarks>
+        // What was last applied, so the style is only touched on a change.
+        private bool clickThroughApplied;
+
+        /// <summary>
+        /// Lets the mouse through to the game while the game is in front, for
+        /// an overlay that asked for it. Called once per frame with the OS
+        /// foreground; does nothing until the answer changes.
+        /// </summary>
+        internal void UpdateClickThrough(IntPtr foreground)
+        {
+            // A HUD is already click-through or deliberately interactive, and
+            // it never holds the foreground, so this would only ever be on.
+            if (!options.ClickThroughWhenUnfocused || options.Transparent || window == IntPtr.Zero)
+                return;
+            bool through = window != foreground;
+            if (through == clickThroughApplied)
+                return;
+            clickThroughApplied = through;
+            applyClickThrough(through);
+        }
+
+        private void applyClickThrough(bool through)
+        {
+            uint style = (uint)GetWindowLongPtr(window, GWL_EXSTYLE).ToInt64();
+            if (through)
+            {
+                // Layered as well as transparent: measured on the composed HUD,
+                // hit-testing only skips a window when both are set. A layered
+                // window also needs its attributes set or it is not painted at
+                // all, so the alpha goes back to fully opaque immediately.
+                style |= WS_EX_LAYERED | WS_EX_TRANSPARENT;
+                SetWindowLongPtr(window, GWL_EXSTYLE, new IntPtr(style));
+                SetLayeredWindowAttributes(window, 0, byte.MaxValue, LWA_ALPHA);
+                return;
+            }
+            style &= ~WS_EX_TRANSPARENT;
+            // The layer itself stays when the mod asked for it through Opacity;
+            // taking it away there would drop the fade with it.
+            if (opacityAsAlpha() == byte.MaxValue)
+                style &= ~WS_EX_LAYERED;
+            SetWindowLongPtr(window, GWL_EXSTYLE, new IntPtr(style));
+        }
+
         internal bool WantsFreeCursor(IntPtr foreground) =>
             options.FreeCursorWhileShown && window != IntPtr.Zero && window == foreground;
 
@@ -2936,6 +2979,15 @@ namespace WebOverlay
         private const uint WS_SYSMENU = 0x00080000;
         private const uint WS_SIZEBOX = 0x00040000;
         private const uint WS_EX_TOOLWINDOW = 0x00000080;
+        // SetWindowLongPtrW only exists on 64-bit; the game is 64-bit, so the
+        // 32-bit fallback other code carries is not needed here.
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+        private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+        private static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
+
+        private const int GWL_EXSTYLE = -20;
         private const uint WS_EX_LAYERED = 0x00080000;
         private const uint WS_EX_TRANSPARENT = 0x00000020;
         private const uint WS_EX_NOACTIVATE = 0x08000000;

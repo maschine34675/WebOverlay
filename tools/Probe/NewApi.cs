@@ -1922,6 +1922,85 @@ internal static partial class NewApi
         finish();
     }
 
+
+    /// <summary>
+    /// ClickThroughWhenUnfocused: while something else is in front, the mouse
+    /// must reach what is behind the overlay rather than the overlay itself.
+    /// A panel covering the middle of the screen otherwise takes the movement
+    /// the game needs to turn the player, because Windows delivers mouse input
+    /// to the window under the pointer no matter who holds the foreground.
+    /// </summary>
+    internal static void ClickThrough()
+    {
+        IntPtr backdrop = Program.CreateBackdrop();
+        int pageClicks = 0;
+        bool loaded = false, failed = false;
+
+        var overlay = WebOverlays.Create("ClickThroughProbe", new OverlayOptions
+        {
+            Width = 500,
+            Height = 400,
+            ClickThroughWhenUnfocused = true,
+        });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.Failed += () => failed = true;
+        overlay.PageLoaded += () => loaded = true;
+        overlay.MessageReceived += m => { if (m == "clicked") Interlocked.Increment(ref pageClicks); };
+        overlay.LoadHtml(@"<!doctype html><html><body style='margin:0;background:#204020'>
+          <script>document.addEventListener('mousedown', function () {
+            window.chrome.webview.postMessage('clicked'); });</script>
+        </body></html>");
+        wait(() => loaded || failed, 25000);
+        check("T1 the overlay came up", loaded && !failed, failed ? "failed" : "loaded=" + loaded);
+
+        // Put it over the backdrop, which stands in for the game window.
+        overlay.SetBounds(220, 220, 500, 400);
+        Thread.Sleep(1200);
+        IntPtr window = Program.FindWindowByTitle("ClickThroughProbe");
+        check("T2 the window is on screen", window != IntPtr.Zero, window.ToString("X"));
+        Program.RECTP box = Program.GetRect(window);
+        int x = (box.left + box.right) / 2;
+        int y = (box.top + box.bottom) / 2;
+
+        // Focused: the overlay is being used, so it takes the mouse.
+        Program.Focus(window);
+        Program.UpdateClickThrough();
+        Thread.Sleep(300);
+        int before = pageClicks;
+        Program.SendRealClick(x, y);
+        wait(() => pageClicks > before, 4000);
+        check("T3 while it is in front the page gets the click",
+            pageClicks > before, "clicks=" + (pageClicks - before));
+
+        // Something else in front: the mouse belongs to whatever is behind.
+        Program.Focus(backdrop);
+        Program.UpdateClickThrough();
+        Thread.Sleep(300);
+        before = pageClicks;
+        int behind = Program.BackdropClicks;
+        Program.SendRealClick(x, y);
+        Program.PumpBackdrop(1500);
+        check("T4 while something else is in front the click passes through",
+            Program.BackdropClicks > behind, "behind=" + (Program.BackdropClicks - behind));
+        check("T5 and the page does not see it", pageClicks == before,
+            "page saw " + (pageClicks - before));
+
+        // Back to the overlay: the option is a state, not a one-way door.
+        Program.Focus(window);
+        Program.UpdateClickThrough();
+        Thread.Sleep(300);
+        before = pageClicks;
+        Program.SendRealClick(x, y);
+        wait(() => pageClicks > before, 4000);
+        check("T6 focusing it again gives the mouse back to the page",
+            pageClicks > before, "clicks=" + (pageClicks - before));
+
+        overlay.Dispose();
+        Program.DestroyProbeWindow(backdrop);
+        Thread.Sleep(300);
+        finish();
+    }
+
     /// <summary>Reads the number out of "web error status N" in a log line.</summary>
     private static int statusIn(string line)
     {

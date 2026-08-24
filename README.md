@@ -140,6 +140,7 @@ describes the library as it is now.
 | `Dispatch` | OverlayThread | Where events arrive: `OverlayThread`, `MainThread`, or `Manual` with `PumpEvents()`. |
 | `InjectTheme` | false | Put the library palette on the page as CSS variables (see [`docs/STYLE.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/STYLE.md)). |
 | `FreeCursorWhileShown` | false | Hand the cursor back while this overlay is up and the game is unfocused. |
+| `ClickThroughWhenUnfocused` | false | Let the mouse reach the game while the game is in front - needed for a panel over the middle of the screen (see above). |
 | `VirtualHosts` | null | Folders served as `https://<host>/`, so the page can load real files (see below). |
 
 `IWebOverlay`:
@@ -534,6 +535,27 @@ absent) - target WebGL.
   so this is insurance rather than a case you are likely to meet;
   `WebOverlayPlugin.IsDisplayModeSupported` is still public for a mod that
   wants to explain the situation in its own interface.
+- **A window over the middle of the screen takes the mouse away from the
+  game.** While the game has focus it locks the cursor to the centre of its own
+  window, and Windows delivers mouse movement to whatever window sits under the
+  pointer - so a panel covering that point receives the movement instead, and
+  the player cannot turn. Nothing reports an error: the cursor state is
+  correct, the game has the foreground, and the input simply never arrives.
+  Holding a mouse button restores it, because that gives the game window a
+  capture.
+
+  It is worth knowing while choosing a default size and position. A panel that
+  covers 80% of the screen cannot avoid the centre; a smaller one placed to the
+  side never meets the problem. Measured with the `Diagnostics` switch below,
+  which reports whether Unity sees the mouse move at all.
+
+  `ClickThroughWhenUnfocused` is the answer for a panel that cannot avoid it:
+  while the game is in front, the mouse passes straight through the overlay to
+  the game. The panel stays visible and keeps updating; what it loses is being
+  clickable, so bring it back with its hotkey rather than by clicking it. Off
+  by default, because a panel that does not cover the centre wants no such
+  thing - and pointless for a HUD, which never holds the foreground anyway.
+
 - A framed overlay takes the foreground, and a game that captures the mouse
   keeps capturing it - which leaves the window unreachable mid-raid. Set
   `FreeCursorWhileShown` and the library hands the cursor back while such an

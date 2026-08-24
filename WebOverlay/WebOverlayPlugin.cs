@@ -90,6 +90,7 @@ namespace WebOverlay
             // observe a working overlay, only a broken one. An instrument with
             // a blind spot over exactly the state in question is worse than
             // none, because its silence reads as evidence.
+            OverlayHost.UpdateClickThrough();
             observeMouseMovement();
             reportCursorState(wanted);
 
