@@ -14,6 +14,34 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.5]
+
+### Forge version notes
+
+- Fixed: with a mod's panel open the mouse could stop working - no cursor, and
+  the game would not turn with it either - until the panel was closed again.
+
+### Fixed
+
+- `FreeCursorWhileShown` never fired for a panel that was shown and focused in
+  one go, which is what opening one normally does. Whether an overlay wants the
+  cursor was decided by `window == foreground` **and** the library's own record
+  of having shown it - and `Show()` makes the window visible and takes the
+  foreground *before* it writes that record. Asked once per frame, the gap in
+  between is easy to hit: the library then said "not one of mine" about a
+  window sitting in front of the player, never asked for the cursor, and the
+  cursor stayed captured for as long as the panel was up. A mod muting game
+  input meanwhile - the usual thing to do while a panel has focus - left the
+  mouse dead in both directions.
+
+  Being the foreground window is now the whole test. Windows does not give the
+  foreground to a hidden window, so the second condition never added anything
+  except the race.
+
+  Found by reporting rather than reading: three passes over this code produced
+  three wrong answers, and the switch added in 1.8.4 printed the window handles
+  and the lifecycle that made it obvious. That reporting stays.
+
 ## [1.8.4]
 
 ### Forge version notes

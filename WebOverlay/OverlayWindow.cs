@@ -288,8 +288,21 @@ namespace WebOverlay
             window.ToString("X") + "(" + title + ",free=" + options.FreeCursorWhileShown
                 + ",shown=" + isVisible + ")";
 
+        /// <summary>
+        /// Whether this overlay wants the cursor handed back right now.
+        /// </summary>
+        /// <remarks>
+        /// Being the foreground window is the whole test: Windows does not
+        /// give the foreground to a hidden window, so "is it shown" adds
+        /// nothing - except a race it used to lose. Show() makes the window
+        /// visible and takes the foreground BEFORE it records that the overlay
+        /// is shown, so for the moment in between this said "not mine" about a
+        /// window sitting in front of the player. Asked once per frame, that
+        /// moment is easy to hit, and the cursor then stayed captured for as
+        /// long as the panel was up.
+        /// </remarks>
         internal bool WantsFreeCursor(IntPtr foreground) =>
-            options.FreeCursorWhileShown && isVisible && window != IntPtr.Zero && window == foreground;
+            options.FreeCursorWhileShown && window != IntPtr.Zero && window == foreground;
 
         public OverlayFailure Failure { get; private set; } = OverlayFailure.Unknown;
 
