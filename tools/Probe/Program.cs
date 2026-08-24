@@ -641,11 +641,36 @@ internal static class Program
         Thread.Sleep(120);
     }
 
+    /// <summary>
+    /// Stands in for the game holding the mouse. There is no game here, so the
+    /// probe answers the question the plugin normally answers from Unity.
+    /// </summary>
+    internal static void SetCursorCaptured(bool captured)
+    {
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        host.GetField("CursorCapturedProbe", BindingFlags.NonPublic | BindingFlags.Static)
+            .SetValue(null, (Func<bool>)(() => captured));
+    }
+
     /// <summary>Brings a window to the front, to stand in for the game taking focus.</summary>
     internal static void Focus(IntPtr window)
     {
         SetForegroundWindow(window);
         Thread.Sleep(400);
+    }
+
+    /// <summary>
+    /// Puts a window back on top WITHOUT giving it focus. In the game the
+    /// overlay is owned by the game window and therefore stays above it while
+    /// the game has focus - which is the whole situation being tested. Raising
+    /// the backdrop instead would simply cover the overlay, and a click landing
+    /// on the backdrop would prove nothing at all.
+    /// </summary>
+    internal static void RaiseWithoutFocus(IntPtr window)
+    {
+        SetWindowPos(window, new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0,
+            0x0002 /* SWP_NOMOVE */ | 0x0001 /* SWP_NOSIZE */ | 0x0010 /* SWP_NOACTIVATE */);
+        Thread.Sleep(250);
     }
 
     [DllImport("user32.dll")]

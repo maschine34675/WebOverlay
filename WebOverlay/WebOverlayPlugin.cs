@@ -41,6 +41,11 @@ namespace WebOverlay
             // deliberately does not know Unity; this is how Show() can refuse
             // exclusive fullscreen without every consumer remembering to.
             OverlayHost.DisplayModeProbe = () => IsDisplayModeSupported;
+            // Whether the game is holding the mouse rather than lending it to
+            // the player. ClickThroughWhenUnfocused only matters then; in a
+            // menu the cursor is free and a window may be clicked as usual.
+            OverlayHost.CursorCapturedProbe = () =>
+                !Cursor.visible || Cursor.lockState == CursorLockMode.Locked;
 
             if (OverlayHost.GameWindow == IntPtr.Zero)
                 this.Logger.LogWarning("the game window was not found; overlays will be unparented.");
@@ -286,6 +291,7 @@ namespace WebOverlay
             // stops running, or the events would queue up forever.
             OverlayHost.MainThreadPumpAvailable = false;
             OverlayHost.DisplayModeProbe = null;
+            OverlayHost.CursorCapturedProbe = null;
             OverlayHost.Shutdown();
         }
 

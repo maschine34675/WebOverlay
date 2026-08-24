@@ -555,6 +555,8 @@ absent) - target WebGL.
   clickable, so bring it back with its hotkey rather than by clicking it. Off
   by default, because a panel that does not cover the centre wants no such
   thing - and pointless for a HUD, which never holds the foreground anyway.
+  It engages only while the game actually holds the mouse, so in menus the
+  panel behaves like any other window.
 
 - A framed overlay takes the foreground, and a game that captures the mouse
   keeps capturing it - which leaves the window unreachable mid-raid. Set

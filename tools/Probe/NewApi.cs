@@ -1962,6 +1962,9 @@ internal static partial class NewApi
         int x = (box.left + box.right) / 2;
         int y = (box.top + box.bottom) / 2;
 
+        // The game holds the mouse - a raid, where the trap lives.
+        Program.SetCursorCaptured(true);
+
         // Focused: the overlay is being used, so it takes the mouse.
         Program.Focus(window);
         Program.UpdateClickThrough();
@@ -1973,7 +1976,12 @@ internal static partial class NewApi
             pageClicks > before, "clicks=" + (pageClicks - before));
 
         // Something else in front: the mouse belongs to whatever is behind.
+        // The overlay is put back on top without taking focus, because that is
+        // how it sits in the game - owned by the game window, so above it even
+        // while the game is focused. Without this the backdrop would simply
+        // cover it and the click would land there for the wrong reason.
         Program.Focus(backdrop);
+        Program.RaiseWithoutFocus(window);
         Program.UpdateClickThrough();
         Thread.Sleep(300);
         before = pageClicks;
@@ -1993,6 +2001,33 @@ internal static partial class NewApi
         Program.SendRealClick(x, y);
         wait(() => pageClicks > before, 4000);
         check("T6 focusing it again gives the mouse back to the page",
+            pageClicks > before, "clicks=" + (pageClicks - before));
+
+        // And the other half of the rule: in a menu the game does not hold the
+        // mouse, so there is nothing to hand it and the window stays clickable
+        // even while something else is in front. Without this the option would
+        // cost a usable window everywhere it was switched on.
+        Program.SetCursorCaptured(false);
+        Program.Focus(backdrop);
+        Program.RaiseWithoutFocus(window);
+        Program.UpdateClickThrough();
+        Thread.Sleep(300);
+        before = pageClicks;
+        behind = Program.BackdropClicks;
+        Program.SendRealClick(x, y);
+        Program.PumpBackdrop(1200);
+        // What matters is that the overlay is still a target for the mouse.
+        // Whether the page sees this particular click is a different question:
+        // the first click on an unfocused window activates it, and the browser
+        // eats that one - which is ordinary window behaviour, not the option.
+        check("T7 with the cursor free the click does not pass through",
+            Program.BackdropClicks == behind, "behind=" + (Program.BackdropClicks - behind));
+
+        Thread.Sleep(300);
+        before = pageClicks;
+        Program.SendRealClick(x, y);
+        wait(() => pageClicks > before, 4000);
+        check("T8 and the window is usable again straight away",
             pageClicks > before, "clicks=" + (pageClicks - before));
 
         overlay.Dispose();

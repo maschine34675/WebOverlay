@@ -81,7 +81,7 @@ Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
 `shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
 `spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`,
-`failed-nav`, `generation`, `ready-load`.
+`failed-nav`, `generation`, `ready-load`, `click-through`.
 Running the program with no mode takes the normal path: create, load, render,
 message back.
 
@@ -103,6 +103,13 @@ Two things to know before reading a failure:
   with no change to the library. Even with the desktop drawing, the compositor
   occasionally drops a frame during a capture, so re-run before believing a
   single pixel failure.
+- **Run the modes that touch the screen one at a time.** `glass`,
+  `glass-click`, `cube`, `shape`, `shape-guards` and `click-through` sample
+  pixels, send real clicks and move windows to the front. Back to back in a
+  loop they interfere: the previous mode's window is still going away while the
+  next one measures, and all six fail together while each passes on its own -
+  measured, and the reason a batch run of the whole matrix should not be read
+  as six regressions. Give them a second or two between runs.
 - **`fault-loader` and `failure-kind` move `WebView2Loader.dll` aside** for
   the length of the run, because they test what an incomplete plugin folder
   does. They put it back afterwards, including after an earlier run that was

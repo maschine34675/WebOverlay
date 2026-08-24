@@ -309,13 +309,13 @@ namespace WebOverlay
         /// an overlay that asked for it. Called once per frame with the OS
         /// foreground; does nothing until the answer changes.
         /// </summary>
-        internal void UpdateClickThrough(IntPtr foreground)
+        internal void UpdateClickThrough(IntPtr foreground, bool cursorCaptured)
         {
             // A HUD is already click-through or deliberately interactive, and
             // it never holds the foreground, so this would only ever be on.
             if (!options.ClickThroughWhenUnfocused || options.Transparent || window == IntPtr.Zero)
                 return;
-            bool through = window != foreground;
+            bool through = window != foreground && cursorCaptured;
             if (through == clickThroughApplied)
                 return;
             clickThroughApplied = through;

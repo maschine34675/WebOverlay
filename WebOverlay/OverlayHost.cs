@@ -440,16 +440,46 @@ namespace WebOverlay
         }
 
         /// <summary>
+        /// Whether the game currently holds the mouse - locked to a point and
+        /// hidden, the way it is while the player is looking around. Only Unity
+        /// knows, and the rest of this library deliberately does not know
+        /// Unity, so the plugin registers it; the same bridge the fullscreen
+        /// guard uses. Null means "assume it does", which is the safe end: the
+        /// overlay then behaves as it did before this was asked.
+        /// </summary>
+        internal static Func<bool> CursorCapturedProbe;
+
+        private static bool cursorCaptured()
+        {
+            Func<bool> probe = CursorCapturedProbe;
+            if (probe == null)
+                return true;
+            try
+            {
+                return probe();
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Lets the mouse through overlays that asked for it while the game is
         /// in front. Called once per frame; each window only acts on a change.
         /// </summary>
         internal static void UpdateClickThrough()
         {
             IntPtr foreground = GetForegroundWindow();
+            // Only while the game actually holds the mouse. In a menu the
+            // cursor is free and the game has no use for the middle of the
+            // screen, so letting the mouse through there would cost a
+            // clickable window and buy nothing.
+            bool captured = cursorCaptured();
             lock (windows)
             {
                 foreach (OverlayWindow window in windows)
-                    window.UpdateClickThrough(foreground);
+                    window.UpdateClickThrough(foreground, captured);
             }
         }
 

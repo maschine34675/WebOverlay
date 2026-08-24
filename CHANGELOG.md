@@ -14,6 +14,44 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.7]
+
+### Forge version notes
+
+- Fixed: a panel that lets the mouse through could not be clicked again
+  afterwards. It now only does so while the game has the mouse, so in menus it
+  behaves like any other window.
+
+### Changed
+
+- `ClickThroughWhenUnfocused` now engages only while the game actually holds
+  the mouse - cursor hidden or locked, the way it is while the player is
+  looking around.
+
+  As shipped in 1.8.6 the option cost a clickable window outright: once the
+  panel lost the foreground, nothing could give it back but its hotkey. That
+  was never the intent. The trap it exists for is the game reading mouse
+  movement at the centre of its own window, and a game showing a free cursor -
+  a menu, the stash, a trader - is not doing that. There is nothing to hand
+  over then, so nothing is handed over and the panel stays a mouse target.
+
+  The library cannot see Unity, so the plugin installs the test as
+  `OverlayHost.CursorCapturedProbe`, the same bridge shape as
+  `MainThreadPumpAvailable` and `DisplayModeProbe`. No probe means "assume
+  captured": the state that keeps the player able to turn, which is the failure
+  worth defaulting against.
+
+### Notes
+
+- Row 56: another window in front but the cursor free - nothing passes through
+  and the panel is usable on the next click.
+- Rows 54 and 55 measured less than they claimed. The probe focused the other
+  window, which also raised it *above* the overlay, so the click landed behind
+  because nothing was in the way - not because the overlay let it past. Both
+  rows passed while proving nothing. The probe now raises the other window
+  without focus, so the overlay stays on top exactly as an owned window sits
+  above the game, and the rows fail if the click stops passing through.
+
 ## [1.8.6]
 
 ### Forge version notes

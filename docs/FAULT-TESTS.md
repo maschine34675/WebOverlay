@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-55 were added for v1.3.0 to v1.8.6
+and re-run unchanged for v1.4.0; rows 10-56 were added for v1.3.0 to v1.8.7
 (runtime 151.0.4129.93).
 
 The Result column says how the row is evidenced. `PASS` means the probe
@@ -66,8 +66,9 @@ row that claims more than the automation delivers is worse than no row.
 | 51 | The same, with retained state set for the page that stays on screen | the refused page is not left as the target and its state is not thrown away: it reaches the page that does load | PASS |
 | 52 | A `Ready` handler that asks for its page immediately, while the channel shim is still being confirmed | exactly one `PageLoaded` and one run of the page's own scripts - the deferred first navigation does not start the same document again | PASS |
 | 53 | A panel with `ClickThroughWhenUnfocused` while it is the foreground window | a real click reaches the page, as for any other panel | PASS |
-| 54 | The same panel while another window holds the foreground | the click passes through to the window behind and the page never sees it - including the browser's own child window, which does not swallow it | PASS |
+| 54 | The same panel while another window holds the foreground and the game holds the mouse | the click passes through to the window behind and the page never sees it - including the browser's own child window, which does not swallow it. The panel is raised above the other window without taking focus first, the way an owned window sits above the game; without that the click would land behind for the wrong reason and the row would prove nothing | PASS |
 | 55 | Focusing the panel again | the mouse belongs to the page once more; the option is a state, not a one-way door | PASS |
+| 56 | Another window in front but the cursor free, as in a menu | nothing passes through: with no captured cursor there is nothing to hand over, so the panel stays a mouse target and is usable again on the next click | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):
