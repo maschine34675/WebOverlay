@@ -449,7 +449,39 @@ namespace WebOverlay
         /// </summary>
         internal static Func<bool> CursorCapturedProbe;
 
+        /// <summary>
+        /// How many frames in a row the answer has to disagree with what is
+        /// believed before the belief changes. Two mods writing the cursor in
+        /// the same frame - one showing it, the game hiding it again - make
+        /// the raw answer alternate at frame rate, and acting on that would
+        /// rewrite the window style twice a frame forever. Neither reading is
+        /// wrong; the state is simply contested, and the honest response to a
+        /// contested state is to keep the last settled one.
+        /// </summary>
+        private const int CapturedAgreement = 8;
+
+        private static bool capturedBelief = true;
+        private static int capturedDisagreements;
+
         private static bool cursorCaptured()
+        {
+            bool now = askCursorCaptured();
+            if (now == capturedBelief)
+            {
+                capturedDisagreements = 0;
+                return capturedBelief;
+            }
+            // An alternating answer never gets a run of its own, so this never
+            // reaches the threshold and the belief stands - which is the point.
+            if (++capturedDisagreements < CapturedAgreement)
+                return capturedBelief;
+            capturedDisagreements = 0;
+            capturedBelief = now;
+            LogDiagnostic("cursor capture settled on " + (now ? "held by the game" : "free"));
+            return capturedBelief;
+        }
+
+        private static bool askCursorCaptured()
         {
             Func<bool> probe = CursorCapturedProbe;
             if (probe == null)
@@ -474,7 +506,9 @@ namespace WebOverlay
             // Only while the game actually holds the mouse. In a menu the
             // cursor is free and the game has no use for the middle of the
             // screen, so letting the mouse through there would cost a
-            // clickable window and buy nothing.
+            // clickable window and buy nothing. Call this once per frame: it
+            // advances the agreement count that keeps a contested answer from
+            // flipping the window style back and forth.
             bool captured = cursorCaptured();
             lock (windows)
             {

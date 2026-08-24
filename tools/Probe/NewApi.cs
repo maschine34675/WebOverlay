@@ -2010,7 +2010,7 @@ internal static partial class NewApi
         Program.SetCursorCaptured(false);
         Program.Focus(backdrop);
         Program.RaiseWithoutFocus(window);
-        Program.UpdateClickThrough();
+        Program.SettleClickThrough();
         Thread.Sleep(300);
         before = pageClicks;
         behind = Program.BackdropClicks;
@@ -2029,6 +2029,36 @@ internal static partial class NewApi
         wait(() => pageClicks > before, 4000);
         check("T8 and the window is usable again straight away",
             pageClicks > before, "clicks=" + (pageClicks - before));
+
+        // A contested answer must not become a rewritten window style every
+        // frame. Two parties writing the cursor in turn - a menu showing it,
+        // the game hiding it again - make the raw answer alternate at frame
+        // rate, and neither reading is wrong. Acting on each one cost two
+        // SetWindowLongPtr calls per frame for as long as the menu was open.
+        Program.SetCursorCaptured(true);
+        Program.Focus(backdrop);
+        Program.RaiseWithoutFocus(window);
+        Program.SettleClickThrough();
+        bool settled = Program.IsClickThrough(window);
+        bool churned = false;
+        for (int i = 0; i < 30; i++)
+        {
+            Program.SetCursorCaptured(i % 2 == 0);
+            Program.UpdateClickThrough();
+            if (Program.IsClickThrough(window) != settled)
+                churned = true;
+        }
+        check("T9 an answer that alternates every frame leaves the window style alone",
+            !churned, settled ? "stayed click-through" : "stayed clickable");
+
+        // And the other half: holding still is not the same as being stuck.
+        // The game let go of the mouse and kept letting go, which is a
+        // settled answer rather than a contested one.
+        Program.SetCursorCaptured(false);
+        Program.SettleClickThrough();
+        check("T10 a settled change still takes effect",
+            Program.IsClickThrough(window) != settled,
+            "now " + (Program.IsClickThrough(window) ? "click-through" : "clickable"));
 
         overlay.Dispose();
         Program.DestroyProbeWindow(backdrop);

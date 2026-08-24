@@ -14,6 +14,47 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.8]
+
+### Forge version notes
+
+- Fixed: with a panel open, a menu that shows the mouse pointer made the
+  library rewrite the window twice per frame for as long as the menu was up.
+
+### Fixed
+
+- `ClickThroughWhenUnfocused` acted on a contested reading of the cursor. When
+  two parties write it in the same frame - a configuration menu showing the
+  pointer, the game hiding it again - the answer alternates at frame rate, and
+  1.8.7 dutifully rewrote the window's extended style each time: two
+  `SetWindowLongPtr` calls plus a `SetLayeredWindowAttributes`, about a hundred
+  times a second, on a window owned by another thread.
+
+  Neither reading is wrong. The state is contested, and the honest answer to a
+  contested state is to keep the last settled one, so the belief now changes
+  only after the same answer has held for eight frames - about a tenth of a
+  second, below noticing, and an alternating answer never gets a run that long.
+
+- The per-frame pass ran twice per frame. `Update` and `LateUpdate` both called
+  the same routine, and the click-through check, the mouse observation and the
+  diagnostic line rode along with it. `LateUpdate` exists only for the fallback
+  that keeps writing the cursor; a second look in the same frame learns nothing
+  and doubled the cost of everything above.
+
+### Changed
+
+- The cursor diagnostic holds itself to one line per second and says how many
+  changes it skipped. It printed on every change, which is correct until
+  something changes every frame - and then the instrument that was supposed to
+  explain the flood becomes it. The switch stays off by default.
+
+### Notes
+
+- Rows 57 and 58: an answer that alternates on every frame leaves the window
+  style untouched, and a change that settles still takes effect. The probe
+  gained a way to ask for frames, because a rule expressed in frames cannot be
+  tested by a single call.
+
 ## [1.8.7]
 
 ### Forge version notes

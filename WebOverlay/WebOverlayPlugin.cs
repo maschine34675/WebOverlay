@@ -61,7 +61,12 @@ namespace WebOverlay
         private void Update()
         {
             OverlayHost.PumpMainThread();
-            freeCursorIfWanted();
+            // Whether the overlay is the window in front, asked of the OS -
+            // Unity's own notion of focus does not have to agree, and the game
+            // keeps its cursor regardless of what it thinks.
+            bool wanted = OverlayHost.WantsFreeCursor();
+            observe(wanted);
+            freeCursorIfWanted(wanted);
         }
 
         /// <summary>
@@ -71,7 +76,26 @@ namespace WebOverlay
         /// </summary>
         private void LateUpdate()
         {
-            freeCursorIfWanted();
+            freeCursorIfWanted(OverlayHost.WantsFreeCursor());
+        }
+
+        /// <summary>
+        /// Once per frame, and ahead of everything that can return early: the
+        /// path that returns soonest is the one where this library is holding
+        /// the cursor, so watching from further down could never see a working
+        /// overlay, only a broken one - an instrument blind to exactly the
+        /// state in question, whose silence reads as evidence.
+        ///
+        /// Deliberately not called from LateUpdate as well. A second look in
+        /// the same frame learns nothing, and it costs a window-style write
+        /// every time the answer flips - which, with a menu and the game
+        /// writing the cursor in turn, is every frame.
+        /// </summary>
+        private void observe(bool wanted)
+        {
+            OverlayHost.UpdateClickThrough();
+            observeMouseMovement();
+            reportCursorState(wanted);
         }
 
         /// <summary>
@@ -82,23 +106,8 @@ namespace WebOverlay
         /// the player; as soon as the game has the focus again the library
         /// stops touching it and the game takes it back on its own.
         /// </summary>
-        private void freeCursorIfWanted()
+        private void freeCursorIfWanted(bool wanted)
         {
-            // Whether the overlay is the window in front, asked of the OS -
-            // Unity's own notion of focus does not have to agree, and the game
-            // keeps its cursor regardless of what it thinks.
-            bool wanted = OverlayHost.WantsFreeCursor();
-
-            // First, and unconditionally. Every path below returns early, and
-            // the one that returns soonest is the one where this library is
-            // holding the cursor - so reporting further down could never
-            // observe a working overlay, only a broken one. An instrument with
-            // a blind spot over exactly the state in question is worse than
-            // none, because its silence reads as evidence.
-            OverlayHost.UpdateClickThrough();
-            observeMouseMovement();
-            reportCursorState(wanted);
-
             // Preferred: ask the game to want the cursor too, which is a state
             // and so only worth saying when it changes. Then the game stops
             // fighting - it is not being overruled, it agrees - and the one
@@ -175,10 +184,31 @@ namespace WebOverlay
             if (state == lastCursorState)
                 return;
             lastCursorState = state;
-            Logger.LogInfo("cursor: " + state);
+
+            // Two parties writing the cursor in the same frame - a menu
+            // showing it, the game hiding it again - make this a genuine
+            // change every frame, and an instrument that floods the log is
+            // not readable. Keep the newest state, hold the line rate to
+            // something a person can follow, and say how much was skipped
+            // rather than quietly dropping it.
+            float now = Time.unscaledTime;
+            if (now - lastCursorLogAt < LogEvery)
+            {
+                skippedCursorLines++;
+                return;
+            }
+            lastCursorLogAt = now;
+            Logger.LogInfo("cursor: " + state + (skippedCursorLines > 0
+                ? " (+" + skippedCursorLines + " changes in the last second)"
+                : string.Empty));
+            skippedCursorLines = 0;
         }
 
+        private const float LogEvery = 1f;
+
         private string lastCursorState;
+        private float lastCursorLogAt = float.NegativeInfinity;
+        private int skippedCursorLines;
 
         // Whether Unity has seen the mouse move recently. The remaining
         // question after both mods were cleared is whether the movement

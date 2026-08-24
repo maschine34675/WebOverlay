@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-56 were added for v1.3.0 to v1.8.7
+and re-run unchanged for v1.4.0; rows 10-58 were added for v1.3.0 to v1.8.8
 (runtime 151.0.4129.93).
 
 The Result column says how the row is evidenced. `PASS` means the probe
@@ -69,6 +69,8 @@ row that claims more than the automation delivers is worse than no row.
 | 54 | The same panel while another window holds the foreground and the game holds the mouse | the click passes through to the window behind and the page never sees it - including the browser's own child window, which does not swallow it. The panel is raised above the other window without taking focus first, the way an owned window sits above the game; without that the click would land behind for the wrong reason and the row would prove nothing | PASS |
 | 55 | Focusing the panel again | the mouse belongs to the page once more; the option is a state, not a one-way door | PASS |
 | 56 | Another window in front but the cursor free, as in a menu | nothing passes through: with no captured cursor there is nothing to hand over, so the panel stays a mouse target and is usable again on the next click | PASS |
+| 57 | Whether the game holds the mouse answered differently on every frame, as it is while a configuration menu and the game write the cursor in turn | the window's extended style is not touched at all: a contested answer keeps the last settled one rather than being acted on a hundred times a second | PASS |
+| 58 | The same answer held steady afterwards | it takes effect, so holding still is not the same as being stuck | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):

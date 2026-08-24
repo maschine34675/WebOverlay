@@ -664,6 +664,30 @@ internal static class Program
     }
 
     /// <summary>
+    /// The same pass, repeated the way frames repeat. A change in whether the
+    /// game holds the mouse only takes effect once the library has seen the
+    /// same answer for several frames in a row, so a single call cannot show
+    /// the result of one - in the game those frames go by in a tenth of a
+    /// second, here they have to be asked for.
+    /// </summary>
+    internal static void SettleClickThrough()
+    {
+        for (int i = 0; i < 12; i++)
+            UpdateClickThrough();
+    }
+
+    /// <summary>Whether the window currently lets the mouse through.</summary>
+    internal static bool IsClickThrough(IntPtr window)
+    {
+        const int GWL_EXSTYLE = -20;
+        const uint WS_EX_TRANSPARENT = 0x00000020;
+        return (GetWindowLongPtrP(window, GWL_EXSTYLE).ToInt64() & WS_EX_TRANSPARENT) != 0;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtrP(IntPtr window, int index);
+
+    /// <summary>
     /// Stands in for the game holding the mouse. There is no game here, so the
     /// probe answers the question the plugin normally answers from Unity.
     /// </summary>
