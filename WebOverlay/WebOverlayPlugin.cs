@@ -16,8 +16,19 @@ namespace WebOverlay
     [BepInPlugin(Branding.PluginGuid, Branding.PluginName, Branding.PluginVersion)]
     public class WebOverlayPlugin : BaseUnityPlugin
     {
+        /// <summary>
+        /// Off by default: it is a tool for answering one specific kind of
+        /// report - "the mouse stopped working while a panel was open" - which
+        /// cannot be told from correct behaviour without knowing which window
+        /// the OS has in front.
+        /// </summary>
+        internal static ConfigEntry<bool> DiagnoseCursor;
+
         private void Awake()
         {
+            DiagnoseCursor = Config.Bind("Diagnostics", "Log cursor state", false,
+                "Writes one line whenever the foreground window or the cursor state changes."
+                + " Only useful when reporting a problem with the mouse.");
             OverlayHost.LogInfo = this.Logger.LogInfo;
             OverlayHost.LogWarning = this.Logger.LogWarning;
             OverlayHost.GameWindow = findGameWindow();
@@ -100,6 +111,8 @@ namespace WebOverlay
             if (cursorReturnChecks > 0)
                 verifyCursorReturned();
 
+            reportCursorState();
+
             // Fallback, for a game that does not have that lever: set it
             // directly and keep setting it. This is the flickering path, but a
             // flickering cursor beats an unreachable window.
@@ -108,6 +121,40 @@ namespace WebOverlay
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
         }
+
+        /// <summary>
+        /// Says, once per change, who holds the foreground and what the cursor
+        /// looks like. Off unless the consumer turns it on, and it prints only
+        /// on a transition, so a session that behaves produces a handful of
+        /// lines.
+        ///
+        /// This exists because a report of "the mouse stops working while a
+        /// panel is open" cannot be told apart from its neighbours by reading
+        /// the code: the pointer being pinned to the middle of the screen is
+        /// what a correctly captured cursor looks like, and whether that is
+        /// wrong depends entirely on which window the OS thinks is in front.
+        /// Guessing at that from here has cost two wrong answers already.
+        /// </summary>
+        private void reportCursorState()
+        {
+            if (!DiagnoseCursor.Value)
+                return;
+            IntPtr foreground = OverlayHost.ForegroundWindow();
+            bool overlayInFront = foreground != IntPtr.Zero
+                && foreground != OverlayHost.GameWindow
+                && OverlayHost.ForegroundIsOverlay(foreground);
+            string state = (foreground == OverlayHost.GameWindow ? "game"
+                    : overlayInFront ? "overlay" : "other")
+                + " | visible=" + Cursor.visible
+                + " | lock=" + Cursor.lockState
+                + " | asked=" + askedGameForCursor;
+            if (state == lastCursorState)
+                return;
+            lastCursorState = state;
+            Logger.LogInfo("cursor: " + state);
+        }
+
+        private string lastCursorState;
 
         /// <summary>
         /// Checks, one frame after the cursor was given back, that the game

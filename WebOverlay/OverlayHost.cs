@@ -387,6 +387,26 @@ namespace WebOverlay
         /// the game is unfocused. Asked once per frame by the plugin, which
         /// owns the Unity side of that.
         /// </summary>
+        /// <summary>
+        /// Which window the OS says is in front, for a caller that wants to
+        /// report it. Zero when nothing is.
+        /// </summary>
+        internal static IntPtr ForegroundWindow() => GetForegroundWindow();
+
+        /// <summary>Whether the foreground window belongs to an overlay of ours.</summary>
+        internal static bool ForegroundIsOverlay(IntPtr foreground)
+        {
+            lock (windows)
+            {
+                foreach (OverlayWindow window in windows)
+                {
+                    if (window.WantsFreeCursor(foreground))
+                        return true;
+                }
+            }
+            return false;
+        }
+
         internal static bool WantsFreeCursor()
         {
             IntPtr foreground = GetForegroundWindow();
