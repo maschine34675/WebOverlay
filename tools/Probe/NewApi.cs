@@ -339,6 +339,20 @@ internal static partial class NewApi
         wait(() => echoes > 0, 5000);
         check("N3 sends still reach the page that is actually shown", echoes > 0, "echoes=" + echoes);
 
+        // The other way a navigation can be refused: the browser ACCEPTS the
+        // request and the library's own origin filter turns it down. A page is
+        // already showing and stays showing, so everything belonging to it has
+        // to stay - the same answer the browser's own refusal gets above.
+        int seen = echoes;
+        overlay.Navigate("file:///C:/Windows/win.ini");
+        Thread.Sleep(2500);
+        check("N4 a filter-refused retarget leaves the visible page as the target",
+            overlay.IsPageLoaded, "IsPageLoaded=" + overlay.IsPageLoaded);
+
+        overlay.Post("ping");
+        wait(() => echoes > seen, 5000);
+        check("N5 and sends still reach it", echoes > seen, "echoes=" + (echoes - seen));
+
         overlay.Dispose();
         finish();
     }
@@ -2060,7 +2074,54 @@ internal static partial class NewApi
             Program.IsClickThrough(window) != settled,
             "now " + (Program.IsClickThrough(window) ? "click-through" : "clickable"));
 
+        // The line written to say WHICH window is in front must recognise this
+        // one. It asked only for click-through, never for the cursor, and the
+        // check used to be "does it want the cursor" - so the one report meant
+        // to identify the window called it a stranger's.
+        Program.Focus(window);
+        check("T11 a panel that only asked for click-through is still known as ours",
+            Program.ForegroundIsOverlay(window), "recognised");
+
         overlay.Dispose();
+        Thread.Sleep(400);
+
+        // Opacity has to survive a click-through cycle. Turning the window
+        // layered is what makes the mouse pass through, and a layered window
+        // paints nothing until its attributes are set - so they get set, and
+        // setting them to fully opaque would quietly throw the fade away with
+        // no way to get it back: nothing rewrites the alpha after creation.
+        bool fadedLoaded = false, fadedFailed = false;
+        var faded = WebOverlays.Create("ClickThroughFadeProbe", new OverlayOptions
+        {
+            Width = 500,
+            Height = 400,
+            Opacity = 0.5,
+            ClickThroughWhenUnfocused = true,
+        });
+        if (faded == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        faded.Failed += () => fadedFailed = true;
+        faded.PageLoaded += () => fadedLoaded = true;
+        faded.LoadHtml("<!doctype html><html><body style='margin:0;background:#402020'></body></html>");
+        wait(() => fadedLoaded || fadedFailed, 25000);
+        IntPtr fadedWindow = Program.FindWindowByTitle("ClickThroughFadeProbe");
+        int asked = Program.LayeredAlpha(fadedWindow);
+
+        Program.SetCursorCaptured(true);
+        Program.Focus(backdrop);
+        Program.RaiseWithoutFocus(fadedWindow);
+        Program.SettleClickThrough();
+        int engaged = Program.LayeredAlpha(fadedWindow);
+        check("T12 a faded panel keeps its opacity while the mouse passes through",
+            engaged == asked && engaged > 0 && engaged < 255,
+            "asked for " + asked + ", drawn at " + engaged);
+
+        Program.SetCursorCaptured(false);
+        Program.SettleClickThrough();
+        check("T13 and still has it afterwards",
+            Program.LayeredAlpha(fadedWindow) == asked,
+            "drawn at " + Program.LayeredAlpha(fadedWindow));
+
+        faded.Dispose();
         Program.DestroyProbeWindow(backdrop);
         Thread.Sleep(300);
         finish();

@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-58 were added for v1.3.0 to v1.8.8
+and re-run unchanged for v1.4.0; rows 10-62 were added for v1.3.0 to v1.8.10
 (runtime 151.0.4129.93).
 
 The Result column says how the row is evidenced. `PASS` means the probe
@@ -71,6 +71,10 @@ row that claims more than the automation delivers is worse than no row.
 | 56 | Another window in front but the cursor free, as in a menu | nothing passes through: with no captured cursor there is nothing to hand over, so the panel stays a mouse target and is usable again on the next click | PASS |
 | 57 | Whether the game holds the mouse answered differently on every frame, as it is while a configuration menu and the game write the cursor in turn | the window's extended style is not touched at all: a contested answer keeps the last settled one rather than being acted on a hundred times a second | PASS |
 | 58 | The same answer held steady afterwards | it takes effect, so holding still is not the same as being stuck | PASS |
+| 59 | A page already showing, then a retarget the origin filter refuses | the visible page stays the target: `IsPageLoaded` stays true and sends still reach it, the same answer the browser's own refusal already got. Verified by putting the fault back - without the fix the row reports `IsPageLoaded=False` and the send vanishes | PASS |
+| 60 | A panel that asked for click-through and nothing else, in front | the library still knows it as one of ours; the line that names the foreground window used to ask what the window wanted rather than which window it was | PASS |
+| 61 | A panel with `Opacity = 0.5` while the mouse passes through it | it is still drawn at the alpha it asked for. Verified by putting the fault back - without the fix it is drawn at 255 | PASS |
+| 62 | The same panel once the mouse comes back | still at its own alpha; nothing rewrites it after creation, so a wrong value here would last the session | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):

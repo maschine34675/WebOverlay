@@ -396,11 +396,6 @@ namespace WebOverlay
         }
 
         /// <summary>
-        /// Whether any visible overlay asked for the cursor to be freed while
-        /// the game is unfocused. Asked once per frame by the plugin, which
-        /// owns the Unity side of that.
-        /// </summary>
-        /// <summary>
         /// Which window the OS says is in front, for a caller that wants to
         /// report it. Zero when nothing is.
         /// </summary>
@@ -425,14 +420,18 @@ namespace WebOverlay
             return text.Length == 0 ? "none" : text.ToString();
         }
 
-        /// <summary>Whether the foreground window belongs to an overlay of ours.</summary>
+        /// <summary>
+        /// Whether the foreground window belongs to an overlay of ours. A
+        /// handle comparison and nothing else: this answers "which window is
+        /// in front", so what that window asked for must not enter into it.
+        /// </summary>
         internal static bool ForegroundIsOverlay(IntPtr foreground)
         {
             lock (windows)
             {
                 foreach (OverlayWindow window in windows)
                 {
-                    if (window.WantsFreeCursor(foreground))
+                    if (window.Is(foreground))
                         return true;
                 }
             }
@@ -517,6 +516,11 @@ namespace WebOverlay
             }
         }
 
+        /// <summary>
+        /// Whether any visible overlay asked for the cursor to be freed while
+        /// the game is unfocused. Asked once per frame by the plugin, which
+        /// owns the Unity side of that.
+        /// </summary>
         internal static bool WantsFreeCursor()
         {
             IntPtr foreground = GetForegroundWindow();

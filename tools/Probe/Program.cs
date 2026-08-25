@@ -676,6 +676,34 @@ internal static class Program
             UpdateClickThrough();
     }
 
+    /// <summary>
+    /// What the library answers to "is the window in front one of mine". The
+    /// diagnostic line is built from this, and it used to ask whether the
+    /// window wanted the cursor - so a panel that had only asked for
+    /// click-through was reported as a stranger's window.
+    /// </summary>
+    internal static bool ForegroundIsOverlay(IntPtr foreground)
+    {
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        return (bool)host.GetMethod("ForegroundIsOverlay", BindingFlags.NonPublic | BindingFlags.Static)
+            .Invoke(null, new object[] { foreground });
+    }
+
+    /// <summary>The alpha the window is actually being drawn with, or -1 when it is not layered.</summary>
+    internal static int LayeredAlpha(IntPtr window)
+    {
+        uint key;
+        byte alpha;
+        uint flags;
+        if (!GetLayeredWindowAttributes(window, out key, out alpha, out flags))
+            return -1;
+        return alpha;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetLayeredWindowAttributes", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetLayeredWindowAttributes(IntPtr window, out uint colorKey, out byte alpha, out uint flags);
+
     /// <summary>Whether the window currently lets the mouse through.</summary>
     internal static bool IsClickThrough(IntPtr window)
     {

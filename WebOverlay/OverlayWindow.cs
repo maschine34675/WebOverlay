@@ -277,30 +277,11 @@ namespace WebOverlay
             ? OverlayTransparency.None
             : usesComposition ? OverlayTransparency.Composition : OverlayTransparency.ChromaKey;
 
-        /// <summary>
-        /// Read once per frame by the plugin. The question is whether this
-        /// overlay is the window in front - not whether Unity thinks it lost
-        /// focus, which is a different thing and, in a game that keeps the
-        /// cursor, not the one that decides.
-        /// </summary>
         /// <summary>Handle, title and the two conditions, for a diagnostic report.</summary>
         internal string Describe() =>
             window.ToString("X") + "(" + title + ",free=" + options.FreeCursorWhileShown
                 + ",shown=" + isVisible + ")";
 
-        /// <summary>
-        /// Whether this overlay wants the cursor handed back right now.
-        /// </summary>
-        /// <remarks>
-        /// Being the foreground window is the whole test: Windows does not
-        /// give the foreground to a hidden window, so "is it shown" adds
-        /// nothing - except a race it used to lose. Show() makes the window
-        /// visible and takes the foreground BEFORE it records that the overlay
-        /// is shown, so for the moment in between this said "not mine" about a
-        /// window sitting in front of the player. Asked once per frame, that
-        /// moment is easy to hit, and the cursor then stayed captured for as
-        /// long as the panel was up.
-        /// </remarks>
         // What was last applied, so the style is only touched on a change.
         private bool clickThroughApplied;
 
@@ -330,10 +311,12 @@ namespace WebOverlay
                 // Layered as well as transparent: measured on the composed HUD,
                 // hit-testing only skips a window when both are set. A layered
                 // window also needs its attributes set or it is not painted at
-                // all, so the alpha goes back to fully opaque immediately.
+                // all - but at the alpha the mod asked for. Writing 255 here
+                // would discard Opacity for the rest of the session, because
+                // nothing writes it again after the window is created.
                 style |= WS_EX_LAYERED | WS_EX_TRANSPARENT;
                 SetWindowLongPtr(window, GWL_EXSTYLE, new IntPtr(style));
-                SetLayeredWindowAttributes(window, 0, byte.MaxValue, LWA_ALPHA);
+                SetLayeredWindowAttributes(window, 0, opacityAsAlpha(), LWA_ALPHA);
                 return;
             }
             style &= ~WS_EX_TRANSPARENT;
@@ -344,8 +327,35 @@ namespace WebOverlay
             SetWindowLongPtr(window, GWL_EXSTYLE, new IntPtr(style));
         }
 
+        /// <summary>Whether this is the window the handle names.</summary>
+        /// <remarks>
+        /// Ownership only, with no opinion about what the window asked for.
+        /// The diagnostic used to ask <see cref="WantsFreeCursor"/> instead,
+        /// which also requires FreeCursorWhileShown - so a panel that had only
+        /// asked for click-through was reported as some other application's
+        /// window, in the one line written to identify it.
+        /// </remarks>
+        internal bool Is(IntPtr candidate) => window != IntPtr.Zero && window == candidate;
+
+        /// <summary>
+        /// Whether this overlay wants the cursor handed back right now. Read
+        /// once per frame by the plugin: the question is whether this overlay
+        /// is the window in front - not whether Unity thinks it lost focus,
+        /// which is a different thing and, in a game that keeps the cursor,
+        /// not the one that decides.
+        /// </summary>
+        /// <remarks>
+        /// Being the foreground window is the whole test: Windows does not
+        /// give the foreground to a hidden window, so "is it shown" adds
+        /// nothing - except a race it used to lose. Show() makes the window
+        /// visible and takes the foreground BEFORE it records that the overlay
+        /// is shown, so for the moment in between this said "not mine" about a
+        /// window sitting in front of the player. Asked once per frame, that
+        /// moment is easy to hit, and the cursor then stayed captured for as
+        /// long as the panel was up.
+        /// </remarks>
         internal bool WantsFreeCursor(IntPtr foreground) =>
-            options.FreeCursorWhileShown && window != IntPtr.Zero && window == foreground;
+            options.FreeCursorWhileShown && Is(foreground);
 
         public OverlayFailure Failure { get; private set; } = OverlayFailure.Unknown;
 
@@ -1172,10 +1182,21 @@ namespace WebOverlay
                     // document changed, so nothing owed to the page showing is
                     // stale.
                     awaitingNavigationStart = false;
-                    // Nothing was left behind, so nothing of the page still on
-                    // screen is thrown away.
                     forgetOnNavigationStart = false;
-                    forgetTarget();
+                    // The page on screen is staying, so what belongs to it has
+                    // to stay too - the same answer the browser's own refusal
+                    // gets. Forgetting the target here would say "no page" of a
+                    // window that is showing one: IsPageLoaded false, sends
+                    // buffered into nothing, and the next LoadHtml counted as a
+                    // first page rather than a retarget, so that buffer would
+                    // then run into it. Only a first navigation has nothing to
+                    // come back to.
+                    TargetState? before = targetBeforeNavigation;
+                    targetBeforeNavigation = null;
+                    if (before.HasValue && before.Value.HandedOver)
+                        restoreTarget(before.Value);
+                    else
+                        forgetTarget();
                 }
                 return WebView2Api.S_OK;
             }
@@ -1191,6 +1212,9 @@ namespace WebOverlay
                 // call, because only this event says the browser really took
                 // it - and only for a navigation the filter above allowed.
                 awaitingNavigationStart = false;
+                // Past the point of return: the old page is being left, so
+                // there is nothing to restore it to any more.
+                targetBeforeNavigation = null;
                 // A new top-level document supersedes the one that asked any
                 // question still in flight; see the generation check below.
                 documentGeneration++;
@@ -1365,6 +1389,7 @@ namespace WebOverlay
                 return;
             }
             targetHandedToBrowser = true;
+            targetBeforeNavigation = previous;
             // Not yet: the browser has taken the request, but the filter below
             // can still refuse it - and then this page stays on screen with
             // the state that belongs to it. What is buffered and remembered is
@@ -1413,6 +1438,17 @@ namespace WebOverlay
             public bool PageLoaded;
             public bool HandedOver;
         }
+
+        /// <summary>
+        /// What the overlay was pointed at before the navigation now in
+        /// flight. The origin filter can refuse that navigation AFTER the
+        /// browser accepted the request, and then the page already on screen
+        /// stays there - so its state has to come back, exactly as it does
+        /// when the browser refuses the request outright. Null when nothing is
+        /// in flight, or when the refused navigation was the first one and
+        /// there is nothing to come back to.
+        /// </summary>
+        private TargetState? targetBeforeNavigation;
 
         private TargetState captureTarget() => new TargetState
         {
@@ -1471,6 +1507,7 @@ namespace WebOverlay
                 return;
             }
             targetHandedToBrowser = true;
+            targetBeforeNavigation = previous;
             forgetOnNavigationStart = retargeting;
         }
 

@@ -14,6 +14,42 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.10]
+
+### Forge version notes
+
+- Fixed: a half-transparent panel turned solid the first time the mouse was
+  handed back to the game, and stayed solid.
+
+### Fixed
+
+- `ClickThroughWhenUnfocused` discarded `Opacity`. Letting the mouse through
+  means making the window layered, and a layered window paints nothing until
+  its attributes are set - so they were set, to fully opaque. Nothing writes
+  the alpha again after the window is created, so the fade was gone for the
+  session. It now writes the alpha the mod asked for.
+
+- A navigation the origin filter refused threw away the target of the page
+  that was still on screen. The browser accepts the request and only the
+  filter turns it down, so the old document stays - but the overlay then
+  reported `IsPageLoaded` false about a window that was showing a page,
+  buffered every send into nothing, and counted the next `LoadHtml` as a first
+  page rather than a retarget, which let that buffer run into it. It now
+  restores the previous target, exactly as it already did when the browser
+  refused the request outright. A first navigation still has nothing to come
+  back to and still forgets.
+
+- The diagnostic line that names the foreground window asked whether that
+  window wanted the cursor, not whether it was one of ours. A panel that had
+  only asked for click-through was reported as some other application's
+  window - in the one line written to identify it.
+
+### Notes
+
+- Rows 59-62. Both fixes were checked by putting the fault back: without them
+  row 59 reports `IsPageLoaded=False` with sends vanishing, and rows 61-62
+  report alpha 255 for a panel that asked for 128 and never get it back.
+
 ## [1.8.9]
 
 ### Forge version notes
