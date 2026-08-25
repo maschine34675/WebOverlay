@@ -26,9 +26,20 @@ namespace WebOverlay
 
         private void Awake()
         {
+            // Behind Advanced: this answers one kind of bug report and is of no
+            // use to a player, and the section is the only thing this library
+            // puts in the settings menu - so an ordinary player now sees
+            // nothing from it, which is the correct amount for a library.
             DiagnoseCursor = Config.Bind("Diagnostics", "Log cursor state", false,
-                "Writes one line whenever the foreground window or the cursor state changes."
-                + " Only useful when reporting a problem with the mouse.");
+                new ConfigDescription(
+                    "Writes one line whenever the foreground window or the cursor state changes."
+                    + " Only useful when reporting a problem with the mouse.",
+                    null,
+                    new ConfigurationManagerAttributes
+                    {
+                        DispName = "Log cursor state",
+                        IsAdvanced = true,
+                    }));
             OverlayHost.Diagnose = DiagnoseCursor.Value;
             DiagnoseCursor.SettingChanged += (_, __) => OverlayHost.Diagnose = DiagnoseCursor.Value;
             OverlayHost.LogInfo = this.Logger.LogInfo;

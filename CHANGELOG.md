@@ -14,6 +14,26 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.8.9]
+
+### Forge version notes
+
+- The one setting this library shows is now behind the settings menu's Advanced
+  switch, where a diagnostic belongs. Players see nothing from it.
+
+### Changed
+
+- `Diagnostics / Log cursor state` is marked advanced. It answers one kind of
+  bug report - "the mouse stopped working while a panel was open" - and is of
+  no use to anyone not writing that report. It is also the only setting this
+  library binds, so an ordinary player's settings menu now shows nothing from
+  it at all, which is the right amount for a library that consumers install on
+  a player's behalf.
+
+  It stays rather than being removed: this release series exists because that
+  bug could not be told apart from correct behaviour without knowing which
+  window the system had in front, and the switch is what answered it.
+
 ## [1.8.8]
 
 ### Forge version notes
