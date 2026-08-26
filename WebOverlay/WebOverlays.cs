@@ -96,7 +96,10 @@ namespace WebOverlay
             // must not be able to retarget a live overlay's folder mapping.
             var result = new VirtualHost[hosts.Length];
             for (int i = 0; i < hosts.Length; i++)
-                result[i] = hosts[i] == null ? null : new VirtualHost(hosts[i].Host, hosts[i].Folder);
+                result[i] = hosts[i] == null ? null : new VirtualHost(hosts[i].Host, hosts[i].Folder)
+                {
+                    Access = hosts[i].Access,
+                };
             return result;
         }
     }
@@ -302,12 +305,73 @@ namespace WebOverlay
 
         /// <summary>Absolute path to the folder served under that host.</summary>
         public string Folder { get; set; }
+
+        /// <summary>
+        /// How much of this folder other origins in the same overlay may read.
+        /// The default is what every mapping has always had.
+        /// </summary>
+        /// <remarks>
+        /// This is a property of the host being READ, not of a pair of hosts:
+        /// it belongs on the host the assets come from. A page on host A that
+        /// wants web fonts from host B has to loosen B.
+        ///
+        /// An inline <c>LoadHtml</c> page has an opaque origin and is
+        /// therefore cross-origin to EVERY mapped host, including its only
+        /// one - so a single host is not protection from this.
+        /// </remarks>
+        public HostAccess Access { get; set; } = HostAccess.DenyCors;
+    }
+
+    /// <summary>
+    /// What other origins may read from a virtual host. The names follow
+    /// WebView2's own COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND, whose table is:
+    ///
+    /// <list type="bullet">
+    /// <item><description><c>Deny</c> - nothing cross-origin at all, not even an
+    /// <c>img</c> or <c>script</c> source.</description></item>
+    /// <item><description><c>DenyCors</c> - ordinary sub-resource loads pass;
+    /// anything CORS-checked (fetch, XHR, and web fonts, which are fetched in
+    /// CORS mode by specification) is refused.</description></item>
+    /// <item><description><c>Allow</c> - everything, CORS-checked included.
+    /// </description></item>
+    /// </list>
+    /// </summary>
+    public enum HostAccess
+    {
+        /// <summary>The default, and what every mapping had before this existed.</summary>
+        DenyCors = 0,
+
+        /// <summary>Nothing cross-origin. Strictest, and it can break a page's own assets.</summary>
+        Deny,
+
+        /// <summary>
+        /// Everything, CORS-checked included. Say this when a page on one of
+        /// your hosts needs web fonts or fetch from another of them.
+        /// </summary>
+        /// <remarks>
+        /// It is not free: this is the equivalent of the folder answering
+        /// "Access-Control-Allow-Origin: *", to every origin in the overlay -
+        /// including any remote origin the mod put in
+        /// <see cref="OverlayOptions.AllowedOrigins"/>. Map a folder that holds
+        /// only what the page may read, not a whole plugin directory.
+        /// </remarks>
+        Allow,
     }
 
     /// <summary>How an overlay window should look and behave.</summary>
     public sealed class OverlayOptions
     {
         /// <summary>Width in pixels; 0 means 80% of the game's window.</summary>
+        /// <remarks>
+        /// Leaving both at 0 puts the window over the middle of the picture,
+        /// and in a first-person game that is the exact point the mouse is
+        /// read from while the player turns - Windows delivers the movement to
+        /// whatever window is under the pointer, whoever has the foreground.
+        /// A panel there stops the player turning, with nothing anywhere
+        /// reporting an error, because nothing is in error. See
+        /// <see cref="ClickThroughWhenUnfocused"/>, or simply give the window
+        /// a size and a place of its own.
+        /// </remarks>
         public int Width { get; set; }
 
         /// <summary>Height in pixels; 0 means 85% of the game's window.</summary>

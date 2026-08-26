@@ -14,6 +14,74 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.9.0]
+
+### Forge version notes
+
+- Mods can now serve their page and their fonts from separate folders, instead
+  of mapping a whole plugin directory to keep the fonts working.
+- A new setting reports what a mod's page says went wrong inside itself - a
+  script error, or a font that would not load. Off by default, behind Advanced.
+
+### Added
+
+- `VirtualHost.Access`, taking `HostAccess.DenyCors` (the default, and what
+  every mapping has always had), `Deny` or `Allow`.
+
+  Web fonts are fetched in CORS mode by specification, so under the default a
+  `@font-face` on a second host of your own is refused - the page renders in a
+  fallback and nothing says so. The only way out was one host for everything,
+  which for one consumer meant mapping its whole plugin folder, DLL and user
+  JSON included. Its own review flagged that and it could not be fixed.
+
+  It is an enum rather than a flag because there are three kinds and the
+  stricter one has been asked for too. `Allow` is not free: it is the folder
+  answering `Access-Control-Allow-Origin: *` to every origin in the overlay,
+  including any remote origin in `AllowedOrigins`, so it wants a folder holding
+  only what the page may read.
+
+- `Diagnostics / Log page problems` - a script error, an unhandled rejection, a
+  console error or a font that would not load, reported from inside the page and
+  written to the log, rate-limited, with the window named. Off by default and
+  behind Advanced, like its neighbour. The hooks are part of the script a
+  window is created with, so switching it on reaches windows opened afterwards -
+  not one already on screen, and not merely its next page.
+
+  Nothing inside a document reached the log before this. `Failed` and
+  `FailureMessage` describe the window; the page could be rendering in the wrong
+  font, having thrown on every frame, and the only report was a player saying it
+  looked wrong.
+
+### Changed
+
+- The README states the channel ordering guarantee, which was never written
+  down: sends are ordered across channels and not merely within one, because
+  every one of them goes through a single queue. `Retain` replays first,
+  `LatestOnly` keeps the position of the message it replaces.
+- The default window geometry is documented where someone deciding not to set a
+  size will read it - on `Width` and `Height` themselves. 80% by 85%, centred,
+  is exactly where a first-person game reads the mouse, and it cost the
+  1.8.6-1.8.8 series to find.
+- `docs/SOFT-DEPENDENCY.md` names the straddle body that three consumers had
+  each arrived at independently, extends its version table to patch granularity,
+  and says which versions were never released. It also states the half of the
+  rule that is easier to miss: a version gate answers whether a member
+  *behaves*, not whether it exists - `ClickThroughWhenUnfocused` existed two
+  releases before it worked.
+- `tools/Audit-SoftDependency.ps1` ships here now rather than in a consumer. It
+  is the build-time check for the rule above, and it gained the missing half:
+  a gate body that may be inlined carries its library references into a caller
+  that is not the gate, so it must be `NoInlining` - proven by removing the
+  attribute from a real consumer and watching the audit fail.
+
+### Notes
+
+- Rows 63 to 71. Two of them settle questions this repository had been carrying
+  as comments: that the ordering guarantee is what the README now claims, and
+  that `DENY_CORS` rather than `DENY` is the right default, because an inline
+  page really cannot reach a `Deny` folder. Row 70 is the original bug, now one
+  log line.
+
 ## [1.8.10]
 
 ### Forge version notes

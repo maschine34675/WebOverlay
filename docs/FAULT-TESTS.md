@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-62 were added for v1.3.0 to v1.8.10
+and re-run unchanged for v1.4.0; rows 10-71 were added for v1.3.0 to v1.9.0
 (runtime 151.0.4129.93).
 
 The Result column says how the row is evidenced. `PASS` means the probe
@@ -75,6 +75,16 @@ row that claims more than the automation delivers is worse than no row.
 | 60 | A panel that asked for click-through and nothing else, in front | the library still knows it as one of ours; the line that names the foreground window used to ask what the window wanted rather than which window it was | PASS |
 | 61 | A panel with `Opacity = 0.5` while the mouse passes through it | it is still drawn at the alpha it asked for. Verified by putting the fault back - without the fix it is drawn at 255 | PASS |
 | 62 | The same panel once the mouse comes back | still at its own alpha; nothing rewrites it after creation, so a wrong value here would last the session | PASS |
+| 63 | Two channels interleaved, a latest-only channel written twice and a retained value, all posted before the page exists | the page sees `r1,a1,b1,l2,a2` - retained first, then the queue in the order it was filled, with the latest-only payload at the position of the first one that was waiting. Order holds ACROSS channels, which is what the README now promises | PASS |
+| 64 | A page on one mapped host reading a second mapped host set to `DenyCors` | the CORS-checked read is refused and the ordinary sub-resource still loads - which is why a `@font-face` on a second host fails while an `img` from it works | PASS |
+| 65 | The same with `Allow` | both pass | PASS |
+| 66 | The same with `Deny` | both refused, including the ordinary sub-resource | PASS |
+| 67 | An inline `LoadHtml` page - opaque origin - against a mapped folder | it cannot read a `Deny` folder and can read a `DenyCors` one. This is the measurement behind the default: `DenyCors` rather than `Deny` was a comment for eight releases, and it is correct | PASS |
+| 67b | The same inline page's CORS-checked read of its ONLY mapped host, and then of one set to `Allow` | refused, then allowed. An opaque origin is cross-origin to every mapped host including its own, so having a single host is no protection from the web-font problem - the documentation said the opposite until this row was written | PASS |
+| 68 | A page that throws, rejects and logs errors, with page diagnostics off | nothing is written. The switch is the whole contract | PASS |
+| 69 | The same page with the switch on | the console error, the thrown error and the unhandled rejection each get a line, with the window named | PASS |
+| 70 | A `@font-face` pointing at a host that refuses CORS-checked reads | `fonts failed to load: ProbeFont`. This is the bug the entry was written from: before it, the page rendered in a fallback face and nothing anywhere said so | PASS |
+| 71 | A page reporting forty times in one burst | four lines and a notice that further reports are held back, written the moment the limit is passed rather than left for whoever speaks next - an instrument that floods the log is not one anybody reads, and a burst that stops must not take its own count with it | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):

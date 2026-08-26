@@ -24,6 +24,12 @@ namespace WebOverlay
         /// </summary>
         internal static ConfigEntry<bool> DiagnoseCursor;
 
+        /// <summary>
+        /// Off by default like its neighbour, and for the same reason: it
+        /// answers a bug report and is of no use to a player.
+        /// </summary>
+        internal static ConfigEntry<bool> DiagnosePage;
+
         private void Awake()
         {
             // Behind Advanced: this answers one kind of bug report and is of no
@@ -42,6 +48,31 @@ namespace WebOverlay
                     }));
             OverlayHost.Diagnose = DiagnoseCursor.Value;
             DiagnoseCursor.SettingChanged += (_, __) => OverlayHost.Diagnose = DiagnoseCursor.Value;
+
+            // A second question, and a different one: not what the window is
+            // doing, but what the page says went wrong inside it. Nothing
+            // reaches the log from in there otherwise - a refused font renders
+            // as a silent fallback, and a player's report says "it looks
+            // wrong" and nothing more.
+            DiagnosePage = Config.Bind("Diagnostics", "Log page problems", false,
+                new ConfigDescription(
+                    "Writes a line when a mod's page reports a script error, a rejected promise,"
+                    + " a console error or a font that would not load. Takes effect for windows"
+                    + " opened after it is switched on - not for one already on screen."
+                    + " Only useful when reporting a problem"
+                    + " with how a mod's window looks.",
+                    null,
+                    new ConfigurationManagerAttributes
+                    {
+                        DispName = "Log page problems",
+                        IsAdvanced = true,
+                    }));
+            OverlayHost.DiagnosePage = DiagnosePage.Value;
+            DiagnosePage.SettingChanged += (_, __) =>
+            {
+                OverlayHost.DiagnosePage = DiagnosePage.Value;
+                OverlayHost.ResetPageDiagnostics();
+            };
             OverlayHost.LogInfo = this.Logger.LogInfo;
             OverlayHost.LogWarning = this.Logger.LogWarning;
             OverlayHost.GameWindow = findGameWindow();
@@ -333,6 +364,7 @@ namespace WebOverlay
             OverlayHost.MainThreadPumpAvailable = false;
             OverlayHost.DisplayModeProbe = null;
             OverlayHost.CursorCapturedProbe = null;
+            OverlayHost.DiagnosePage = false;
             OverlayHost.Shutdown();
         }
 

@@ -75,12 +75,72 @@ namespace WebOverlay
         /// up but the library thinks it is hidden". Set from the plugin's
         /// Diagnostics switch; costs nothing while off.
         /// </summary>
-        internal static bool Diagnose;
+        internal static volatile bool Diagnose;
 
         internal static void LogDiagnostic(string line)
         {
             if (Diagnose)
                 LogInfo(line);
+        }
+
+        /// <summary>
+        /// Whether pages should report their own problems. Read once per
+        /// OVERLAY, when its shim is registered - the browser replays that one
+        /// script for every document afterwards, so an overlay that already
+        /// exists keeps whatever it was created with, reload or not.
+        /// </summary>
+        internal static volatile bool DiagnosePage;
+
+        private static readonly System.Diagnostics.Stopwatch pageDiagnosticClock =
+            System.Diagnostics.Stopwatch.StartNew();
+        private static long pageDiagnosticWindowStart;
+        private static int pageDiagnosticsInWindow;
+
+        /// <summary>
+        /// One line for something the page said went wrong. Rate-limited on
+        /// purpose: a page can throw once per frame, and an instrument that
+        /// floods the log is not one anybody reads.
+        /// </summary>
+        /// <remarks>
+        /// The notice that reports are being held back is written the moment
+        /// the limit is passed, not when the next one happens to arrive after
+        /// the window expires - a burst that stops would otherwise leave its
+        /// own count unreported forever, and the count would be attributed to
+        /// whichever window spoke next. The budget is shared by every overlay,
+        /// which is deliberate: what is being protected is one log.
+        /// </remarks>
+        internal static void LogPageDiagnostic(string title, string text)
+        {
+            if (!DiagnosePage || text == null)
+                return;
+            const int PerWindow = 5;
+            const int Longest = 500;
+            long now = pageDiagnosticClock.ElapsedMilliseconds;
+            if (now - pageDiagnosticWindowStart >= 5000)
+            {
+                pageDiagnosticWindowStart = now;
+                pageDiagnosticsInWindow = 0;
+            }
+            pageDiagnosticsInWindow++;
+            if (pageDiagnosticsInWindow < PerWindow)
+            {
+                // The page caps its own text, but the channel is reachable by
+                // any script on the page, so the cap that matters is this one.
+                LogInfo("page (" + title + "): "
+                    + (text.Length > Longest ? text.Substring(0, Longest) + "..." : text));
+            }
+            else if (pageDiagnosticsInWindow == PerWindow)
+            {
+                LogInfo("page (" + title + "): reporting a lot; further reports are held back"
+                    + " for a few seconds.");
+            }
+        }
+
+        /// <summary>Forgets the rate-limit budget, so a fresh session starts quiet.</summary>
+        internal static void ResetPageDiagnostics()
+        {
+            pageDiagnosticWindowStart = pageDiagnosticClock.ElapsedMilliseconds;
+            pageDiagnosticsInWindow = 0;
         }
 
         internal static Action<string> LogInfo = _ => { };

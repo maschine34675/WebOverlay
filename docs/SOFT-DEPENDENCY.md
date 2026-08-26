@@ -141,6 +141,58 @@ Set `MinimumVersion` from the newest member you actually use:
 | 1.6.0 | `Post(channel, payload)`, `Request`/`OnRequest`, `SetShape`, `SetBounds` |
 | 1.7.0 | `OnRequest` with a deferred `reply`, `IWebOverlay.Transparency`, `InjectTheme`, `FreeCursorWhileShown`, `WebOverlayPlugin.VirtualKey` / `CloseKeysFor` |
 | 1.8.0 | `PostOptions.Retain` / `LatestOnly`, `OverlayOptions.Dispatch`, `PumpEvents()` |
+| 1.8.5 | `FreeCursorWhileShown` on a panel shown and focused in one call - it existed from 1.7.0 but did not fire for that case, which is how a panel normally opens |
+| 1.8.8 | `OverlayOptions.ClickThroughWhenUnfocused` - the member exists from 1.8.6, but 1.8.6 engaged it whenever the panel was not in front, leaving it unclickable in menus too |
+| 1.9.0 | `VirtualHost.Access` / `HostAccess` |
+
+1.8.4 through 1.8.7 were never released; the first build a player can install
+that has any of the 1.8.4-1.8.7 work is **1.8.8**. Gate on that rather than on
+the version a member first appeared in - which is the second half of the rule,
+and the more easily missed one:
+
+> **A version gate answers whether a member behaves, not whether it exists.**
+
+`ClickThroughWhenUnfocused` is the worked example. Asking only "is the property
+there" would have said yes on 1.8.6 and handed the player a panel that could
+not be clicked. That is also why an "apply this option if the library knows the
+name" helper would not replace the comparison: the name existed two releases
+before the behaviour did.
+
+### The straddle body
+
+When an option is newer than your floor, do not raise the floor - put that one
+assignment in a body of its own that nothing calls below the version it needs:
+
+```csharp
+private static readonly Version ClickThroughSince = new Version(1, 8, 8);
+
+// In the gate's own creation path, which is already behind IsUsable:
+var options = new WebOverlay.OverlayOptions { /* things your floor has */ };
+if (FoundVersion >= ClickThroughSince)
+    letTheMouseThrough(options);
+
+/// <summary>Set from a body nothing calls below 1.8.8.</summary>
+[MethodImpl(MethodImplOptions.NoInlining)]
+private static void letTheMouseThrough(object options)
+{
+    // object, NOT OverlayOptions: a parameter type is part of the SIGNATURE
+    // and is resolved when something reflects over this type's methods, not
+    // when the method is called. A library type there defeats the whole point
+    // of the separate body. The cast lives in the body, resolved lazily.
+    ((WebOverlay.OverlayOptions)options).ClickThroughWhenUnfocused = true;
+}
+```
+
+Three consumers arrived at exactly these ten lines independently, and one of
+them arrived at the typed-parameter version first and had it rejected by the
+build check below. Two things about the shape are worth stating plainly:
+
+- **It costs one body per version tier, not one per option.** Five options
+  arriving in the same release share one body.
+- **What it buys is that an older library loses one feature rather than the
+  window.** Raise the floor instead when your fallback is cheap - a built-in
+  overlay, say. Use the straddle body when your fallback is expensive, such as
+  sending the player to an external browser.
 
 The page-side shim comes from the installed library, not from your files, so
 `overlay.on(..., { latest: true })` and `overlay.setShape` follow the same
@@ -160,11 +212,24 @@ With it, load order is settled and the flag keeps the dependency optional.
 ## 5. Check it at build time
 
 The rules above are mechanical, so let the build enforce them rather than a
-reviewer. A short Mono.Cecil pass over your compiled plugin: **no field, base
-type, interface, generic argument or method signature anywhere in the assembly
-may reference `Anvil-WebOverlay`** - method bodies may, and only inside the
-gate class. Every violation this finds is a real one; there are no acceptable
-exceptions, which is what makes it worth automating.
+reviewer. `tools/Audit-SoftDependency.ps1` in this repository is that check: a
+Mono.Cecil pass over your compiled plugin that fails the build on **any field,
+base type, interface, generic argument, return type or parameter that names a
+type from `Anvil-WebOverlay`** - method bodies may, and only inside the gate
+class - and on any gate body that touches the library without being
+`NoInlining`, since an inlined body carries its references into a caller that
+is not the gate.
+
+```xml
+<Target Name="AuditSoftDependency" AfterTargets="Build">
+  <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(WebOverlayRepo)/tools/Audit-SoftDependency.ps1&quot; -AssemblyPath &quot;$(TargetPath)&quot; -GateType YourMod.UI.WebOverlayGate" />
+</Target>
+```
+
+Every violation it finds is a real one; there are no acceptable exceptions,
+which is what makes it worth automating. It caught the typed parameter in the
+straddle body above, in this library's own consumer, after review had passed
+it.
 
 ## While you are here: two related traps
 

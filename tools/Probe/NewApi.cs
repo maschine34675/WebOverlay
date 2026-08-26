@@ -2127,6 +2127,317 @@ internal static partial class NewApi
         finish();
     }
 
+
+    /// <summary>
+    /// What each host access kind actually permits, measured rather than read
+    /// off a table. Two mapped hosts: the page lives on one, the assets on the
+    /// other, so every load is cross-origin - which is the case a consumer
+    /// meets the moment it splits its page from its fonts.
+    ///
+    /// The second half asks the question the library's own default rests on:
+    /// an inline LoadHtml page has an opaque origin, so is it cross-origin to
+    /// its own mapped folder? That reasoning has been a comment since the
+    /// mapping was written and was never measured.
+    /// </summary>
+    internal static void VirtualHostCors(string scratch)
+    {
+        string root = Path.Combine(scratch ?? Path.GetTempPath(), "vhost-cors-probe");
+        string pageDir = Path.Combine(root, "page");
+        string assetDir = Path.Combine(root, "assets");
+        Directory.CreateDirectory(pageDir);
+        Directory.CreateDirectory(assetDir);
+        File.WriteAllText(Path.Combine(assetDir, "data.txt"), "forty-two");
+        // A 1x1 GIF is the smallest thing that is a real image decode.
+        File.WriteAllBytes(Path.Combine(assetDir, "dot.gif"), Convert.FromBase64String(
+            "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"));
+
+        // fetch is CORS-checked; an img element is not. That is the whole
+        // distinction the three kinds are about, so the page reports both.
+        const string body =
+            "<!doctype html><html><body style='margin:0;background:#102010'><script>\n"
+            + "var out = [];\n"
+            + "function done() { window.chrome.webview.postMessage('cors:' + out.join(' | ')); }\n"
+            + "var img = new Image();\n"
+            + "img.onload = function () { out.push('img=loaded'); step(); };\n"
+            + "img.onerror = function () { out.push('img=refused'); step(); };\n"
+            + "var pending = 2;\n"
+            + "function step() { if (--pending === 0) done(); }\n"
+            + "fetch(ASSETS + '/data.txt').then(function (r) { return r.text(); })\n"
+            + "  .then(function (t) { out.push('fetch=' + t); step(); })\n"
+            + "  .catch(function (e) { out.push('fetch=refused'); step(); });\n"
+            + "img.src = ASSETS + '/dot.gif';\n"
+            + "</script></body></html>";
+
+        foreach (HostAccess access in new[] { HostAccess.DenyCors, HostAccess.Allow, HostAccess.Deny })
+        {
+            File.WriteAllText(Path.Combine(pageDir, "index.html"),
+                body.Replace("ASSETS", "'https://cors.assets'"));
+
+            string answer = null;
+            bool failed = false;
+            var overlay = WebOverlays.Create("VirtualHostCorsProbe", new OverlayOptions
+            {
+                Width = 480,
+                Height = 360,
+                VirtualHosts = new[]
+                {
+                    new VirtualHost("cors.page", pageDir),
+                    new VirtualHost("cors.assets", assetDir) { Access = access },
+                },
+            });
+            if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+            overlay.Failed += () => failed = true;
+            overlay.MessageReceived += m => { if (m.StartsWith("cors:")) answer = m.Substring(5); };
+            overlay.Navigate("https://cors.page/index.html");
+            wait(() => answer != null || failed, 25000);
+            Console.WriteLine("  " + access + " -> " + (answer ?? ("no answer, failed=" + failed)));
+
+            bool fetchAllowed = answer != null && answer.Contains("fetch=forty-two");
+            bool imgAllowed = answer != null && answer.Contains("img=loaded");
+
+            switch (access)
+            {
+                case HostAccess.DenyCors:
+                    check("X1 DenyCors refuses a CORS-checked read", answer != null && !fetchAllowed, answer ?? "-");
+                    check("X2 DenyCors still allows an ordinary sub-resource", imgAllowed, answer ?? "-");
+                    break;
+                case HostAccess.Allow:
+                    check("X3 Allow permits the CORS-checked read", fetchAllowed, answer ?? "-");
+                    check("X4 Allow permits the sub-resource too", imgAllowed, answer ?? "-");
+                    break;
+                case HostAccess.Deny:
+                    check("X5 Deny refuses the CORS-checked read", answer != null && !fetchAllowed, answer ?? "-");
+                    check("X6 Deny refuses the ordinary sub-resource as well", answer != null && !imgAllowed, answer ?? "-");
+                    break;
+            }
+            overlay.Dispose();
+            Thread.Sleep(600);
+        }
+
+        // The default's justification: a LoadHtml document has an opaque
+        // origin, so under Deny it should not reach its own mapped folder -
+        // which is why the library serves DenyCors instead. If this comes back
+        // "loaded", the reasoning behind that default is wrong.
+        foreach (HostAccess access in new[] { HostAccess.Deny, HostAccess.DenyCors, HostAccess.Allow })
+        {
+            string answer = null;
+            bool failed = false;
+            var overlay = WebOverlays.Create("VirtualHostCorsInlineProbe", new OverlayOptions
+            {
+                Width = 480,
+                Height = 360,
+                VirtualHosts = new[] { new VirtualHost("cors.assets", assetDir) { Access = access } },
+            });
+            if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+            overlay.Failed += () => failed = true;
+            overlay.MessageReceived += m => { if (m.StartsWith("cors:")) answer = m.Substring(5); };
+            overlay.LoadHtml(body.Replace("ASSETS", "'https://cors.assets'"));
+            wait(() => answer != null || failed, 25000);
+            Console.WriteLine("  inline page, assets " + access + " -> " + (answer ?? ("no answer, failed=" + failed)));
+
+            bool imgAllowed = answer != null && answer.Contains("img=loaded");
+            bool fetched = answer != null && answer.Contains("fetch=forty-two");
+            if (access == HostAccess.Deny)
+                check("X7 an inline page cannot reach a Deny folder - the reason the default is not Deny",
+                    answer != null && !imgAllowed, answer ?? "-");
+            else if (access == HostAccess.DenyCors)
+            {
+                check("X8 and it can reach a DenyCors folder, which is why that is the default",
+                    imgAllowed, answer ?? "-");
+                // The half that catches people out: an inline page has an
+                // opaque origin, so it is cross-origin to its OWN only host.
+                // Having one host is not protection from the font problem.
+                check("X9 but a CORS-checked read is still refused, even from its only host",
+                    answer != null && !fetched, answer ?? "-");
+            }
+            else
+                check("X10 an inline page CAN read a host set to Allow - the fix the README gives",
+                    fetched && imgAllowed, answer ?? "-");
+            overlay.Dispose();
+            Thread.Sleep(600);
+        }
+
+        finish();
+    }
+
+
+    /// <summary>
+    /// The order the page sees, which the README now promises. Every send goes
+    /// through one queue rather than one per channel, so the promise is across
+    /// channels - and that is worth measuring rather than asserting, because a
+    /// documented guarantee is a promise a consumer will build on.
+    ///
+    /// Everything here is posted BEFORE the page can receive anything, so it
+    /// all goes through the outbox: the hardest case, and the one where a
+    /// per-channel queue would show up immediately.
+    /// </summary>
+    internal static void Ordering()
+    {
+        bool failed = false;
+        string seen = null;
+        var overlay = WebOverlays.Create("OrderingProbe", new OverlayOptions { Width = 420, Height = 320 });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.Failed += () => failed = true;
+        overlay.MessageReceived += m => { if (m.StartsWith("order:")) seen = m.Substring(6); };
+
+        // Posted before LoadHtml, so the page does not exist yet and every one
+        // of these waits. Two ordinary channels interleaved, one latest-only
+        // channel written twice, and one retained value.
+        overlay.Post("a", "a1");
+        overlay.Post("b", "b1");
+        overlay.Post("l", "l1", PostOptions.LatestOnly);
+        overlay.Post("a", "a2");
+        overlay.Post("l", "l2", PostOptions.LatestOnly);
+        overlay.Post("r", "r1", PostOptions.Retain);
+
+        overlay.LoadHtml(
+            "<!doctype html><html><body style='margin:0;background:#201020'><script>\n"
+            + "var seq = [];\n"
+            + "['a','b','l','r'].forEach(function (c) {\n"
+            + "  overlay.on(c, function (v) { seq.push(v); });\n"
+            + "});\n"
+            + "setTimeout(function () { window.chrome.webview.postMessage('order:' + seq.join(',')); }, 1500);\n"
+            + "</script></body></html>");
+
+        wait(() => seen != null || failed, 25000);
+        Console.WriteLine("page saw: " + (seen ?? "-"));
+
+        // Retained replays first, then the outbox in the order it was filled.
+        // l2 sits where l1 was: latest-only replaces the waiting entry in
+        // place, so the newest payload arrives at the oldest one's position -
+        // before a2, which was posted after l1 but before l2.
+        check("O1 the page saw every channel", seen != null && !failed, seen ?? ("failed=" + failed));
+        check("O2 order holds across channels, retained first, latest-only in place",
+            seen == "r1,a1,b1,l2,a2", "expected r1,a1,b1,l2,a2 - saw " + (seen ?? "-"));
+
+        overlay.Dispose();
+        finish();
+    }
+
+
+    /// <summary>
+    /// What a page can say about itself. Nothing inside a document reached the
+    /// game log before this: the page rendered, looked wrong, and the only
+    /// report was a player saying so.
+    ///
+    /// The last row is the case the whole entry came from - a font refused by
+    /// a cross-origin check, which renders as a silent fallback.
+    /// </summary>
+    internal static void PageDiagnostics(string scratch)
+    {
+        string root = Path.Combine(scratch ?? Path.GetTempPath(), "page-diag-probe");
+        string assetDir = Path.Combine(root, "assets");
+        Directory.CreateDirectory(assetDir);
+        // Not a font, and that is the point: the load fails either way, and
+        // under DenyCors it never even gets far enough to be parsed.
+        File.WriteAllText(Path.Combine(assetDir, "face.woff2"), "not a font");
+
+        const string noisy =
+            "<!doctype html><html><body style='margin:0;background:#101820'><script>\n"
+            + "console.error('probe console message');\n"
+            + "Promise.reject(new Error('probe rejection'));\n"
+            + "setTimeout(function () { throw new Error('probe throw'); }, 50);\n"
+            + "</script></body></html>";
+
+        // Off first: the switch is the whole contract, and a diagnostic that
+        // reports when nobody asked is worse than one that does not exist.
+        Program.SetPageDiagnostics(false);
+        Program.ClearLog();
+        var quiet = WebOverlays.Create("PageDiagQuietProbe", new OverlayOptions { Width = 420, Height = 320 });
+        if (quiet == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        bool quietLoaded = false;
+        quiet.PageLoaded += () => quietLoaded = true;
+        quiet.LoadHtml(noisy);
+        wait(() => quietLoaded, 25000);
+        Thread.Sleep(1500);
+        check("P1 with the switch off the page says nothing",
+            !Program.LogContains("page ("), Program.LogMatching("page (").Count == 0 ? "silent" : Program.LogMatching("page (")[0]);
+        quiet.Dispose();
+        Thread.Sleep(600);
+
+        Program.SetPageDiagnostics(true);
+        Program.ClearLog();
+        bool loaded = false;
+        var overlay = WebOverlays.Create("PageDiagProbe", new OverlayOptions { Width = 420, Height = 320 });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.PageLoaded += () => loaded = true;
+        overlay.LoadHtml(noisy);
+        wait(() => loaded, 25000);
+        wait(() => Program.LogContains("probe throw"), 6000);
+        Thread.Sleep(800);
+        foreach (string line in Program.LogMatching("page ("))
+            Console.WriteLine("  " + line);
+
+        check("P2 a console error is reported", Program.LogContains("probe console message"), "");
+        check("P3 a thrown error is reported", Program.LogContains("probe throw"), "");
+        check("P4 an unhandled rejection is reported", Program.LogContains("probe rejection"), "");
+        overlay.Dispose();
+        Thread.Sleep(600);
+
+        // The original bug: the face is on a second host that refuses
+        // CORS-checked reads, so it never loads and the page silently falls
+        // back. Nothing outside the document can see that happen.
+        Program.ClearLog();
+        bool fontLoaded = false;
+        var fonts = WebOverlays.Create("PageDiagFontProbe", new OverlayOptions
+        {
+            Width = 420,
+            Height = 320,
+            VirtualHosts = new[] { new VirtualHost("diag.assets", assetDir) },
+        });
+        if (fonts == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        fonts.PageLoaded += () => fontLoaded = true;
+        fonts.LoadHtml(
+            "<!doctype html><html><head><style>\n"
+            + "@font-face { font-family: ProbeFont; src: url('https://diag.assets/face.woff2') format('woff2'); }\n"
+            + "</style></head><body style='margin:0;background:#181020;font-family:ProbeFont'>text\n"
+            + "<script>document.fonts.load('12px ProbeFont');</script></body></html>");
+        wait(() => fontLoaded, 25000);
+        wait(() => Program.LogContains("fonts failed"), 8000);
+        foreach (string line in Program.LogMatching("page ("))
+            Console.WriteLine("  " + line);
+        check("P5 a font that would not load is reported - the bug this was written for",
+            Program.LogContains("fonts failed"), "");
+
+        fonts.Dispose();
+        Thread.Sleep(600);
+
+        // A page can throw once per frame. The instrument has to survive that
+        // without becoming the flood it was meant to explain - and it has to
+        // SAY it is holding back, at the moment it starts, rather than leaving
+        // the count to whoever speaks next.
+        Program.ClearLog();
+        OverlayHost_ResetPageDiagnostics();
+        bool floodLoaded = false;
+        var flood = WebOverlays.Create("PageDiagFloodProbe", new OverlayOptions { Width = 420, Height = 320 });
+        if (flood == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        flood.PageLoaded += () => floodLoaded = true;
+        flood.LoadHtml(
+            "<!doctype html><html><body style='margin:0;background:#201818'><script>"
+            + "for (var i = 0; i < 40; i++) console.error('flood ' + i);"
+            + "</script></body></html>");
+        wait(() => floodLoaded, 25000);
+        wait(() => Program.LogContains("held back"), 6000);
+        Thread.Sleep(800);
+        int shown = Program.LogMatching("flood ").Count;
+        Console.WriteLine("  of 40 reports, " + shown + " were shown");
+        check("P6 a flood is held back rather than written out", shown > 0 && shown < 10,
+            "shown=" + shown);
+        check("P7 and the log says so at the moment it starts holding back",
+            Program.LogContains("held back"), "");
+
+        flood.Dispose();
+        Program.SetPageDiagnostics(false);
+        finish();
+    }
+
+    private static void OverlayHost_ResetPageDiagnostics()
+    {
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        host.GetMethod("ResetPageDiagnostics", BindingFlags.NonPublic | BindingFlags.Static)
+            .Invoke(null, null);
+    }
+
     /// <summary>Reads the number out of "web error status N" in a log line.</summary>
     private static int statusIn(string line)
     {

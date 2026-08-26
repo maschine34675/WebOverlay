@@ -26,6 +26,35 @@ internal static class Program
 
     private static readonly System.Collections.Generic.List<string> warnings = new System.Collections.Generic.List<string>();
 
+    private static readonly System.Collections.Generic.List<string> infos = new System.Collections.Generic.List<string>();
+
+    /// <summary>Forgets what the library has said so far, so a row can assert on silence.</summary>
+    internal static void ClearLog()
+    {
+        lock (infos) infos.Clear();
+        lock (warnings) warnings.Clear();
+    }
+
+    internal static bool LogContains(string fragment)
+    {
+        lock (infos) return infos.Exists(l => l.Contains(fragment));
+    }
+
+    internal static System.Collections.Generic.List<string> LogMatching(string fragment)
+    {
+        lock (infos) return infos.FindAll(l => l.Contains(fragment));
+    }
+
+    /// <summary>
+    /// The plugin normally sets this from its configuration entry. There is no
+    /// plugin here, so the probe answers for it.
+    /// </summary>
+    internal static void SetPageDiagnostics(bool on)
+    {
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        host.GetField("DiagnosePage", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, on);
+    }
+
     [STAThread]
     private static void Main(string[] args)
     {
@@ -33,7 +62,11 @@ internal static class Program
         // blocked navigation would be visible here.
         Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
         host.GetField("LogInfo", BindingFlags.NonPublic | BindingFlags.Static)
-            .SetValue(null, (Action<string>)(line => Console.WriteLine("[info] " + line)));
+            .SetValue(null, (Action<string>)(line =>
+            {
+                lock (infos) infos.Add(line);
+                Console.WriteLine("[info] " + line);
+            }));
         host.GetField("LogWarning", BindingFlags.NonPublic | BindingFlags.Static)
             .SetValue(null, (Action<string>)(line =>
             {
@@ -79,6 +112,9 @@ internal static class Program
             case "cube": cubeProbe(args.Length > 1 ? args[1] : null); return;
             case "storage": storageProbe(); return;
             case "vhost": NewApi.VirtualHost(args.Length > 1 ? args[1] : null); return;
+            case "vhost-cors": NewApi.VirtualHostCors(args.Length > 1 ? args[1] : null); return;
+            case "ordering": NewApi.Ordering(); return;
+            case "page-diag": NewApi.PageDiagnostics(args.Length > 1 ? args[1] : null); return;
             case "dispatch": NewApi.Dispatch(); return;
             case "failure-kind": NewApi.FailureKind(); return;
             case "vhost-fail": NewApi.VirtualHostFailure(); return;

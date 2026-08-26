@@ -673,7 +673,7 @@ namespace WebOverlay
 
             int result = WebView2Api.Method<WebView2Api.ExecuteScriptDelegate>(
                 webView, WebView2Api.WebView_AddScriptToExecuteOnDocumentCreated)(
-                webView, ChannelProtocol.ShimFor(Transparency, options.InjectTheme),
+                webView, ChannelProtocol.ShimFor(Transparency, options.InjectTheme, OverlayHost.DiagnosePage),
                 channelShimCallback.Pointer);
             if (result != WebView2Api.S_OK)
             {
@@ -748,7 +748,7 @@ namespace WebOverlay
                     }
 
                     int hr = mapping(webView3, host.Host, System.IO.Path.GetFullPath(host.Folder),
-                        WebView2Api.HostResourceAccessDenyCors);
+                        accessKind(host.Access));
                     if (hr != WebView2Api.S_OK)
                     {
                         OverlayHost.LogWarning("mapping " + host.Host + " failed, hr=0x" + hr.ToString("X8") + ".");
@@ -785,6 +785,25 @@ namespace WebOverlay
                 return false;
             }
             return host[0] != '.' && host[host.Length - 1] != '.';
+        }
+
+        /// <summary>
+        /// The library's enum is deliberately its own type rather than the raw
+        /// numbers: WebView2 orders them DENY, ALLOW, DENY_CORS, and the value
+        /// a consumer gets by leaving the property alone has to be today's
+        /// behaviour, not whatever happens to be zero over there.
+        /// </summary>
+        private static int accessKind(HostAccess access)
+        {
+            switch (access)
+            {
+                case HostAccess.Deny:
+                    return WebView2Api.HostResourceAccessDeny;
+                case HostAccess.Allow:
+                    return WebView2Api.HostResourceAccessAllow;
+                default:
+                    return WebView2Api.HostResourceAccessDenyCors;
+            }
         }
 
         private static string describe(string value) =>
@@ -1533,6 +1552,8 @@ namespace WebOverlay
                     ChannelMessage?.Invoke(channel, payload);
                 else if (channel == ChannelProtocol.ShapeChannel)
                     applyShapeFromPage(payload);
+                else if (channel == ChannelProtocol.DiagChannel)
+                    OverlayHost.LogPageDiagnostic(title, payload);
                 return true;
             }
 

@@ -288,6 +288,18 @@ sets the library palette as CSS variables - see [`docs/STYLE.md`](https://github
 an ordinary browser wants one guard line (`if (window.overlay) { ... }`) rather
 than a console full of errors.
 
+**Order.** Messages a mod posts arrive at the page in the order it posted
+them - across channels, not merely within one, because every send goes through
+a single queue rather than one queue per channel. Before the page is ready they
+wait in that queue and are flushed in the same order; `Retain` values replay
+first, when the page loads, in the order the mod first set each channel. So
+posting a value and then asking the page about it is safe as written.
+
+`LatestOnly` is the one exception, and deliberately: a newer message replaces
+the one still waiting on that channel and takes its place, so the page sees the
+newest payload at the position of the first one that was waiting. If the queue
+overflows the extra sends are dropped with a warning, never reordered.
+
 The plain `Post` / `MessageReceived` pair is untouched and keeps working:
 anything that is not a well-formed envelope reaches `MessageReceived`
 verbatim, including a page's own JSON. The protocol reserves exactly one
@@ -366,9 +378,40 @@ the same overlay can still load files as a script, image or iframe, so map a
 folder that holds only what your interface serves. (That is
 `DENY_CORS` rather than the stricter `DENY`, deliberately: an inline `LoadHtml`
 page has an opaque origin, and under `DENY` even your own markup could not
-reach its assets.) The mapped origin is trusted for navigation and messages
-exactly like a `Navigate` target; pick a host name unique to your mod, since it
-is also the key its storage belongs to.
+reach its assets - measured, rows 66 and 67.)
+
+**Web fonts are the trap.** They are fetched in CORS mode by specification, so
+the default refuses every face: the page renders in a fallback and nothing
+reports it. Two shapes meet this, and the second is easy to miss:
+
+- A page on one host of yours loading a face from another host of yours. The
+  face is cross-origin, so it is refused.
+- **An inline `LoadHtml` page loading a face from your only host.** A
+  `LoadHtml` document has an opaque origin, so it is cross-origin to *every*
+  mapped host - including the single one you gave it. Having one host is not
+  protection here.
+
+Either way, say what the folder holding the fonts may serve:
+
+```csharp
+VirtualHosts = new[]
+{
+    new VirtualHost("yourmod.ui", pageFolder),
+    new VirtualHost("yourmod.fonts", fontFolder) { Access = HostAccess.Allow },
+},
+```
+
+`Access` is a property of the host being **read**, not of a pair - it belongs on
+the host the fonts come from, never on the page's own. And it is not free:
+`Allow` is the equivalent of that folder answering
+`Access-Control-Allow-Origin: *` to every origin in the overlay, including any
+remote origin you put in `AllowedOrigins`. So point it at a folder holding only
+what the page may read - which is the reason to split the hosts rather than map
+your whole plugin directory.
+
+The mapped origin is trusted for navigation and messages exactly like a
+`Navigate` target; pick a host name unique to your mod, since it is also the key
+its storage belongs to.
 
 Mapping is all-or-nothing on purpose. If a folder is missing, a host name is
 malformed, or the runtime is too old to map folders at all, the overlay fails
@@ -544,10 +587,26 @@ absent) - target WebGL.
   Holding a mouse button restores it, because that gives the game window a
   capture.
 
-  It is worth knowing while choosing a default size and position. A panel that
-  covers 80% of the screen cannot avoid the centre; a smaller one placed to the
-  side never meets the problem. Measured with the `Diagnostics` switch below,
-  which reports whether Unity sees the mouse move at all.
+  It is worth knowing while choosing a size and a position, and the default is
+  the trap: a window that sets no `Width` and `Height` gets 80% by 85% of the
+  game's picture, centred on it, which cannot avoid that point. A smaller one
+  placed to the side never meets the problem at all, and setting a size of your
+  own is the cheapest way past this whole section.
+
+  Measured with the library's own setting - **Diagnostics / Log cursor state**
+  in the F12 configuration menu, behind its Advanced switch. It reports which
+  window the system has in front, what the cursor is doing, and whether Unity
+  sees the mouse move at all. Off by default, and of no use except while
+  writing a bug report.
+
+  Its neighbour, **Diagnostics / Log page problems**, answers the other kind of
+  report: a script error, a rejected promise, a console error or a font that
+  would not load, from inside the page itself. Nothing in there reaches the log
+  otherwise - a refused font renders as a silent fallback, and the report says
+  "it looks wrong" and nothing more. Also off by default. The hooks are part
+  of the script injected when a window is created, so switching it on reaches
+  windows opened afterwards - not one already on screen, and not merely the
+  next page in it.
 
   `ClickThroughWhenUnfocused` is the answer for a panel that cannot avoid it:
   while the game is in front, the mouse passes straight through the overlay to

@@ -117,12 +117,24 @@ namespace WebOverlay.Interop
         // rendered and reported the mapped origin.
         public const int WebView2_3_SetVirtualHostNameToFolderMapping = 71;
 
-        // COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND: DENY = 0, ALLOW = 1,
-        // DENY_CORS = 2. DENY_CORS denies CORS-checked access - fetch, XHR -
-        // from other origins, while still allowing no-CORS sub-resource loads
-        // (img, script, iframe). It is deliberately not DENY: an inline
-        // LoadHtml page has an opaque origin, so under DENY even the mod's own
-        // markup could not reach its mapped assets.
+        // COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND. The table is WebView2.idl's
+        // own, in the SDK package (1.0.3485.44, lines 629-632):
+        //
+        //   access context                          DENY  ALLOW  DENY_CORS
+        //   from DOM - src of img, script, iframe   deny  allow  allow
+        //   from script - fetch or XHR              deny  allow  deny
+        //
+        // So DENY_CORS refuses anything subject to a CORS check - fetch, XHR
+        // and web fonts, which are fetched in CORS mode by specification -
+        // while ordinary sub-resource loads still pass. ALLOW is what a server
+        // answering "Access-Control-Allow-Origin: *" would be.
+        //
+        // DENY_CORS is the default here rather than DENY because an inline
+        // LoadHtml page has an opaque origin and would be cross-origin to its
+        // own mapped assets. That reasoning is measured, not assumed - see the
+        // vhost-cors rows in docs/FAULT-TESTS.md.
+        public const int HostResourceAccessDeny = 0;
+        public const int HostResourceAccessAllow = 1;
         public const int HostResourceAccessDenyCors = 2;
 
         // ICoreWebView2AcceleratorKeyPressedEventArgs

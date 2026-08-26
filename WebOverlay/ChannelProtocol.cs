@@ -31,6 +31,14 @@ namespace WebOverlay
         /// <summary>The rectangles an overlay is cut down to; see the shim.</summary>
         public const string ShapeChannel = ReservedPrefix + "shape";
 
+        /// <summary>
+        /// Problems the page itself reports. Nothing inside a document reaches
+        /// the game log otherwise: a refused font, a script that threw, a
+        /// promise nobody caught - the page renders, looks wrong, and says so
+        /// only in a developer console nobody has open on a player's machine.
+        /// </summary>
+        public const string DiagChannel = ReservedPrefix + "diag";
+
         public const string KindMessage = "m";
         public const string KindRequest = "q";
         public const string KindAnswer = "a";
@@ -40,16 +48,61 @@ namespace WebOverlay
         /// filled in. What the page is told is what the overlay actually got,
         /// decided before any of this is injected.
         /// </summary>
-        public static string ShimFor(OverlayTransparency transparency, bool injectTheme)
+        public static string ShimFor(OverlayTransparency transparency, bool injectTheme, bool diagnostics)
         {
             string mode = transparency == OverlayTransparency.Composition ? "composition"
                 : transparency == OverlayTransparency.ChromaKey ? "chroma"
                 : "none";
             return Shim
                 .Replace("/*!WO_THEME!*/", injectTheme ? ThemeTokens : "")
+                .Replace("/*!WO_DIAG!*/", diagnostics ? PageDiagnostics : "")
                 .Replace("/*!WO_ENV!*/",
                 "{ transparency: '" + mode + "', theme: " + (injectTheme ? "true" : "false") + " }");
         }
+
+        /// <summary>
+        /// Only injected while the consumer asked for it, so a page pays
+        /// nothing for this the rest of the time. It reports and never
+        /// swallows: the original console function is still called, and
+        /// onerror returns nothing, so a page's own handling is untouched.
+        /// </summary>
+        private const string PageDiagnostics = @"
+    // Every hook below builds its text INSIDE this try. A reason or an
+    // argument whose toString throws - a Symbol, an exotic object - would
+    // otherwise throw in the hook itself, and a diagnostic that breaks the
+    // page it is watching is worse than none.
+    function diag(build) {
+      try {
+        var what = typeof build === 'function' ? build() : build;
+        send({ __wo: 1, t: 'm', c: '__wo.diag', p: String(what).slice(0, 400) });
+      } catch (e) { }
+    }
+    window.addEventListener('error', function (e) {
+      diag(function () { return 'error: ' + (e && e.message) + ' @ ' + (e && e.filename) + ':' + (e && e.lineno); });
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      diag(function () { return 'unhandled rejection: ' + (e && e.reason); });
+    });
+    ['error', 'warn'].forEach(function (level) {
+      var original = console[level];
+      console[level] = function () {
+        // The page's own console first and unconditionally: whatever happens
+        // in here, what the page asked for has already happened.
+        var passed = original.apply(console, arguments);
+        var args = arguments;
+        diag(function () { return level + ': ' + Array.prototype.join.call(args, ' '); });
+        return passed;
+      };
+    });
+    // The case this was written for: a face refused by a cross-origin check
+    // renders as a silent fallback, and nothing anywhere says so.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () {
+        var failed = [];
+        document.fonts.forEach(function (f) { if (f.status === 'error') failed.push(f.family); });
+        if (failed.length) diag('fonts failed to load: ' + failed.join(', '));
+      });
+    }";
 
         /// <summary>The library palette, applied only when a mod asks for it.</summary>
         private const string ThemeTokens = @"
@@ -90,6 +143,7 @@ namespace WebOverlay
     document.addEventListener('readystatechange', describe);
     document.addEventListener('DOMContentLoaded', describe);
   }
+/*!WO_DIAG!*/
   window.overlay = {
     env: env,
     on: function (channel, fn, options) {
