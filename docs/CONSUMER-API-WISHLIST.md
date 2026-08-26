@@ -520,3 +520,141 @@ once known and invisible until a player reports it:
 2. **18 Show guard** and **22 docs** - the traps the review had to find.
 3. **20 preview tool** - it already exists; it just needs a home.
 4. **19 transparency mode** and **21 tokens** - whenever convenient.
+
+---
+
+# Fourth round (2026-08-26, from the ScopeRangefinder side)
+
+Written after actually building the Style Studio on 1.8 - the design the first
+round was written for - and shipping it. Entries 10-22 are answered in
+`CONSUMER-API-WISHLIST-ANSWERS.md`; this round starts at 23 so the numbering
+stays continuous. Everything here came out of building against the library
+rather than reading it, so each entry names the concrete place it cost
+something. As before, several may deserve a conscious "no".
+
+## 23. Choose the access kind per virtual host
+
+**Today:** every mapping is created with `HostResourceAccessDenyCors`
+(`OverlayWindow.cs`, at the `SetVirtualHostNameToFolderMapping` call). The
+constant's own comment explains why not `DENY` - an inline `LoadHtml` page has
+an opaque origin and could then not reach its own assets - but there is no way
+to ask for `ALLOW` for a host that belongs to the same overlay.
+
+**Why it hurts:** web fonts are CORS-checked. A page served from `mod.studio`
+that declares `@font-face` against a second host `mod.fonts` has every face
+refused - silently. The page renders, nothing reports an error, and every
+string is drawn in the fallback font. That is what the Style Studio did on its
+first in-game test, and it looked like a font-loading bug for a round.
+
+The only fix a consumer has is to serve everything from ONE host, which means
+pointing that host at a folder containing both the page and the fonts. For
+ScopeRangefinder that is the plugin root - so the WebView can also see the
+mod's DLL, its layout JSON and its config. A review of the mod flagged exactly
+that as avoidable exposure, and today it is not avoidable.
+
+**Sketch:**
+
+```csharp
+public sealed class VirtualHost
+{
+    public string Host { get; set; }
+    public string Folder { get; set; }
+    // Deny cross-origin (default, today's behaviour), or allow it between
+    // hosts that belong to the same overlay.
+    public bool AllowCrossOrigin { get; set; }
+}
+```
+
+One argument on a call that already exists. The trust model is unchanged: a mod
+can only declare its own hosts, so "cross-origin" here means "between two
+folders the same mod asked for".
+
+**Alternative:** several path prefixes under one host (`/web/` and `/fonts/`
+mapped separately). Nicer for the consumer, but WebView2 maps one folder per
+host name, so it needs `WebResourceRequested` interception - far more library
+than the flag above buys.
+
+## 24. Set an option by name
+
+**Today:** setting a newer option under the soft-dependency pattern takes three
+parts: a version constant, a comparison against the found version, and a
+separate `[MethodImpl(NoInlining)]` body that takes `object` - because a
+parameter type belongs to the signature and resolves when something reflects
+over the type's methods, not when the method is called.
+
+**Why it hurts:** three moving parts per option, and each fails hard rather
+than gracefully when it is wrong - a `TypeLoadException` on a player's machine,
+not a missing feature. It also does not compose: two new options in a release
+means two more bodies. `tools/Audit-SoftDependency.ps1` exists because this is
+easy to get wrong, and it caught ScopeRangefinder's own first attempt.
+
+**Sketch:**
+
+```csharp
+// Ignored by a library that does not know the key.
+options.Set("ClickThroughWhenUnfocused", true);
+```
+
+It trades compile-time checking for string keys, which is a real loss. For a
+library whose whole design assumes consumers run against versions that predate
+the member, it looks like the better trade: one version gate for `Set` itself,
+and then never again.
+
+## 25. Page diagnostics behind the switch that already exists
+
+**Today:** nothing forwards the page's console output, or a sub-resource
+request that the origin filter or a mapping refused. `Failed` and
+`FailureMessage` describe the window; inside the document there is no signal at
+all.
+
+**Why it hurts:** the font problem in 23 produced no output anywhere - not in
+the game log, not in the library's. The page looked correct and used the wrong
+font. DevTools finds it in a minute, but DevTools is a developer's switch on a
+developer's machine, while a player's report says "the fonts look wrong" and
+nothing more.
+
+**Sketch:** the same shape as the cursor report added in 1.8.4 - one switch,
+off by default, rate-limited, one line per event. Console messages with their
+level, and refused requests with the reason. WebView2 exposes both.
+
+## 26. Say whether channel messages keep their order
+
+**Today:** the guarantee is not written down anywhere.
+
+**Why it hurts:** the studio's page sends a `set` and then asks for a fresh
+preview, which is only correct if the second message is handled after the
+first. I satisfied myself from the source that it is; the next consumer will
+assume it without looking. Either answer is fine - "ordered per channel" or
+"no ordering, correlate yourself" - but only one of them is written.
+
+**Sketch:** one sentence in the README's channel section.
+
+## 27. Smaller things worth a line
+
+- **Binary payloads.** Preset thumbnails travel as base64 PNG inside the JSON
+  of a channel message, fifteen and more of them. It works; it doubles the
+  bytes and forces a string round trip. Publishing bytes under the virtual host
+  at runtime would be the natural home for anything a mod renders itself.
+- **The default geometry is the trap.** A window with no size of its own gets
+  80% of the screen, centred - which is exactly where a first-person game reads
+  mouse movement from. 1.8.6-1.8.8 fixed the consequence; a line in the
+  consumer documentation would keep the next mod from meeting it at all.
+  (ScopeRangefinder should also just set its own size.)
+
+## What the Style Studio actually needed
+
+1. **23 access kind** - the only entry that forced a compromise still present
+   in the shipped mod: the whole plugin folder is mapped, because splitting it
+   would cost the fonts.
+2. **25 page diagnostics** - would have turned that same bug from a testing
+   round into a log line, and it is the general answer for anything that goes
+   wrong inside the document.
+3. **24 option by name** - pure ergonomics, but it is the ergonomics of the
+   pattern this library asks every consumer to follow.
+4. **26 ordering** - one sentence, and consumers are already relying on
+   whatever the answer is.
+
+What the 1.8 series already answered needed no workaround and is worth saying
+so: channels with `OnRequest`, retained posts, the manual pump, the version
+gate, `Failed` with a cause, and `FreeCursorWhileShown` from 1.8.5 on - all
+used exactly as documented.
