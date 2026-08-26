@@ -524,3 +524,197 @@ advice.
    and 17 have settled how delivery is described.
 5. **14**, **22**, **20** - the documentation and the probe host, which is the
    one that also pays this repository back.
+
+---
+
+# Answers to the fourth round
+
+Written against 1.8.10. Two of these were checked against the WebView2 IDL
+itself (`WebView2.idl` from the 1.0.3485.44 SDK package, which is on this
+machine) rather than against our own comments, because both entries turn on
+what the browser actually does.
+
+## Verdicts at a glance
+
+| | | |
+|---|---|---|
+| 23 | access kind per virtual host | **yes** - but as a three-value enum, not a flag |
+| 24 | set an option by name | **no** - and the real gap is documentation plus tooling |
+| 25 | page diagnostics | **partly** - the page-side half now, the browser-side half later |
+| 26 | channel ordering | **yes**, documentation - the guarantee is stronger than the entry assumes |
+| 27 | binary payloads / geometry trap | **documentation** for both |
+
+## 23. Access kind per virtual host - yes, as an enum
+
+Every factual claim in the entry checks out, and the primary source settles the
+part our own comment only asserted. `WebView2.idl:629-632` gives the table:
+
+| access context | DENY | ALLOW | DENY_CORS |
+|---|---|---|---|
+| from DOM - `src` of img, script, iframe | deny | allow | allow |
+| from script - fetch or XHR | deny | allow | deny |
+
+A `@font-face` is fetched in CORS mode by specification, so under `DENY_CORS`
+every face from a second host is refused. The diagnosis is right, and the
+consequence - one host for everything, which for ScopeRangefinder is the whole
+plugin folder including its DLL and its user JSON - is exactly what that mod's
+own review flagged and could not fix.
+
+**But not as sketched.** `public bool AllowCrossOrigin` can only reach ALLOW.
+There are three kinds, and this repository has already been asked once for the
+*stricter* one: WOV-1812 in `docs/CODE-REVIEW-2026-08-22-c200995.md` recommended
+DENY. A bool forecloses that half of the design space permanently, under a
+contract that says minor releases never change what a consumer depended on. So:
+
+```csharp
+public enum HostAccess { DenyCors = 0, Deny, Allow }   // DenyCors = today
+public sealed class VirtualHost { ...; public HostAccess Access { get; set; } }
+```
+
+Two corrections before any of this becomes documentation:
+
+- ALLOW is a property of the host being **read**, not of a pair of hosts.
+  Setting it on the page's own host does nothing, and a name like
+  `AllowCrossOrigin` invites precisely that mistake.
+- "The trust model is unchanged" is not true. ALLOW is
+  `Access-Control-Allow-Origin: *` for that folder - to every origin in the
+  overlay, including any remote origin the mod put in `AllowedOrigins`. Small,
+  but not nothing, and it belongs in the XML doc.
+
+**The strongest thing in the entry is not the feature.** `docs/FAULT-TESTS.md`
+has no row on the cross-origin behaviour of a mapping in either direction, and
+the reason we serve DENY_CORS rather than DENY has never been measured - it is
+a comment. Both are cheap to settle with the probe's existing two-host support,
+and both should be settled *before* the API is chosen, not after: if DENY turns
+out to work for a `LoadHtml` page's own assets, the default itself is wrong.
+
+Cost, all additive: one property, one enum, the deep copy in `WebOverlays.cs`
+(which must carry the new field or it never reaches the window), the call site
+in `applyVirtualHosts`, a mode registered in both `tools/Probe/Program.cs` and
+`NewApi.cs`. No new interface and no new slot - the mapping call already takes
+the access kind, on a slot proven by row 12.
+
+## 24. Set an option by name - no
+
+The pattern the entry describes is real, and it cost me a mistake in this very
+release: ScopeRangefinder's soft-dependency audit rejected a helper of mine that
+took `OverlayOptions` as a parameter, correctly, because a parameter type is
+part of the signature. So the complaint is earned. The proposed cure does not
+work:
+
+- **`Set` is itself a member subject to the rule it wants to retire.** A
+  consumer with a 1.7.0 floor calling `Set` needs a floor of at least whatever
+  version introduced `Set` - which is *higher* than the 1.8.8 the separate body
+  was there to avoid. It cannot help the case that motivated it, and it can
+  never help retroactively.
+- **It answers the wrong question.** `Set("ClickThroughWhenUnfocused", true)`
+  asks whether the key exists. That option existed in 1.8.6 and only *behaved*
+  from 1.8.8; on 1.8.6 the call would have succeeded and handed the player a
+  panel that could not be clicked. The version comparison is what prevents that,
+  and `Set` does not replace it - so it removes one of the three moving parts,
+  not three.
+- It also freezes every property name as public API that no compiler checks,
+  under a contract promising minors break nothing.
+
+And the cost is smaller than the entry thinks: the straddle body is **one per
+version tier, not one per option**. Every consumer carries exactly one today,
+and would still carry one if 1.9 added five options.
+
+What the entry is really reporting is that the pattern is undocumented. That
+part is accepted:
+
+1. `docs/SOFT-DEPENDENCY.md` gains a rule naming the straddle body, with the
+   `object` parameter and the reason for it - the three consumers converged on
+   the same ten lines independently, which is a sign it should have been written
+   down rather than rediscovered.
+2. Its version table extends to patch granularity, and says which versions were
+   never released - the 1.8.4-1.8.7 gap is exactly the kind of thing a consumer
+   gets wrong.
+3. `Audit-SoftDependency.ps1` moves into this repository beside `tools/Probe`.
+   It lives in one consumer today and it caught a real defect here; a rule the
+   library asks every consumer to follow should ship with the check for it.
+
+## 25. Page diagnostics - the page-side half, now
+
+The premise needs one correction: **the library cannot see the refused font at
+all.** That was Chromium's own CORS check on a `DENY_CORS` mapping, a decision
+that never leaves the browser. `NavigationStarting` fires for document and frame
+navigations, so our origin filter never sees a sub-resource. (That last sentence
+is the likely answer rather than a measured one - it should be settled with a
+row, not asserted, and the row is cheap.)
+
+So the console half of the entry would not have caught its own example either -
+`document.fonts` would.
+
+**Recommended scope, now:** page-side reporting through the shim that already
+exists. A reserved channel, an `else if` beside the shape branch in
+`routeChannelMessage`, a rate limiter in `LogDiagnostic`, and a documented
+snippet consumers paste into their page - `window.onerror`, a console hook,
+`document.fonts.ready`. About thirty lines, no interop, one probe mode. One
+honest bound: `isMessageAllowed` gates it, so this reports from documents the
+origin filter already trusts and cannot be "anything that goes wrong inside the
+document".
+
+It needs a **new** config key. Renaming the released `Log cursor state` would
+orphan every existing `.cfg` entry.
+
+**Deferred, and cheaper than it first looked:** the DevTools route
+(`CallDevToolsProtocolMethod` plus `GetDevToolsProtocolEventReceiver`). It is
+four or five new slots and two new IIDs, but the slot numbers do not have to be
+guessed - the SDK's own raw interfaces are in `Microsoft.Web.WebView2.Core.Raw.*`,
+and member order in that metadata is the vtable order. I checked one:
+`ICoreWebView2DevToolsProtocolEventReceiver` gives `add_` then `remove_`, i.e.
+slots 3 and 4. They still need proving by a row - that rule does not bend - but
+the risk is derivation-then-confirmation, not a guess that can kill the process.
+
+Also: rejecting `WebResourceResponseReceived` outright was wrong. The event args
+carry the response headers, so a missing `Access-Control-Allow-Origin` is
+detectable host-side. Worth weighing against the CDP route when this is picked
+up.
+
+## 26. Channel ordering - yes, and it is stronger than assumed
+
+Established by reading the send path; it should get a row before it goes in the
+README, because a documented guarantee is a promise.
+
+Every `Post` - on any thread - goes through `OverlayHost.Post`, one queue
+drained on the overlay thread. There is no per-channel queue. So:
+
+> Messages a mod posts are delivered to the page in the order it posted them,
+> across channels and not merely within one. Before the page is ready they wait
+> in a queue and are flushed in the same order. `Retain` values replay first,
+> when the page loads, in the order the mod first set each channel.
+> `LatestOnly` is the one exception: a newer message replaces the one still
+> waiting on that channel and takes its place in the queue, so the page sees the
+> newest payload at the position of the first one that was waiting. If the queue
+> overflows, sends are dropped with a warning rather than reordered.
+
+The studio's `set`-then-ask sequence is therefore correct as written.
+
+## 27. Smaller things
+
+**Binary payloads - documentation, not API.** A virtual host is a folder, read
+at request time. A mod that wants to hand the page a PNG can write it into the
+folder it already maps and reference it by URL; nothing in the library needs to
+change, and it avoids the base64 round trip the entry is complaining about.
+Publishing bytes that never touch disk would need `WebResourceRequested`
+interception - a real feature, worth its own entry if the file route proves
+inadequate.
+
+**The default geometry trap - yes, documentation.** A window with no size of its
+own gets 80% x 85% of the game's client area, centred, which is exactly where a
+first-person game reads mouse movement from. That cost the 1.8.6-1.8.8 series to
+find and is invisible from inside the library. It goes in two places: the
+`Width`/`Height` doc comments, where someone deciding not to set them will read
+it, and the README beside `ClickThroughWhenUnfocused`. Agreed too that
+ScopeRangefinder should simply set its own size.
+
+## Suggested order
+
+1. **26** and **27b** - documentation, both true today, both cheap.
+2. **The two missing probe rows behind 23** - the cross-origin behaviour of a
+   mapping in each direction. They decide whether 23's default is even right.
+3. **23** once those rows exist.
+4. **24 as documentation and tooling** - the audit belongs here.
+5. **25 page-side**, then the browser-side half if the page-side proves too
+   narrow.
