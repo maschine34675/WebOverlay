@@ -74,6 +74,14 @@ every entry below names the version a member arrived in - see
   that is not the gate, so it must be `NoInlining` - proven by removing the
   attribute from a real consumer and watching the audit fail.
 
+  That new check was written on PowerShell 7 and died on Windows PowerShell
+  5.1, which is the host the documented csproj snippet actually invokes:
+  `MethodImplAttributes` is backed by `UInt16`, and 5.1 throws
+  `InvalidCastException` on `-band` over such an enum. So a consumer wiring it
+  in as told got a failing build step rather than an audit. Both sides are cast
+  to `int` now, and the check is re-proven on 5.1 the same way it was on 7 -
+  reported from another session, where it actually bit.
+
 ### Notes
 
 - Rows 63 to 71. Two of them settle questions this repository had been carrying

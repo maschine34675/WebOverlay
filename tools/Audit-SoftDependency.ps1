@@ -89,11 +89,18 @@ foreach ($type in $module.GetTypes()) {
         }
         # A gate body that may be inlined carries its references into a caller
         # that is not the gate, which is the same failure by another route.
+        #
+        # Both sides are cast to int on purpose. MethodImplAttributes is backed
+        # by UInt16, and Windows PowerShell 5.1 throws InvalidCastException on
+        # -band over such an enum - so without the casts this script does not
+        # merely misjudge, it dies before judging anything, on exactly the host
+        # the csproj snippet in docs/SOFT-DEPENDENCY.md invokes. PowerShell 7
+        # accepts it either way, which is what let it through here.
         # Compiler-generated members (lambdas, iterators) are exempt: the
         # developer cannot mark them, and they are only reached from a gate
         # body that is itself marked.
         if ($touches -and $inGate -and -not $m.IsConstructor `
-                -and -not ($m.ImplAttributes -band [Mono.Cecil.MethodImplAttributes]::NoInlining) `
+                -and -not ([int]$m.ImplAttributes -band [int][Mono.Cecil.MethodImplAttributes]::NoInlining) `
                 -and -not $m.Name.StartsWith('<')) {
             $violations.Add("$($type.FullName).$($m.Name): touches $LibraryName but is not [MethodImpl(MethodImplOptions.NoInlining)]")
         }
