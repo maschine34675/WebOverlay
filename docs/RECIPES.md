@@ -274,6 +274,10 @@ enforce that:
   page never reaches the message bridge. Outgoing sends are bound to the
   mod's target at origin granularity: a redirect to a different path on the
   same origin still counts as the target, as in the classic origin model.
+- Downloads are blocked, with a warning naming the URL -
+  `OverlayOptions.AllowDownloads` opts back in for a mod that really wants
+  files. (On a runtime from before 2021 there is no download control;
+  downloads then stay browser-managed and the log says so.)
 - Popups are suppressed, permission prompts (camera, location, ...) are
   denied, `alert()`-style script dialogs are off, and the browser's password
   saving and form autofill are disabled on runtimes that support those

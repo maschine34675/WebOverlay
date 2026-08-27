@@ -14,6 +14,73 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.10.0]
+
+### Forge version notes
+
+- A hardening release. Downloads are now blocked by default (a page over a
+  game has no business writing files), a mod can finally tell when its
+  channels are dead, and several ways a misbehaving page or mod could confuse
+  the library are closed. Nothing changes for a well-behaved mod.
+
+### Added
+
+- `IWebOverlay.ChannelsFailed` and `ChannelsAvailable` - the consumer finally
+  learns when the channel shim could not be installed. The overlay itself
+  keeps working (window, raw `Post`/`MessageReceived`, scripts); what is dead
+  is everything built on `window.overlay`, and until now the only trace was a
+  log line the mod never saw. Latched exactly like `Failed`, so a late
+  subscription still hears it; `ChannelsAvailable` is null until the answer
+  is in, then true or false for the overlay's lifetime.
+
+- `OverlayOptions.AllowDownloads`, default **false** - and the default is the
+  point: a page-initiated download is now cancelled, its UI suppressed, with
+  one warning naming the URL. This is a deliberate tightening of a security
+  default, the one kind of behaviour change a minor release makes: every page
+  here is the mod's own, and a mod that wants bytes on disk serves them from
+  a virtual host or fetches them itself. On a runtime from before 2021 there
+  is no download control; downloads then stay browser-managed and the log
+  says so. One new proven vtable slot (add_DownloadStarting, absolute slot 75
+  on ICoreWebView2_4 - row 77).
+
+### Fixed
+
+- Navigation completions are matched by WebView2's own NavigationId, not by
+  position alone. The observable defect: a page-initiated navigation that the
+  origin filter refuses used to have its cancellation reported as *the page
+  still on screen* having failed to load - a false failure report about a
+  healthy document (row 74; the counterproof shows the false report without
+  the check). The positional guard stays; the identity check rides on top,
+  and falls open on a runtime whose args refuse the id rather than strand
+  the page.
+
+- The overlay thread's command queue is bounded (4096, like the main-thread
+  event queue): a consumer posting in a hot loop now costs itself dropped
+  commands and one warning, not every mod in the process an unbounded heap.
+  Obligations are never dropped - a `Request` or `ExecuteScript` refused by a
+  full queue is answered `null` immediately, keeping "answered exactly once"
+  true under flood, and disposals always run. Creations stay unbounded,
+  deliberately: each pending entry is a consumer-held handle, so the consumer
+  pays first, and refusing one would need a failure path into a window that
+  does not exist yet - past 64 the backlog is named in the log instead.
+
+- `BoundsStore` honors the mutex it takes. On a two-second timeout it used to
+  write anyway - without the lock, which is the torn file the mutex exists to
+  prevent - and then release a lock it never took. Now: one warning, no
+  write, and the next save works (row 72).
+
+### Notes
+
+- Rows 72 to 78. Every fix has a counterproof - the fault put back, the row
+  watched failing - with two honest exceptions written into the rows
+  themselves: the adverse completion ordering behind the NavigationId check
+  could not be provoked across mod-issued navigations on runtime 151 (row 73
+  is regression coverage; row 74 is the deterministic flavour, and it bites),
+  and the shim-failure rows run through a test seam, because a real browser
+  never rejects the library's own shim on demand (row 75 proves the signal
+  path).
+
+
 ### Changed
 
 - Packaging no longer touches the live installation, and no longer trusts one:

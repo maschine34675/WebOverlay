@@ -130,6 +130,25 @@ namespace WebOverlay
         // replaced, not to the one the mod is waiting for.
         private bool awaitingNavigationStart;
 
+        /// <summary>
+        /// The WebView2 NavigationId of the top-level navigation this overlay
+        /// last adopted - the one whose completion is the only one worth
+        /// believing. Two rapid navigations interleave as Starting(new) then
+        /// Completed(old): the browser completes a superseded navigation as
+        /// cancelled AFTER the replacement has started, and matching by
+        /// position alone then reports the old failure against the new page,
+        /// or worse, takes a stale success as the new page being ready.
+        /// </summary>
+        private ulong activeNavigationId;
+
+        /// <summary>
+        /// An explicit flag rather than an id==0 sentinel: nothing promises
+        /// ids are nonzero. False also means "fall open" - a runtime whose
+        /// args refuse the id keeps today's positional behaviour rather than
+        /// stranding IsPageLoaded forever.
+        /// </summary>
+        private bool haveActiveNavigation;
+
         // Bumped for every top-level document. A question asked by one
         // document must not be answered into the next.
         private int documentGeneration;
@@ -177,6 +196,16 @@ namespace WebOverlay
         private ComCallback newWindowCallback;
         private ComCallback permissionCallback;
         private ComCallback processFailedCallback;
+        private ComCallback downloadStartingCallback;
+
+        /// <summary>
+        /// How the channel shim settled: null while unknown, then true or
+        /// false, once, forever. The handle's latched event and property are
+        /// driven from these; both fire on the overlay thread like every
+        /// other event here.
+        /// </summary>
+        internal Action ChannelsOk;
+        internal Action ChannelsBroken;
         private ComCallback scriptCompletedCallback;
         private ComCallback channelShimCallback;
         private string pendingUrl;
@@ -645,9 +674,21 @@ namespace WebOverlay
             if (channelShimCallback == null)
                 channelShimCallback = new ComCallback(WebView2Api.IID_AddScriptCompleted, (int hr, IntPtr id) =>
                 {
+                    if (OverlayHost.SimulateShimRejection)
+                    {
+                        OverlayHost.SimulateShimRejection = false;
+                        hr = unchecked((int)0x80004005); // E_FAIL, once, for the probe
+                    }
                     if (hr != WebView2Api.S_OK)
+                    {
                         OverlayHost.LogWarning("the channel shim was rejected, hr=0x" + hr.ToString("X8")
                             + "; named channels will not work on this overlay.");
+                        ChannelsBroken?.Invoke();
+                    }
+                    else
+                    {
+                        ChannelsOk?.Invoke();
+                    }
                     shimSettled = true;
                     if (navigationOwedToShim)
                     {
@@ -682,6 +723,7 @@ namespace WebOverlay
                 // without channels, which the warning says.
                 OverlayHost.LogWarning("could not install the channel shim, hr=0x" + result.ToString("X8")
                     + "; named channels will not work on this overlay.");
+                ChannelsBroken?.Invoke();
                 shimSettled = true;
             }
         }
@@ -1051,6 +1093,22 @@ namespace WebOverlay
                 // navigation completes as cancelled.
                 if (awaitingNavigationStart)
                     return WebView2Api.S_OK;
+                // And one that carries a navigation identity we did not adopt
+                // is stale or was refused by the filter: the browser completes
+                // a superseded navigation as cancelled AFTER its replacement
+                // has started, past the guard above. Believing it would report
+                // the old failure against the new page - or flush the outbox
+                // on a stale success. If the id cannot be read, fall open to
+                // the positional behaviour rather than strand the page.
+                int completedIdHr = WebView2Api.Method<WebView2Api.GetULongDelegate>(
+                    args, WebView2Api.NavCompletedArgs_GetNavigationId)(args, out ulong completedId);
+                if (completedIdHr == WebView2Api.S_OK && haveActiveNavigation
+                    && completedId != activeNavigationId)
+                {
+                    OverlayHost.LogDiagnostic("dropped a completion for superseded navigation "
+                        + completedId + " (current is " + activeNavigationId + ").");
+                    return WebView2Api.S_OK;
+                }
                 WebView2Api.Method<WebView2Api.GetIntDelegate>(args, WebView2Api.NavCompletedArgs_GetIsSuccess)(
                     args, out int success);
                 if (success != 0)
@@ -1177,7 +1235,74 @@ namespace WebOverlay
             armed &= WebView2Api.Method<WebView2Api.AddEventDelegate>(webView, WebView2Api.WebView_AddProcessFailed)(
                 webView, processFailedCallback.Pointer, out _) == WebView2Api.S_OK;
 
+            blockDownloads();
+
             return armed;
+        }
+
+        /// <summary>
+        /// A page over a game has no business writing files to the player's
+        /// disk, and a download bar over the game is never wanted - so unless
+        /// the mod said <see cref="OverlayOptions.AllowDownloads"/>, every
+        /// download is cancelled and its UI suppressed, with one warning
+        /// naming the URL. Deliberately NOT folded into the armed check: a
+        /// runtime from before 2021 has no download control at all, and an
+        /// overlay on such a runtime should keep working as it always has -
+        /// with browser-managed downloads and a log line saying so - rather
+        /// than fail.
+        /// </summary>
+        private void blockDownloads()
+        {
+            if (options.AllowDownloads)
+                return;
+            Guid iid = WebView2Api.IID_WebView2_4;
+            if (Marshal.QueryInterface(webView, ref iid, out IntPtr webView4) != WebView2Api.S_OK
+                || webView4 == IntPtr.Zero)
+            {
+                OverlayHost.LogDiagnostic("this runtime has no download control; downloads stay browser-managed.");
+                return;
+            }
+            try
+            {
+                downloadStartingCallback = new ComCallback(WebView2Api.IID_DownloadStarting, (IntPtr sender, IntPtr args) =>
+                {
+                    if (args == IntPtr.Zero)
+                        return WebView2Api.S_OK;
+                    // Fail closed: the refusal comes FIRST, so nothing a
+                    // diagnostic read does - an E_FAIL, garbage out-pointer,
+                    // anything - can let the download through by accident.
+                    WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.DownloadArgs_PutCancel)(args, 1);
+                    WebView2Api.Method<WebView2Api.PutBoolDelegate>(args, WebView2Api.DownloadArgs_PutHandled)(args, 1);
+                    string url = null;
+                    if (WebView2Api.Method<WebView2Api.GetPointerDelegate>(
+                            args, WebView2Api.DownloadArgs_GetDownloadOperation)(args, out IntPtr operation) == WebView2Api.S_OK
+                        && operation != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            url = readString(operation, WebView2Api.DownloadOp_GetUri);
+                        }
+                        finally
+                        {
+                            Marshal.Release(operation);
+                        }
+                    }
+                    OverlayHost.LogWarning("blocked a download" + (url == null ? "" : " from " + url)
+                        + "; set AllowDownloads if the mod really wants files.");
+                    return WebView2Api.S_OK;
+                });
+                if (WebView2Api.Method<WebView2Api.AddEventDelegate>(webView4, WebView2Api.WebView2_4_AddDownloadStarting)(
+                        webView4, downloadStartingCallback.Pointer, out _) != WebView2Api.S_OK)
+                {
+                    OverlayHost.LogWarning("could not take control of downloads; they stay browser-managed.");
+                    downloadStartingCallback.Dispose();
+                    downloadStartingCallback = null;
+                }
+            }
+            finally
+            {
+                Marshal.Release(webView4);
+            }
         }
 
         private int onNavigationStarting(IntPtr args, bool topLevel)
@@ -1231,6 +1356,18 @@ namespace WebOverlay
                 // call, because only this event says the browser really took
                 // it - and only for a navigation the filter above allowed.
                 awaitingNavigationStart = false;
+                // Adopt this navigation's identity. A server redirect fires
+                // another Starting with the SAME id, so re-storing is
+                // idempotent; a filter-cancelled Starting never reaches this
+                // branch, which is exactly what lets its completion be
+                // recognised as stale below.
+                int idHr = WebView2Api.Method<WebView2Api.GetULongDelegate>(
+                    args, WebView2Api.NavArgs_GetNavigationId)(args, out ulong startedId);
+                if (idHr == WebView2Api.S_OK)
+                {
+                    activeNavigationId = startedId;
+                    haveActiveNavigation = true;
+                }
                 // Past the point of return: the old page is being left, so
                 // there is nothing to restore it to any more.
                 targetBeforeNavigation = null;
@@ -2340,6 +2477,10 @@ namespace WebOverlay
                 {
                     IntPtr toRelease = webView;
                     webView = IntPtr.Zero;
+                    // The adopted navigation identity dies with the view; a
+                    // straggler completion during teardown must not be matched
+                    // against it.
+                    haveActiveNavigation = false;
                     Marshal.Release(toRelease);
                 }
             }
@@ -2385,6 +2526,7 @@ namespace WebOverlay
             newWindowCallback?.Dispose();
             permissionCallback?.Dispose();
             processFailedCallback?.Dispose();
+            downloadStartingCallback?.Dispose();
             scriptCompletedCallback?.Dispose();
             channelShimCallback?.Dispose();
             compositionCompleted?.Dispose();

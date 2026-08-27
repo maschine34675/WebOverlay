@@ -144,6 +144,7 @@ Set `MinimumVersion` from the newest member you actually use:
 | 1.8.5 | `FreeCursorWhileShown` on a panel shown and focused in one call - it existed from 1.7.0 but did not fire for that case, which is how a panel normally opens |
 | 1.8.8 | `OverlayOptions.ClickThroughWhenUnfocused` - the member exists from 1.8.6, but 1.8.6 engaged it whenever the panel was not in front, leaving it unclickable in menus too |
 | 1.9.0 | `VirtualHost.Access` / `HostAccess` |
+| 1.10.0 | `ChannelsFailed`, `ChannelsAvailable`, `OverlayOptions.AllowDownloads` |
 
 1.8.4 through 1.8.7 were never released; the first build a player can install
 that has any of the 1.8.4-1.8.7 work is **1.8.8**. Gate on that rather than on

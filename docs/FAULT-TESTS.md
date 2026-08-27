@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-71 were added for v1.3.0 to v1.9.0
+and re-run unchanged for v1.4.0; rows 10-78 were added for v1.3.0 to v1.10.0
 (runtime 151.0.4129.93).
 
 The Result column says how the row is evidenced. `PASS` means the probe
@@ -85,6 +85,13 @@ row that claims more than the automation delivers is worse than no row.
 | 69 | The same page with the switch on | the console error, the thrown error and the unhandled rejection each get a line, with the window named | PASS |
 | 70 | A `@font-face` pointing at a host that refuses CORS-checked reads | `fonts failed to load: ProbeFont`. This is the bug the entry was written from: before it, the page rendered in a fallback face and nothing anywhere said so | PASS |
 | 71 | A page reporting forty times in one burst | four lines and a notice that further reports are held back, written the moment the limit is passed rather than left for whoever speaks next - an instrument that floods the log is not one anybody reads, and a burst that stops must not take its own count with it | PASS |
+| 72 | The bounds store held by another thread for longer than the two-second wait | one warning, no write, and no release of a lock never taken; the next save, with the store free, goes through quietly. Verified by putting the fault back: without the fix the write proceeds without the lock and the warning never appears | PASS |
+| 73 | A retarget away from a navigation hanging on a non-routable address, three times | the new page loads every time and the hanging navigation's cancellation is never pinned on it. On runtime 151 the cancelled completion was measured to arrive BEFORE the replacing Starting, so the positional guard already covers this ordering - the row is regression coverage for an ordering the API permits, not proof of a fixed defect | PASS |
+| 74 | The page itself navigating to an origin the filter refuses, while its own document stays on screen | the refused navigation's cancellation is not reported as the visible page having failed to load, and `IsPageLoaded` stays true. This is the deterministic flavour of the NavigationId defect, and the counterproof bites: without the id check the log shows a false failure report naming the healthy page | PASS |
+| 75 | The channel shim rejected (via the test seam - a real browser never rejects the library's own shim on demand) | `ChannelsFailed` fires, `ChannelsAvailable` answers false, a late subscription still hears it, and the raw message bridge keeps working. The seam fakes the browser's ANSWER, so these rows prove the signal path, not the browser's ability to fail | PASS |
+| 76 | A healthy overlay, same questions | `ChannelsAvailable` answers true and the event stays quiet | PASS |
+| 77 | A page-initiated download (`a[download]`, clicked by script) | blocked, with a warning naming the URL, and the overlay is unharmed; with `AllowDownloads` the library stays out of it. Slot 75 on ICoreWebView2_4 and the args slots are thereby proven - a blocked download is an effect no wrong slot could fake | PASS |
+| 78 | Six thousand posts while the overlay thread is deliberately stalled | the command queue refuses past its bound with one warning; a script answer owed during the flood is still delivered exactly once; the overlay works normally afterwards | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):

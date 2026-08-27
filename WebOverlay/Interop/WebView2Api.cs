@@ -36,6 +36,8 @@ namespace WebOverlay.Interop
         public static readonly Guid IID_Settings4 = new Guid("cb56846c-4168-4d53-b04f-03b6d6796ff2");
         public static readonly Guid IID_Environment3 = new Guid("80a22ae3-be7c-4ce2-afe1-5a50056cdeeb");
         public static readonly Guid IID_WebView2_3 = new Guid("a0d6df20-3b92-416d-aa0c-437a9c727857");
+        public static readonly Guid IID_WebView2_4 = new Guid("20d02d59-6df2-42dc-bd06-f98a694b1302");
+        public static readonly Guid IID_DownloadStarting = new Guid("efedc989-c396-41ca-83f7-07f845a55724");
         public static readonly Guid IID_CompositionControllerCompleted = new Guid("02fab84b-1428-4fb7-ad45-1b2e64736184");
         public static readonly Guid IID_Controller = new Guid("4d00c0d1-9434-4eb6-8078-8697a560334f");
         public static readonly Guid IID_CursorChanged = new Guid("9da43ccc-26e1-4dad-b56c-d8961c94c571");
@@ -149,10 +151,41 @@ namespace WebOverlay.Interop
         // ICoreWebView2NavigationStartingEventArgs
         public const int NavArgs_GetUri = 3;
         public const int NavArgs_PutCancel = 8;
+        // Uri, IsUserInitiated, IsRedirected, RequestHeaders, get_Cancel,
+        // put_Cancel, NavigationId -> 3..9 (WebView2.idl, confirmed against
+        // the SDK metadata's Raw interface member order). Proven by the
+        // nav-id probe rows: ids read here reappear on the matching
+        // completions, which no wrong slot could produce.
+        public const int NavArgs_GetNavigationId = 9;
 
         // ICoreWebView2NavigationCompletedEventArgs
         public const int NavCompletedArgs_GetIsSuccess = 3;
         public const int NavCompletedArgs_GetWebErrorStatus = 4;
+        // IsSuccess, WebErrorStatus, NavigationId -> 3, 4, 5. Slot 5 was
+        // first hand-measured during v1.8.1 (sequential ids; FAULT-TESTS
+        // row 43) and is now exercised every run by the nav-id rows.
+        public const int NavCompletedArgs_GetNavigationId = 5;
+
+        // ICoreWebView2_4 - only after QueryInterface(IID_WebView2_4).
+        // ICoreWebView2 fills 3-60, _2 61-67, _3 68-72 (anchored by the proven
+        // SetVirtualHostNameToFolderMapping = 71); _4 then holds FrameCreated
+        // add/remove at 73/74 and add_DownloadStarting at 75. The SDK
+        // metadata's _VtblGap1_70 on ICoreWebView2_4 says the same: seventy
+        // inherited members before its own. Proven by the downloads probe
+        // rows - a blocked download is an observable effect no wrong slot
+        // could fake.
+        public const int WebView2_4_AddDownloadStarting = 75;
+
+        // ICoreWebView2DownloadStartingEventArgs: DownloadOperation, Cancel
+        // (get/put), ResultFilePath (get/put), Handled (get/put), GetDeferral
+        // -> 3..10.
+        public const int DownloadArgs_GetDownloadOperation = 3;
+        public const int DownloadArgs_PutCancel = 5;
+        public const int DownloadArgs_PutHandled = 9;
+
+        // ICoreWebView2DownloadOperation: six event add/removes fill 3-8,
+        // then get_Uri at 9. Only read best-effort, for the warning's sake.
+        public const int DownloadOp_GetUri = 9;
 
         // ICoreWebView2NewWindowRequestedEventArgs
         public const int NewWindowArgs_PutHandled = 6;
@@ -236,6 +269,11 @@ namespace WebOverlay.Interop
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int GetUIntDelegate(IntPtr self, out uint value);
+
+        // NavigationId is UINT64; the narrower out-writes above must not be
+        // used for it on x64.
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate int GetULongDelegate(IntPtr self, out ulong value);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int NoArgsDelegate(IntPtr self);

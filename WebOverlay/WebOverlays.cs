@@ -84,6 +84,7 @@ namespace WebOverlay
                 InjectTheme = options.InjectTheme,
                 FreeCursorWhileShown = options.FreeCursorWhileShown,
                 ClickThroughWhenUnfocused = options.ClickThroughWhenUnfocused,
+                AllowDownloads = options.AllowDownloads,
                 VirtualHosts = copy(options.VirtualHosts),
             };
         }
@@ -530,6 +531,19 @@ namespace WebOverlay
         public bool ClickThroughWhenUnfocused { get; set; }
 
         /// <summary>
+        /// Let pages start downloads. Off by default, and deliberately so: a
+        /// page over a game has no business writing files to the player's
+        /// disk, a download bar over the game is never wanted, and every page
+        /// here is the mod's own - a mod that wants the bytes of something
+        /// serves it from a virtual host or fetches it itself. Blocked
+        /// attempts are logged with the URL, once each. On a runtime too old
+        /// to expose download control (before 2021) downloads keep the
+        /// browser's default behaviour, and the log says so. Arrived in
+        /// 1.10.0, tightening what earlier versions left browser-managed.
+        /// </summary>
+        public bool AllowDownloads { get; set; }
+
+        /// <summary>
         /// Folders served to the page as `https://&lt;host&gt;/`, so it can load
         /// real files instead of inlining everything. The mapped origins are
         /// trusted automatically, exactly like a
@@ -788,6 +802,29 @@ namespace WebOverlay
         /// under each <see cref="EventDispatch"/> mode.
         /// </summary>
         event Action Failed;
+
+        /// <summary>
+        /// Raised when the channel shim could not be installed - and only
+        /// then. The overlay itself keeps working: the window renders, raw
+        /// <see cref="Post(string)"/> / <see cref="MessageReceived"/> and
+        /// <see cref="ExecuteScript(string, Action{string})"/> are untouched.
+        /// What is dead is everything built on <c>window.overlay</c>: named
+        /// channels, request/reply, retained replay into the page. A consumer
+        /// whose page depends on those should fall back the way it would for
+        /// <see cref="Failed"/>; one that only uses the raw bridge may ignore
+        /// this. Latched exactly like <see cref="Failed"/>, so a late
+        /// subscription still hears it. Arrived in 1.10.0.
+        /// </summary>
+        event Action ChannelsFailed;
+
+        /// <summary>
+        /// Whether <c>window.overlay</c> is going to exist in this overlay's
+        /// pages: null while the answer is not in yet (the shim installs
+        /// during creation), then true or false for the overlay's lifetime.
+        /// The false transition is the moment <see cref="ChannelsFailed"/>
+        /// fires. Arrived in 1.10.0.
+        /// </summary>
+        bool? ChannelsAvailable { get; }
     }
 
     internal sealed class OverlayHandle : IWebOverlay
@@ -838,6 +875,15 @@ namespace WebOverlay
             window.PageLoaded = () => raise(() => PageLoaded?.Invoke());
             window.Ready = () => fire(ref readyHandlers, ref readyAlready);
             window.Failed = () => fire(ref failedHandlers, ref failedAlready);
+            window.ChannelsOk = () => System.Threading.Interlocked.CompareExchange(ref channelsState, 1, 0);
+            window.ChannelsBroken = () =>
+            {
+                // The transition guards the raise: only the first outcome
+                // counts, so a raced second report cannot fire the latch
+                // twice or flip an answered question.
+                if (System.Threading.Interlocked.CompareExchange(ref channelsState, 2, 0) == 0)
+                    fire(ref channelsFailedHandlers, ref channelsFailedAlready);
+            };
         }
 
         private readonly EventDispatch dispatch;
@@ -979,6 +1025,14 @@ namespace WebOverlay
         private Action failedHandlers;
         private bool readyAlready;
         private bool failedAlready;
+        private Action channelsFailedHandlers;
+        private bool channelsFailedAlready;
+        // 0 unknown, 1 available, 2 failed. An int rather than bool?, because
+        // it is read from consumer threads and Nullable<bool> cannot be
+        // volatile - and a plain int rather than a volatile one, because the
+        // writers go through Interlocked and a by-ref volatile would warn.
+        // The getter pairs them with a volatile read.
+        private int channelsState;
 
         public event Action Ready
         {
@@ -990,6 +1044,21 @@ namespace WebOverlay
         {
             add { addLatched(ref failedHandlers, ref failedAlready, value); }
             remove { lock (stateSync) failedHandlers -= value; }
+        }
+
+        public event Action ChannelsFailed
+        {
+            add { addLatched(ref channelsFailedHandlers, ref channelsFailedAlready, value); }
+            remove { lock (stateSync) channelsFailedHandlers -= value; }
+        }
+
+        public bool? ChannelsAvailable
+        {
+            get
+            {
+                int state = System.Threading.Volatile.Read(ref channelsState);
+                return state == 0 ? (bool?)null : state == 1;
+            }
         }
 
         private void addLatched(ref Action handlers, ref bool already, Action value)
@@ -1097,8 +1166,15 @@ namespace WebOverlay
                 raiseResult(() => answer(null));
                 return;
             }
-            OverlayHost.Post(() => window.RequestFromPage(channel, payload,
-                value => raiseResult(() => answer(value)), timeoutMilliseconds));
+            if (!OverlayHost.TryPost(() => window.RequestFromPage(channel, payload,
+                value => raiseResult(() => answer(value)), timeoutMilliseconds)))
+            {
+                // The queue is full, so the question never left. Answering
+                // null now keeps "answered exactly once" true even under a
+                // flood - the alternative is a caller waiting five seconds
+                // for a timeout on a question nobody was ever asked.
+                raiseResult(() => answer(null));
+            }
         }
 
         public void OnRequest(string channel, Func<string, string> handler) =>
@@ -1135,7 +1211,8 @@ namespace WebOverlay
                 raiseResult(() => result(null));
                 return;
             }
-            OverlayHost.Post(() => window.ExecuteScript(script, value => raiseResult(() => result(value))));
+            if (!OverlayHost.TryPost(() => window.ExecuteScript(script, value => raiseResult(() => result(value)))))
+                raiseResult(() => result(null));
         }
 
         public void OpenDevTools() => post(() => window.OpenDevTools());
@@ -1184,7 +1261,10 @@ namespace WebOverlay
         {
             if (disposed != 0)
                 return;
-            OverlayHost.Post(action);
+            // Fire-and-forget commands are the flood vector, so they take the
+            // droppable path; obligations - answers, disposal - go through
+            // OverlayHost.Post directly and are never dropped.
+            OverlayHost.TryPost(action);
         }
     }
 }

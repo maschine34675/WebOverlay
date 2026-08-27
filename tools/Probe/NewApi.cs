@@ -2438,6 +2438,330 @@ internal static partial class NewApi
             .Invoke(null, null);
     }
 
+
+    // ---- runtime hardening (1.10.0) ---------------------------------------
+
+    private static System.Collections.Generic.List<string> hookWarnings()
+    {
+        var warnings = new System.Collections.Generic.List<string>();
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        FieldInfo logWarning = host.GetField("LogWarning", BindingFlags.NonPublic | BindingFlags.Static);
+        var previous = (Action<string>)logWarning.GetValue(null);
+        logWarning.SetValue(null, (Action<string>)(line =>
+        {
+            lock (warnings) warnings.Add(line);
+            previous(line);
+        }));
+        return warnings;
+    }
+
+    private static bool warned(System.Collections.Generic.List<string> warnings, string fragment)
+    {
+        lock (warnings) return warnings.Exists(w => w.Contains(fragment));
+    }
+
+    /// <summary>
+    /// The bounds store held by someone else. Writing anyway is exactly the
+    /// torn file the mutex exists to prevent - and the old code also released
+    /// a lock it never took. Now: one warning, no write, and the next save
+    /// works.
+    /// </summary>
+    internal static void BoundsLocked()
+    {
+        var warnings = hookWarnings();
+        Type store = typeof(WebOverlays).Assembly.GetType("WebOverlay.BoundsStore");
+        Type stored = store.GetNestedType("StoredBounds", BindingFlags.NonPublic);
+        MethodInfo save = store.GetMethod("Save", BindingFlags.NonPublic | BindingFlags.Static);
+        object bounds = Activator.CreateInstance(stored);
+
+        // Hold the store from another thread, the way a second game process
+        // would hold it from another process - same named mutex either way.
+        using (var holder = new System.Threading.Mutex(false, "Local\\WebOverlay.BoundsStore"))
+        {
+            var held = new System.Threading.ManualResetEventSlim();
+            var release = new System.Threading.ManualResetEventSlim();
+            var thread = new System.Threading.Thread(() =>
+            {
+                var mine = new System.Threading.Mutex(false, "Local\\WebOverlay.BoundsStore");
+                mine.WaitOne();
+                held.Set();
+                release.Wait();
+                mine.ReleaseMutex();
+                mine.Dispose();
+            });
+            thread.Start();
+            held.Wait();
+
+            save.Invoke(null, new object[] { "HardeningProbe/locked", bounds });
+            check("H1 a held store is skipped with a warning, not written without the lock",
+                warned(warnings, "held elsewhere"), "");
+
+            release.Set();
+            thread.Join();
+        }
+
+        lock (warnings) warnings.Clear();
+        save.Invoke(null, new object[] { "HardeningProbe/locked", bounds });
+        check("H2 the next save, with the store free, goes through quietly",
+            !warned(warnings, "held elsewhere") && !warned(warnings, "not saved"), "");
+        finish();
+    }
+
+    /// <summary>
+    /// Two rapid navigations interleave as Starting(new) then Completed(old):
+    /// the browser completes the superseded navigation as cancelled AFTER its
+    /// replacement started. Matched by position alone, that stale completion
+    /// was reported as the NEW page failing to load. Matched by NavigationId,
+    /// it is recognised and dropped.
+    /// </summary>
+    internal static void NavigationRace(string scratch)
+    {
+        var warnings = hookWarnings();
+        string folder = Path.Combine(scratch ?? Path.GetTempPath(), "nav-race-probe");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "a.html"),
+            "<!doctype html><html><body style='background:#101820'>A"
+            + "<script>window.chrome.webview.postMessage('page:a');</script></body></html>");
+        File.WriteAllText(Path.Combine(folder, "b.html"),
+            "<!doctype html><html><body style='background:#182010'>B"
+            + "<script>window.chrome.webview.postMessage('page:b');</script></body></html>");
+
+        bool sawB = false, failed = false;
+        var overlay = WebOverlays.Create("NavRaceProbe", new OverlayOptions
+        {
+            Width = 400,
+            Height = 300,
+            VirtualHosts = new[] { new VirtualHost("race.assets", folder) },
+        });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.Failed += () => failed = true;
+        overlay.MessageReceived += m => { if (m == "page:b") sawB = true; };
+
+        // The deterministic interleaving: A goes to a port nothing answers,
+        // so its Starting arrives fast and its failing completion arrives
+        // SLOWLY - while B, served from disk, starts and loads in between.
+        // A's late completion then lands after B's Starting has cleared the
+        // positional guard, which is exactly the window the id check closes.
+        // Three rounds, because the connection-refusal latency varies.
+        // A non-routable address, so A's connection HANGS rather than being
+        // refused - a locally refused port completes before B even starts,
+        // which is the interleaving the positional guard already handles.
+        // Navigating to B makes the browser cancel A, and that cancellation
+        // completes right after B's Starting: the exact window.
+        for (int round = 0; round < 3; round++)
+        {
+            sawB = false;
+            overlay.Navigate("http://10.255.255.1/never");
+            Thread.Sleep(150);
+            overlay.Navigate("https://race.assets/b.html");
+            wait(() => sawB || failed, 20000);
+            if (failed)
+                break;
+            // Give A's cancelled completion time to arrive and be judged.
+            Thread.Sleep(2000);
+        }
+        check("H3 the retarget away from a hanging navigation loads every time", sawB && !failed,
+            "sawB=" + sawB + " failed=" + failed);
+        // The warning that names the HANGING url would be legitimate; what
+        // must never appear is the new page's name on the old page's failure.
+        check("H4 the hanging navigation's cancellation is never pinned on the new page",
+            !warned(warnings, "b.html"),
+            warned(warnings, "b.html") ? "misattributed warning seen" : "");
+
+        // The deterministic flavour of the same defect: the PAGE starts a
+        // navigation the origin filter refuses. Its Starting is blocked and
+        // never adopted, no mod navigation is pending - so its cancelled
+        // completion used to sail past the positional guard and be reported
+        // as the page still on screen having failed to load. The id check
+        // recognises it: an identity nothing adopted is nobody's failure.
+        lock (warnings) warnings.Clear();
+        overlay.ExecuteScript("location.href = 'https://forbidden.example/x';");
+        wait(() => warned(warnings, "blocked navigation"), 8000);
+        check("H5 the filter refuses the page's own foreign navigation",
+            warned(warnings, "blocked navigation"), "");
+        Thread.Sleep(2000);
+        check("H6a its cancellation is not reported as the visible page failing",
+            !warned(warnings, "did not load"),
+            warned(warnings, "did not load") ? "false failure report seen" : "");
+        check("H6b and the visible page is still the loaded target",
+            overlay.IsPageLoaded, "IsPageLoaded=" + overlay.IsPageLoaded);
+
+        overlay.Dispose();
+        finish();
+    }
+
+    /// <summary>
+    /// A consumer whose page lives on channels finally learns when they are
+    /// dead. The seam fakes the browser's answer to the shim installation -
+    /// a real browser never rejects the library's own shim on demand - so
+    /// this proves the SIGNAL path: the latched event, the property, and the
+    /// raw bridge surviving.
+    /// </summary>
+    internal static void ChannelsDead()
+    {
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        FieldInfo seam = host.GetField("SimulateShimRejection", BindingFlags.NonPublic | BindingFlags.Static);
+
+        // The happy half first: a healthy overlay answers "true", and the
+        // event stays quiet.
+        bool healthyLoaded = false, healthyChannelsFailed = false;
+        var healthy = WebOverlays.Create("ChannelsHealthyProbe", new OverlayOptions { Width = 400, Height = 300 });
+        if (healthy == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        healthy.ChannelsFailed += () => healthyChannelsFailed = true;
+        healthy.PageLoaded += () => healthyLoaded = true;
+        healthy.LoadHtml("<!doctype html><html><body>ok</body></html>");
+        wait(() => healthyLoaded, 25000);
+        wait(() => healthy.ChannelsAvailable != null, 5000);
+        check("H5 a healthy overlay reports channels available",
+            healthy.ChannelsAvailable == true && !healthyChannelsFailed,
+            "available=" + healthy.ChannelsAvailable);
+        healthy.Dispose();
+        Thread.Sleep(400);
+
+        seam.SetValue(null, true);
+        bool channelsFailed = false, gotRaw = false, loaded = false;
+        var overlay = WebOverlays.Create("ChannelsDeadProbe", new OverlayOptions { Width = 400, Height = 300 });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.ChannelsFailed += () => channelsFailed = true;
+        overlay.MessageReceived += m => { if (m == "raw") gotRaw = true; };
+        overlay.PageLoaded += () => loaded = true;
+        overlay.LoadHtml("<!doctype html><html><body><script>"
+            + "window.chrome.webview.postMessage('raw');</script></body></html>");
+        wait(() => channelsFailed, 25000);
+        check("H6 a rejected shim raises ChannelsFailed", channelsFailed, "");
+        check("H7 and the property says false", overlay.ChannelsAvailable == false,
+            "available=" + overlay.ChannelsAvailable);
+
+        // The latch: someone subscribing after the fact still hears it.
+        bool late = false;
+        overlay.ChannelsFailed += () => late = true;
+        wait(() => late, 3000);
+        check("H8 a late subscription is answered - the event is latched", late, "");
+
+        wait(() => loaded && gotRaw, 25000);
+        check("H9 the raw bridge outlives the channels", gotRaw, "the overlay itself still works");
+
+        overlay.Dispose();
+        finish();
+    }
+
+    /// <summary>
+    /// Downloads are refused by default: a page over a game has no business
+    /// writing files to the player's disk, and a download bar over the game
+    /// is never wanted. AllowDownloads opts back in.
+    /// </summary>
+    internal static void Downloads()
+    {
+        var warnings = hookWarnings();
+        const string page = "<!doctype html><html><body><script>"
+            + "window.chrome.webview.addEventListener('message', function () {"
+            + "  var a = document.createElement('a');"
+            + "  a.href = 'data:text/plain;base64,aGVsbG8=';"
+            + "  a.download = 'probe.txt';"
+            + "  document.body.appendChild(a);"
+            + "  a.click();"
+            + "  setTimeout(function () { window.chrome.webview.postMessage('clicked'); }, 300);"
+            + "});</script></body></html>";
+
+        bool loaded = false, clicked = false;
+        var overlay = WebOverlays.Create("DownloadBlockProbe", new OverlayOptions { Width = 400, Height = 300 });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.PageLoaded += () => loaded = true;
+        overlay.MessageReceived += m => { if (m == "clicked") clicked = true; };
+        overlay.LoadHtml(page);
+        wait(() => loaded, 25000);
+        overlay.Post("go");
+        wait(() => clicked, 8000);
+        wait(() => warned(warnings, "blocked a download"), 5000);
+        check("H10 a page-initiated download is blocked, with the URL named",
+            warned(warnings, "blocked a download"), "");
+
+        bool alive = false;
+        overlay.MessageReceived += m => { if (m == "clicked") alive = true; };
+        clicked = false;
+        overlay.Post("go");
+        wait(() => clicked, 8000);
+        check("H11 the overlay is unharmed by the refusal", clicked, "");
+        overlay.Dispose();
+        Thread.Sleep(400);
+
+        lock (warnings) warnings.Clear();
+        bool allowedLoaded = false, allowedClicked = false;
+        var allowed = WebOverlays.Create("DownloadAllowProbe", new OverlayOptions
+        {
+            Width = 400,
+            Height = 300,
+            AllowDownloads = true,
+        });
+        if (allowed == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        allowed.PageLoaded += () => allowedLoaded = true;
+        allowed.MessageReceived += m => { if (m == "clicked") allowedClicked = true; };
+        allowed.LoadHtml(page);
+        wait(() => allowedLoaded, 25000);
+        allowed.Post("go");
+        wait(() => allowedClicked, 8000);
+        Thread.Sleep(1200);
+        check("H12 with AllowDownloads the library stays out of it",
+            !warned(warnings, "blocked a download"), "");
+        allowed.Dispose();
+        finish();
+    }
+
+    /// <summary>
+    /// The host command queue under a flood: a consumer posting in a hot loop
+    /// costs itself - dropped commands, one warning - and never the
+    /// obligations. A script asked for during the flood is still answered,
+    /// exactly once, and the overlay works afterwards.
+    /// </summary>
+    internal static void Flood()
+    {
+        var warnings = hookWarnings();
+        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
+        MethodInfo hostPost = host.GetMethod("Post", BindingFlags.NonPublic | BindingFlags.Static);
+
+        bool loaded = false;
+        int echoes = 0;
+        var overlay = WebOverlays.Create("FloodProbe", new OverlayOptions { Width = 400, Height = 300 });
+        if (overlay == null) { Console.WriteLine("FAIL create returned null"); Environment.Exit(1); }
+        overlay.PageLoaded += () => loaded = true;
+        overlay.MessageReceived += m => { if (m == "echo") Interlocked.Increment(ref echoes); };
+        overlay.LoadHtml("<!doctype html><html><body><script>"
+            + "window.chrome.webview.addEventListener('message', function (e) {"
+            + "  if (e.data === 'ping') window.chrome.webview.postMessage('echo');"
+            + "});</script></body></html>");
+        wait(() => loaded, 25000);
+
+        // Stall the overlay thread with one legitimate (non-droppable) item,
+        // then flood past the limit while nothing can drain.
+        hostPost.Invoke(null, new object[] { (Action)(() => Thread.Sleep(1500)) });
+        Thread.Sleep(100);
+        for (int i = 0; i < 6000; i++)
+            overlay.Post("flood " + i);
+
+        check("H13 the flood is refused with a warning instead of growing without bound",
+            warned(warnings, "command queue is full"), "");
+
+        // An obligation created DURING the flood: answered exactly once, one
+        // way or the other - refused-null now, or the real value after the
+        // stall - never silence.
+        string answer = "unanswered";
+        overlay.ExecuteScript("1 + 1", v => answer = v ?? "null-by-refusal");
+        wait(() => answer != "unanswered", 8000);
+        check("H14 an answer owed during the flood is still delivered",
+            answer != "unanswered", "answer=" + answer);
+
+        // And afterwards, life goes on.
+        Thread.Sleep(1800);
+        int before = echoes;
+        overlay.Post("ping");
+        wait(() => echoes > before, 8000);
+        check("H15 the overlay works normally once the flood is over",
+            echoes > before, "echoes=" + (echoes - before));
+
+        overlay.Dispose();
+        finish();
+    }
+
     /// <summary>Reads the number out of "web error status N" in a log line.</summary>
     private static int statusIn(string line)
     {

@@ -86,6 +86,7 @@ stops hearing.
 | `FreeCursorWhileShown` | false | Hand the cursor back while this overlay is up and the game is unfocused. |
 | `ClickThroughWhenUnfocused` | false | Let the mouse reach the game while the game is in front - needed for a panel over the middle of the screen (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-mouse-stops-turning-the-player)). |
 | `VirtualHosts` | null | Folders served as `https://<host>/`, so the page can load real files (see [RECIPES.md](RECIPES.md#pages-with-real-files)). |
+| `AllowDownloads` | false | Let pages start downloads. Blocked by default with a warning naming the URL: a page over a game has no business writing files to the player's disk. On a pre-2021 runtime downloads stay browser-managed either way, and the log says so. 1.10.0. |
 
 `IWebOverlay`:
 
@@ -113,6 +114,8 @@ stops hearing.
 | `VisibilityChanged` | The overlay became visible or invisible; only on real changes. Overlay thread. |
 | `PageLoaded` | Your page is live; fires again on every navigation. Overlay thread. |
 | `Ready`, `Failed` | Latched creation outcome - see above for threading. |
+| `ChannelsFailed` | The channel shim could not be installed: everything built on `window.overlay` is dead, while the window, raw `Post`/`MessageReceived` and scripts keep working. Latched like `Failed`. 1.10.0. |
+| `ChannelsAvailable` | Whether `window.overlay` will exist in this overlay's pages: null until known, then true or false for the overlay's lifetime. 1.10.0. |
 | `Dispose()` | Destroys the overlay window. |
 
 `OverlayFailure`: `RuntimeMissing` (no WebView2 runtime - the user installs
@@ -208,9 +211,12 @@ overlay.on('frame', draw, { latest: true });   // newest payload, once per frame
 ```
 
 A request is answered **exactly once**: with the other side's reply, with
-`null` when nothing answers that channel, and with `null` when the deadline
+`null` when nothing answers that channel, with `null` when the deadline
 (five seconds by default, `Request(..., timeoutMilliseconds)` to change it)
-passes. So neither side can hang the other, whatever the page does.
+passes - and with an immediate `null` in the one pathological case of the
+overlay command queue being full under a message flood, rather than a caller
+waiting five seconds for a timeout on a question nobody was ever asked.
+`ExecuteScript(script, result)` answers `null` in that same case. So neither side can hang the other, whatever the page does.
 
 When an answer is not ready yet, take the deferred form of `OnRequest` and
 call `reply` later, from wherever the answer arrives:

@@ -77,6 +77,15 @@ namespace WebOverlay
         /// </summary>
         internal static volatile bool Diagnose;
 
+        /// <summary>
+        /// Test seam: makes the next channel-shim completion report failure.
+        /// A real browser never rejects the library's own shim on demand, and
+        /// the failure path that tells a consumer its channels are dead must
+        /// not be the one path in this library nothing can prove. Set only by
+        /// the probe, via reflection; nothing in production writes it.
+        /// </summary>
+        internal static volatile bool SimulateShimRejection;
+
         internal static void LogDiagnostic(string line)
         {
             if (Diagnose)
@@ -202,18 +211,76 @@ namespace WebOverlay
             return true;
         }
 
+        /// <summary>
+        /// The overlay thread's command queue is bounded like the main-thread
+        /// event queue, and for the same reason: a consumer posting in a hot
+        /// loop must cost itself, not every mod in the process. The value is
+        /// the same as MainThreadQueueLimit - at the measured ~9,600 messages
+        /// per second it is close to half a second of maximum-rate traffic
+        /// already waiting, which no healthy consumer reaches.
+        /// </summary>
+        private const int WorkQueueLimit = 4096;
+        private static int workQueued;
+        private static int workOverflowWarned;
+
+        /// <summary>
+        /// Creations are not bounded, deliberately: refusing one would need a
+        /// failure path into a window that does not exist yet, and each entry
+        /// is one consumer-held handle, so the consumer's own memory grows at
+        /// least as fast as this queue. Past the threshold it is named in the
+        /// log instead - a mod creating overlays in a loop is a bug report
+        /// waiting to be written, and the line writes most of it.
+        /// </summary>
+        private const int CreationBacklogThreshold = 64;
+        private static int creationsQueued;
+        private static int creationBacklogWarned;
+
         internal static void PostCreation(Action action)
         {
             if (stopping)
                 return;
+            if (Interlocked.Increment(ref creationsQueued) > CreationBacklogThreshold
+                && Interlocked.Exchange(ref creationBacklogWarned, 1) == 0)
+            {
+                LogWarning("more than " + CreationBacklogThreshold + " overlay creations are waiting"
+                    + " - is a mod creating overlays in a loop?");
+            }
             creations.Enqueue(action);
             wake();
+        }
+
+        /// <summary>
+        /// Fire-and-forget work: dropped, with one warning, when the queue is
+        /// full. For work that carries an obligation - an answer somebody is
+        /// waiting for, a Dispose that releases native state - use
+        /// <see cref="Post"/>, which never drops.
+        /// </summary>
+        internal static bool TryPost(Action action)
+        {
+            if (stopping)
+                return true;
+            if (Interlocked.Increment(ref workQueued) > WorkQueueLimit)
+            {
+                Interlocked.Decrement(ref workQueued);
+                if (Interlocked.Exchange(ref workOverflowWarned, 1) == 0)
+                    LogWarning("the overlay command queue is full (" + WorkQueueLimit
+                        + "); commands are being dropped - is a mod posting in a loop?");
+                return false;
+            }
+            work.Enqueue(action);
+            wake();
+            return true;
         }
 
         internal static void Post(Action action)
         {
             if (stopping)
                 return;
+            // Counted but never refused: the count of obligations is bounded
+            // by the calls that created them, so this cannot run away - and
+            // dropping a Dispose would leak a native window, dropping an
+            // answer would break "answered exactly once".
+            Interlocked.Increment(ref workQueued);
             work.Enqueue(action);
             wake();
         }
@@ -894,6 +961,7 @@ namespace WebOverlay
             // held - an overlay that is already up stays answerable.
             while (!creatingEnvironment && creations.TryDequeue(out Action creation))
             {
+                Interlocked.Decrement(ref creationsQueued);
                 run(creation);
                 drainQueue(work);
             }
@@ -902,7 +970,13 @@ namespace WebOverlay
         private static void drainQueue(ConcurrentQueue<Action> queue)
         {
             while (queue.TryDequeue(out Action action))
+            {
+                if (ReferenceEquals(queue, work))
+                    Interlocked.Decrement(ref workQueued);
+                else if (ReferenceEquals(queue, creations))
+                    Interlocked.Decrement(ref creationsQueued);
                 run(action);
+            }
         }
 
         private static void run(Action action)

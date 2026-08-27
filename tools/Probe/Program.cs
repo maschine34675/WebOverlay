@@ -115,6 +115,11 @@ internal static class Program
             case "vhost-cors": NewApi.VirtualHostCors(args.Length > 1 ? args[1] : null); return;
             case "ordering": NewApi.Ordering(); return;
             case "page-diag": NewApi.PageDiagnostics(args.Length > 1 ? args[1] : null); return;
+            case "bounds-locked": NewApi.BoundsLocked(); return;
+            case "nav-race": NewApi.NavigationRace(args.Length > 1 ? args[1] : null); return;
+            case "channels-dead": NewApi.ChannelsDead(); return;
+            case "downloads": NewApi.Downloads(); return;
+            case "flood": NewApi.Flood(); return;
             case "dispatch": NewApi.Dispatch(); return;
             case "failure-kind": NewApi.FailureKind(); return;
             case "vhost-fail": NewApi.VirtualHostFailure(); return;

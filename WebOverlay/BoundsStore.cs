@@ -58,13 +58,30 @@ namespace WebOverlay
                 // same moment must not clobber each other's entries.
                 using (var mutex = new Mutex(false, "Local\\WebOverlay.BoundsStore"))
                 {
+                    bool owned;
                     try
                     {
-                        mutex.WaitOne(2000);
+                        owned = mutex.WaitOne(2000);
                     }
                     catch (AbandonedMutexException)
                     {
-                        // The previous holder died; the file is ours now.
+                        // The previous holder died; the wait DID acquire, and
+                        // the file is ours now.
+                        owned = true;
+                    }
+
+                    // Not acquired is not a license to write anyway: a write
+                    // without the lock is exactly the torn file the mutex
+                    // exists to prevent, and it also made the release below
+                    // throw for a lock never taken. Skip rather than retry -
+                    // this runs on the shared overlay thread inside a modal
+                    // move/size, so a second two-second wait would freeze
+                    // every overlay in the process, and the next move saves
+                    // the same bounds anyway.
+                    if (!owned)
+                    {
+                        OverlayHost.LogWarning("window bounds not saved; the store was held elsewhere for over two seconds.");
+                        return;
                     }
 
                     try
