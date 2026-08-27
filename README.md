@@ -24,7 +24,9 @@ because this README also ships inside the release zip, where nothing else does.
 
 ## Installation
 
-Extract the release zip over the SPT folder; it places
+Grab `Anvil-WebOverlay-v<version>.zip` from the
+[latest release](https://github.com/maschine34675/WebOverlay/releases/latest)
+and extract it over the SPT folder; it places
 `BepInEx/plugins/Anvil-WebOverlay/` with the library, `WebView2Loader.dll` and
 the license texts. One installation serves every mod that uses the library.
 Players only need it when a mod lists it as a dependency. The demo plugin is a
@@ -207,6 +209,10 @@ from a session where it happened. For mouse or focus problems, switch on
 page that looks wrong, **Diagnostics / Log page problems**. The full checklist
 is at the end of
 [`docs/TROUBLESHOOTING.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/TROUBLESHOOTING.md#reporting-a-problem).
+Reports go to
+[GitHub issues](https://github.com/maschine34675/WebOverlay/issues); for
+anything security-sensitive, use GitHub's private *Report a vulnerability*
+on the repository's Security tab instead of a public issue.
 
 ## Building
 

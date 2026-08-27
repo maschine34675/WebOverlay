@@ -112,12 +112,38 @@ capped at 2 MB by the browser. `VirtualHosts` serves a folder of yours under a
 host name instead:
 
 ```csharp
+// The folder travels with the mod: next to the DLL, wherever that is.
+string assetFolder = Path.Combine(
+    Path.GetDirectoryName(typeof(YourPlugin).Assembly.Location), "web");
+
 var overlay = WebOverlays.Create("Studio", new OverlayOptions
 {
     VirtualHosts = new[] { new VirtualHost("yourmod.assets", assetFolder) },
 });
 overlay.Navigate("https://yourmod.assets/index.html");
 ```
+
+The other two thirds of this recipe are outside the code. In the `.csproj`,
+copy the page files to the build output so a local run has them:
+
+```xml
+<ItemGroup>
+  <Content Include="web\**" CopyToOutputDirectory="PreserveNewest" />
+</ItemGroup>
+```
+
+And in the release zip, ship the folder inside the plugin directory, exactly
+where the code above will look for it:
+
+```
+BepInEx/plugins/YourMod/YourMod.dll
+BepInEx/plugins/YourMod/web/index.html
+BepInEx/plugins/YourMod/web/style.css
+```
+
+Map `web/`, not the plugin folder itself: everything under the mapped folder
+is reachable from the page, and your DLL and the player's config files are
+nobody's sub-resources.
 
 Navigating there, rather than pushing markup in with `LoadHtml`, is what makes
 the difference - the page then has a **real origin**, and with it:

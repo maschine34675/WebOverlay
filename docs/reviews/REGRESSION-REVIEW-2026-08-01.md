@@ -1,8 +1,9 @@
 # Regression-Review: WebOverlay-Fixes
 
 > **Historical snapshot.** This report describes the commit named in its
-> header, at that date. Its findings were addressed in the releases that
-> followed - see `CHANGELOG.md`. It is kept as evidence, not as a
+> header, at that date. Many of its findings were addressed in the releases
+> that followed - see `CHANGELOG.md`; the ones still open recur in newer
+> reports until a release closes them. It is kept as evidence, not as a
 > description of the current library.
 
 > **Historischer Bericht.** Bezieht sich auf einen aelteren Commit; Befunde, Hashes und Laufzeitgrenzen sind ueberholt. Alle als valide bestaetigten Befunde saemtlicher Review-Runden wurden bis Commit `261f0af` umgesetzt; die zugehoerige Fault-Injection-Matrix ist in `docs/FAULT-TESTS.md` festgehalten.

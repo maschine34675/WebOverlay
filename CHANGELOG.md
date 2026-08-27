@@ -14,6 +14,32 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+### Changed
+
+- Packaging no longer touches the live installation, and no longer trusts one:
+  both builds run with `DeployToSpt=false`, and the quickstart check compiles
+  against the freshly built DLL in an isolated SPT-shaped staging structure
+  rather than against whatever happened to be deployed. An updated outside
+  assessment caught both halves - a packaging run used to deploy as a side
+  effect, and the check used to prove the wrong binary. Verified by running
+  the chain and watching the live DLL's hash and timestamp not move.
+- The README inside a release zip has its links pinned to that release's tag
+  at packaging time, so a v-old zip never shows v-new documentation. The
+  repository copy keeps pointing at `main`, which is what a browsing reader
+  wants.
+- The dated review reports moved to `docs/reviews/`, and their
+  historical-snapshot banners no longer claim every finding was addressed -
+  the open ones recur in newer reports until a release closes them, and the
+  banner now says so.
+- The real-files recipe is complete end to end: where the folder lives
+  relative to the mod DLL, the csproj lines that copy the page files to the
+  build output, and the layout the release zip needs - plus the reason to map
+  `web/` rather than the plugin folder itself.
+- Installation links the actual download; problem reports have an explicit
+  destination (GitHub issues), and security-sensitive ones a private one -
+  the repository's *Report a vulnerability*, which is enabled.
+
+
 ## [1.9.1]
 
 ### Forge version notes

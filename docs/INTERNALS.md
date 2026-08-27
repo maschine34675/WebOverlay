@@ -80,10 +80,12 @@ enforces them.
 
 ## Review history
 
-The dated reports under `docs/` - `CODE-REVIEW-*`, `REGRESSION-REVIEW-*`,
-`FOLLOW-UP-REVIEW-*` and the `CONSUMER-API-WISHLIST` pair - are **historical
-snapshots**: each describes the exact commit named in its header, and most of
-their findings were fixed in the releases that followed. None of them
-describes the current state. What is true now lives in three places: this
+The dated reports under [`docs/reviews/`](reviews/) - `CODE-REVIEW-*`,
+`REGRESSION-REVIEW-*`, `FOLLOW-UP-REVIEW-*` - and the `CONSUMER-API-WISHLIST`
+pair here are **historical snapshots**: each describes the exact commit named
+in its header, and many of their findings were fixed in the releases that
+followed - not all, which is why the open ones keep reappearing in newer
+reports until a release closes them. None of these files describes the
+current state. What is true now lives in three places: this
 documentation, [FAULT-TESTS.md](FAULT-TESTS.md) for what is measured, and
 [CHANGELOG.md](../CHANGELOG.md) for how it got here.
