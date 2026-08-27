@@ -14,11 +14,17 @@ namespace WebOverlay
     /// </summary>
     internal sealed class ConfigurationManagerAttributes
     {
+        // Half of these are never assigned by this library. They stay anyway:
+        // the class documents the full duck-typed surface the settings menu
+        // reads, mirroring the copy consumers carry, and the menu reads them
+        // by reflection - the compiler cannot see that.
+#pragma warning disable 0649
         public string DispName;
         public int? Order;
         public bool? IsAdvanced;
         public bool? Browsable;
         public bool? HideDefaultButton;
         public System.Action<BepInEx.Configuration.ConfigEntryBase> CustomDrawer;
+#pragma warning restore 0649
     }
 }

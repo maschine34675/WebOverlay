@@ -1,5 +1,10 @@
 # Consumer API wishlist
 
+> **Historical snapshot.** This report describes the commit named in its
+> header, at that date. Its findings were addressed in the releases that
+> followed - see `CHANGELOG.md`. It is kept as evidence, not as a
+> description of the current library.
+
 Written 2026-08-18 from the ScopeRangefinder side, while designing a "Style
 Studio" overlay (concept: `ScopeRangefinder/docs/WEB-STYLE-STUDIO.md`). The
 input is a full read of the current API plus how CraftQueue, QuestMarkers and

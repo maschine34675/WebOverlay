@@ -12,6 +12,6 @@ namespace WebOverlay
 
         public const string PluginGuid = "com.anvil.weboverlay";
         public const string PluginName = Account + "-" + ModName;
-        public const string PluginVersion = "1.9.0";
+        public const string PluginVersion = "1.9.1";
     }
 }

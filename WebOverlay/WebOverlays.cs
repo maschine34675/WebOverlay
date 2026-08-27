@@ -470,7 +470,7 @@ namespace WebOverlay
         ///
         /// Events are queued and delivered from the library plugin's own
         /// Update, so they arrive up to one frame later and, after
-        /// <see cref="IWebOverlay.Dispose"/>, not at all. Outside the game -
+        /// <c>Dispose()</c>, not at all. Outside the game -
         /// no plugin, no Update - there is nothing to dispatch to, so the
         /// overlay keeps its normal threading and says so once in the log.
         /// </summary>

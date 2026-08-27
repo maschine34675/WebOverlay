@@ -1,5 +1,10 @@
 # Regression-Review: WebOverlay v1.6.0
 
+> **Historical snapshot.** This report describes the commit named in its
+> header, at that date. Its findings were addressed in the releases that
+> followed - see `CHANGELOG.md`. It is kept as evidence, not as a
+> description of the current library.
+
 > **Bearbeitungsstand 2026-08-20:** WOV-1601 bis WOV-1606 sind vor der
 > Veroeffentlichung von v1.6.0 behoben; der Bericht bleibt als Begruendung
 > stehen. WOV-1601: `tryParseRegions` trennt "leer = Form loeschen" von

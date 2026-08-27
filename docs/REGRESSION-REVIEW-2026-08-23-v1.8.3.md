@@ -1,5 +1,10 @@
 # Regression-Review: WebOverlay v1.8.3
 
+> **Historical snapshot.** This report describes the commit named in its
+> header, at that date. Its findings were addressed in the releases that
+> followed - see `CHANGELOG.md`. It is kept as evidence, not as a
+> description of the current library.
+
 **Datum:** 23. August 2026  
 **WebOverlay-Basis:** `6349a8aab8a4bfb31c6289a770c14e5de6d0b3e9` (`main`, Commit-Message `Ask the game for the cursor instead of overruling it (v1.8.3)`)  
 **Verglichen mit:** `4b394c07c5e8d5a113f5e8ac7959cb25bb4edea0` (`Write down the soft-dependency rules and what a HUD has to decide itself`)  

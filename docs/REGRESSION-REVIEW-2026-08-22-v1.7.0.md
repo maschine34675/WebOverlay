@@ -1,5 +1,10 @@
 # Regression-Review: WebOverlay v1.7.0
 
+> **Historical snapshot.** This report describes the commit named in its
+> header, at that date. Its findings were addressed in the releases that
+> followed - see `CHANGELOG.md`. It is kept as evidence, not as a
+> description of the current library.
+
 > **Bearbeitungsstand 2026-08-22:** WOV-1701 bis WOV-1705 sind vor der
 > Veroeffentlichung von v1.7.0 behoben. WOV-1701: Overlay-Erzeugung liegt in
 > einer eigenen Queue, nur sie wartet auf einen startenden Browser - Kommandos

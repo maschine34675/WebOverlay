@@ -1,5 +1,10 @@
 # Regression-Review: WebOverlay v1.8.0
 
+> **Historical snapshot.** This report describes the commit named in its
+> header, at that date. Its findings were addressed in the releases that
+> followed - see `CHANGELOG.md`. It is kept as evidence, not as a
+> description of the current library.
+
 **Datum:** 22. August 2026  
 **WebOverlay-Basis:** `4b394c07c5e8d5a113f5e8ac7959cb25bb4edea0` (`main`, Commit-Message `Write down the soft-dependency rules and what a HUD has to decide itself`)  
 **Verglichen mit:** `1bf88ff8baccf35b18dba23bb8d8b7d437f2cc52` (`Stop one mod's HUD from breaking another mod's window`)  

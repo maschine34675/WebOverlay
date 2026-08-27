@@ -14,6 +14,53 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.9.1]
+
+### Forge version notes
+
+- Documentation release: a landing page a newcomer can act on, a quickstart
+  that really compiles, and IntelliSense for the API. Nothing in the library's
+  behaviour changed.
+
+### Changed
+
+- The README is a landing page again instead of a 750-line reference: what the
+  library is, a compatibility box, installation, a quickstart, the demo, and a
+  map of the documentation. The reference moved next door -
+  `docs/API.md` (members, options, events, channels, threading, ordering),
+  `docs/RECIPES.md` (HUDs, shaping, real files and fonts, preview,
+  performance, security), `docs/TROUBLESHOOTING.md` (by symptom, ending in
+  what a useful bug report contains), and `docs/INTERNALS.md` (how it works,
+  and the review history). The content itself moved rather than being
+  rewritten; every "see above" that the split severed now points at the file
+  it means.
+
+- The quickstart is a complete plugin - reference block, hotkey, failure
+  handling, `Dispose` on shutdown - and it is not trusted but extracted:
+  `tools/Check-Quickstart.ps1` reads the two marked blocks out of the README
+  and compiles them verbatim against a real SPT installation. An outside
+  assessment found the previous example produced six compiler errors as
+  pasted, defined a method nothing called, and disposed nothing; each of
+  those is now either in the example or impossible to reintroduce silently.
+  The check was proven the same way as every other one here: break the
+  example, watch it fail, restore it.
+
+- Review reports under `docs/` are marked as what they are - dated snapshots
+  of the commit in their header, whose findings the following releases fixed.
+  `docs/INTERNALS.md` says where the current truth lives instead.
+
+### Added
+
+- `Anvil-WebOverlay.xml` ships in the release zip next to the DLL, so a
+  consumer referencing the installed library gets the documentation comments
+  as IntelliSense rather than as a website.
+
+### Notes
+
+- The build is warning-clean again: generating the XML surfaced one cref that
+  named a member `IWebOverlay` does not declare, and four fields of the
+  settings-menu attribute bag that only reflection ever reads.
+
 ## [1.9.0]
 
 ### Forge version notes

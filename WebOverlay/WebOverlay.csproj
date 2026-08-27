@@ -12,6 +12,12 @@
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
     <OutputPath>bin\$(Configuration)\</OutputPath>
+    <!-- IntelliSense for consumers: the XML rides next to the DLL in the
+         release zip, so referencing the installed library gives the doc
+         comments too. 1591 stays off - which members carry docs is an
+         editorial decision, not a compiler's. -->
+    <DocumentationFile>bin\$(Configuration)\Anvil-WebOverlay.xml</DocumentationFile>
+    <NoWarn>1591</NoWarn>
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
     <!-- Relative to the working copy: <Install>\Development\WebOverlay\WebOverlay\ -> <Install>.
@@ -77,6 +83,7 @@
     </PropertyGroup>
     <MakeDir Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" Directories="$(PluginDirectory)" />
     <Copy Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDirectory)" />
+    <Copy Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" SourceFiles="@(DocFileItem)" DestinationFolder="$(PluginDirectory)" />
     <Copy Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" SourceFiles="..\ThirdParty\WebView2\WebView2Loader.dll" DestinationFolder="$(PluginDirectory)" />
     <Copy Condition="Exists('$(SptRoot)\BepInEx\core\BepInEx.dll')" SourceFiles="..\ThirdParty\WebView2\WebView2-LICENSE.txt;..\ThirdParty\WebView2\WebView2-NOTICE.txt;..\LICENSE" DestinationFolder="$(PluginDirectory)" />
   </Target>

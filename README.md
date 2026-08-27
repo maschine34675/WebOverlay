@@ -6,6 +6,22 @@ interface in HTML instead of an immediate-mode toolkit.
 A page can be a URL, or just a string of markup - **no web server needed** -
 and it can talk to the game in both directions.
 
+![The demo plugin: an HTML panel, a transparent HUD and a WebGL cube over the game](https://raw.githubusercontent.com/maschine34675/WebOverlay/main/assets/demo.gif)
+
+## At a glance
+
+| | |
+|---|---|
+| Current version | see [Releases](https://github.com/maschine34675/WebOverlay/releases) - the changelog names what each one changed |
+| Tested with | SPT 4.1.x, BepInEx 5, in game |
+| Game coupling | none at compile time - the library references only BepInEx and Unity; its one game integration (asking EFT for the cursor) is reflective and falls back harmlessly |
+| Needs | Windows with the WebView2 runtime (in-box on current Windows 10/11 - and any machine that has run the SPT launcher has it, the launcher's own UI is WebView2) |
+| Window modes | borderless windowed or windowed; exclusive fullscreen is refused with a log line |
+| Not for | untrusted or arbitrary remote content - the security defaults assume pages the mod itself provides |
+
+Links in this file point at the repository rather than at neighbouring files,
+because this README also ships inside the release zip, where nothing else does.
+
 ## Installation
 
 Extract the release zip over the SPT folder; it places
@@ -14,724 +30,206 @@ the license texts. One installation serves every mod that uses the library.
 Players only need it when a mod lists it as a dependency. The demo plugin is a
 separate zip and purely optional.
 
-## For mod authors
+## Quickstart
 
-Reference `Anvil-WebOverlay.dll` and declare the dependency:
+A complete plugin - reference block, hotkey, failure handling, shutdown. It
+compiles and runs as pasted (a build check in this repository holds it to
+that).
 
+In your `.csproj`, next to your usual BepInEx and Unity references
+(`$(SptRoot)` is your SPT folder):
+
+<!-- quickstart-csproj:begin -->
+```xml
+<ItemGroup>
+  <Reference Include="BepInEx">
+    <HintPath>$(SptRoot)\BepInEx\core\BepInEx.dll</HintPath>
+    <Private>false</Private>
+  </Reference>
+  <Reference Include="UnityEngine">
+    <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.dll</HintPath>
+    <Private>false</Private>
+  </Reference>
+  <Reference Include="UnityEngine.CoreModule">
+    <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+    <Private>false</Private>
+  </Reference>
+  <Reference Include="UnityEngine.InputLegacyModule">
+    <HintPath>$(SptRoot)\EscapeFromTarkov_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+    <Private>false</Private>
+  </Reference>
+  <Reference Include="Anvil-WebOverlay">
+    <HintPath>$(SptRoot)\BepInEx\plugins\Anvil-WebOverlay\Anvil-WebOverlay.dll</HintPath>
+    <Private>false</Private>
+  </Reference>
+</ItemGroup>
+```
+<!-- quickstart-csproj:end -->
+
+`<Private>false</Private>` on the library matters: do **not** copy
+`Anvil-WebOverlay.dll` into your own release zip - it is a shared dependency
+the user installs once.
+
+The plugin - press F10 in game and the panel appears:
+
+<!-- quickstart-plugin:begin -->
 ```csharp
+using BepInEx;
+using UnityEngine;
+using WebOverlay;
+
 [BepInPlugin("com.you.yourmod", "You-YourMod", "1.0.0")]
-[BepInDependency("com.anvil.weboverlay")]
+// With a version: your code fails at JIT time if a member is missing, long
+// after BepInEx would have called a bare GUID dependency satisfied.
+[BepInDependency("com.anvil.weboverlay", "1.9.1")]
 public class YourPlugin : BaseUnityPlugin
 {
     private IWebOverlay overlay;
 
-    private void Open()
+    private void Update()
     {
-        overlay = WebOverlays.Create("My panel", new OverlayOptions { DevTools = true });
-        if (overlay == null)
-            return;                       // no runtime: use your own fallback
+        // Hardcoded for brevity. For a configurable hotkey, poll the key
+        // yourself as the demo plugin does - BepInEx's KeyboardShortcut.IsDown
+        // blocks while any unrelated key is held, walking included.
+        if (Input.GetKeyDown(KeyCode.F10))
+            Toggle();
+    }
 
-        overlay.LoadHtml("<h1>Hello</h1>");
-        overlay.MessageReceived += text => { /* the page called postMessage */ };
-        overlay.Post("hello page");       // arrives as a message event
+    private void Toggle()
+    {
+        if (overlay != null)
+        {
+            overlay.Toggle();
+            return;
+        }
+
+        // Asynchronous and non-blocking: null means overlays are already known
+        // to be unusable, anything later arrives through Failed.
+        overlay = WebOverlays.Create("My panel", new OverlayOptions());
+        if (overlay == null)
+        {
+            Logger.LogWarning("overlays are unavailable (is the WebView2 runtime installed?)");
+            return;
+        }
+
+        var created = overlay;
+        created.Failed += () =>
+        {
+            Logger.LogWarning("overlay failed (" + created.Failure + "): " + created.FailureMessage);
+            created.Dispose();
+            if (ReferenceEquals(overlay, created))
+                overlay = null;
+        };
+        created.MessageReceived += text => Logger.LogInfo("the page says: " + text);
+
+        created.LoadHtml("<!doctype html><h1>Hello</h1>"
+            + "<button onclick=\"window.chrome.webview.postMessage('clicked')\">Click me</button>");
+        created.Post("hello page");
+    }
+
+    private void OnDestroy()
+    {
+        overlay?.Dispose();
     }
 }
 ```
+<!-- quickstart-plugin:end -->
 
-From the page:
+From the page, the other direction:
 
 ```js
 window.chrome.webview.postMessage('button pressed');
 window.chrome.webview.addEventListener('message', e => console.log(e.data));
 ```
 
-If your mod should also work when this library is *not* installed, that takes
-more than a `try`/`catch` on Mono - and getting it slightly wrong can break
-other people's mods rather than yours. The rules, and the two shipping gates
-that follow them, are in
-[`docs/SOFT-DEPENDENCY.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/SOFT-DEPENDENCY.md).
+Three things to know before going further:
 
-`WebOverlays.Create` returns `null` when overlays are known to be unavailable,
-and otherwise a handle whose browser is still starting: creation is
-asynchronous and never blocks Unity's thread. Failures that surface later -
-no WebView2 runtime, a browser that will not start, a dead browser process -
-raise the handle's **`Failed`** event; dispose the handle there and use your
-fallback. **`Failure`** says which of those it was, so you can tell the user
-what to do about it, and `FailureMessage` carries the exact sentence:
+- Events arrive on the overlay's own thread by default. Queue what a handler
+  learns, or set `DispatchOnMainThread = true` and touch Unity directly - the
+  threading rules are at the top of
+  [`docs/API.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/API.md).
+- The example above makes the library a **hard** dependency, which is the
+  simple and usually right choice. If your mod should also work when the
+  library is *not* installed, that takes more than a `try`/`catch` on Mono -
+  and getting it slightly wrong breaks other people's mods rather than yours.
+  The rules, the shipping gates that follow them, and the build-time check for
+  both are in
+  [`docs/SOFT-DEPENDENCY.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/SOFT-DEPENDENCY.md).
+- Instead of `LoadHtml`, a page can be real files served from your plugin
+  folder - with storage, fonts and no size limit; see
+  [`docs/RECIPES.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/RECIPES.md).
 
-```csharp
-overlay.Failed += () =>
-{
-    switch (overlay.Failure)
-    {
-        case OverlayFailure.RuntimeMissing: /* "install the WebView2 runtime" */ break;
-        case OverlayFailure.CompositionUnavailable: /* "no glass HUD on this system" */ break;
-        case OverlayFailure.RendererCrashed: /* "the page died - reopen it" */ break;
-        default: /* overlay.FailureMessage has the details */ break;
-    }
-};
-```
+## The demo
 
-`Ready` fires once the view is fully set up; **`PageLoaded`** (and
-`IsPageLoaded`) fires once the page you targeted is live, on every navigation.
-Messages or scripts sent before that wait in a bounded outbox, so posting right
-after `Create` is fine - only a consumer that streams should hold off while
-`IsPageLoaded` is false rather than fill the outbox.
+Install the demo zip to see all of it working: **F10** toggles the HTML panel
+above, **F11** a click-through transparent HUD, **F8** an interactive glass
+panel, and **F7** a Three.js WebGL cube that follows the player camera. Its
+source, [`WebOverlay.Demo/DemoPlugin.cs`](https://github.com/maschine34675/WebOverlay/blob/main/WebOverlay.Demo/DemoPlugin.cs),
+is the reference consumer - every pattern in it is there because something
+needed it.
 
-Events arrive on the overlay thread - except a latched `Ready`/`Failed`
-subscribed after the fact, which runs on the subscribing thread. Either queue
-what a handler learns and touch game state from `Update()`, or set
-**`DispatchOnMainThread`** and skip that boilerplate: the library then delivers
-every event from its own `Update`, so handlers may touch Unity objects
-directly. The cost is up to one frame of delay - a late `Ready`/`Failed`
-subscription included, which then also arrives from the next frame instead of
-inside the `+=` - and events still queued when you `Dispose` the handle are
-dropped.
+## Documentation
 
-One thing to know before doing real work in a dispatched handler: it runs
-inside **this library's** `Update`, so a profiler bills the time to the library
-rather than to your mod, and where it lands in the frame depends on plugin load
-order. Keep such handlers short - or take
-`Dispatch = EventDispatch.Manual` and call `PumpEvents()` from your own
-`Update`, which delivers the same events at the point you choose and on your
-own frame budget. Nothing arrives until you pump, so a mod that stops pumping
-stops hearing.
-
-When another mod ships alongside this library, reference it with
-`<Private>false</Private>` and do **not** copy `Anvil-WebOverlay.dll` into your
-own release zip - it is a shared dependency the user installs once.
-
-Install the demo plugin to see a working panel: press **F10** in game,
-**F11** for the transparent HUD demo, **F8** for the interactive glass
-panel, and **F7** for a Three.js WebGL cube that follows the player camera.
-
-Links below point at the repository rather than at neighbouring files: this
-README also ships inside the release zip, where nothing else does.
-
-What changed between versions is in [CHANGELOG.md](https://github.com/maschine34675/WebOverlay/blob/main/CHANGELOG.md); this file
-describes the library as it is now.
-
-## API reference
-
-`WebOverlays` (static):
-
-| Member | Meaning |
+| | |
 |---|---|
-| `Create(title, options)` | New overlay handle, or null when overlays are already known to be unusable. Asynchronous - see above. |
-| `IsAvailable` | Kicks off the browser start (side effect!) and reports whether overlays are still plausible. |
-| `RuntimeVersion` | The installed WebView2 runtime version, once known. |
-
-`OverlayOptions`:
-
-| Option | Default | Meaning |
-|---|---|---|
-| `Width`, `Height` | 0 | Pixels; 0 means 80% / 85% of the game window (HUDs: the whole game picture). |
-| `Frame` | true | Title bar with close button, recolored to a dark game tone. |
-| `CloseKeys` | Escape | Virtual-key codes that hide the overlay while it has the keyboard. |
-| `ContextMenu` | false | Allow the browser's right-click menu. |
-| `DevTools` | false | Allow F12 developer tools and browser accelerator keys. |
-| `Opacity` | 1.0 | Whole-window fade, 0.15-1.0. |
-| `Transparent` | false | HUD: unpainted pixels show the game (see below). |
-| `Interactive` | false | The HUD receives mouse input - clickable glass (see below). |
-| `AllowedOrigins` | null | Extra origins allowed for navigation and messages. |
-| `RememberBounds` | true | Reopen at the position and size the player left the window at, across sessions. |
-| `PersistenceKey` | assembly/title | Storage key for the remembered bounds. |
-| `DispatchOnMainThread` | false | Raise this overlay's events from the game's main thread (see below). |
-| `Dispatch` | OverlayThread | Where events arrive: `OverlayThread`, `MainThread`, or `Manual` with `PumpEvents()`. |
-| `InjectTheme` | false | Put the library palette on the page as CSS variables (see [`docs/STYLE.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/STYLE.md)). |
-| `FreeCursorWhileShown` | false | Hand the cursor back while this overlay is up and the game is unfocused. |
-| `ClickThroughWhenUnfocused` | false | Let the mouse reach the game while the game is in front - needed for a panel over the middle of the screen (see above). |
-| `VirtualHosts` | null | Folders served as `https://<host>/`, so the page can load real files (see below). |
-
-`IWebOverlay`:
-
-| Member | Meaning |
-|---|---|
-| `Show()`, `Hide()`, `Toggle()` | Visibility. `IsVisible` reads the current state. |
-| `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
-| `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
-| `Post(channel, payload)` | Send on a named channel; arrives at the page's `overlay.on(channel, ...)`. |
-| `Post(channel, payload, options)` | The same, `Retain`ed for pages that load later or only worth sending while `LatestOnly` (see below). |
-| `PumpEvents()` | Deliver this overlay's waiting events, for `Dispatch = Manual`. |
-| `Request(channel, payload, answer)` | Ask the page a question; answered exactly once, `null` on timeout. |
-| `OnRequest(channel, handler)` | Answer questions the page asks with `overlay.request(...)`; null removes the handler. Take `(payload, reply)` instead of returning a value when the answer is not ready yet. |
-| `Transparency` | Which transparency this overlay got: `Composition`, `ChromaKey` or `None`. |
-| `ExecuteScript(script, result)` | Same, and hands back what the script evaluated to, as JSON. |
-| `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
-| `SetBounds(x, y, w, h)` | Move or resize at runtime; null keeps a value. Not persisted. |
-| `SetShape(regions)` | Cut the overlay down to these rectangles - picture and mouse both (see below). |
-| `IsPageLoaded` | Whether the page you targeted has finished loading. |
-| `Failure`, `FailureMessage` | Why `Failed` fired, as a cause you can act on plus the exact sentence. |
-| `MessageReceived` | The page called `postMessage` with something that is not channel traffic. Overlay thread. |
-| `ChannelMessage` | The page called `overlay.send(channel, payload)`. Overlay thread. |
-| `KeyPressed` | A key pressed in the overlay that did not close it. Overlay thread. |
-| `Closed` | Fires on every hide or close - not only on destruction. Overlay thread. |
-| `VisibilityChanged` | The overlay became visible or invisible; only on real changes. Overlay thread. |
-| `PageLoaded` | Your page is live; fires again on every navigation. Overlay thread. |
-| `Ready`, `Failed` | Latched creation outcome - see above for threading. |
-| `Dispose()` | Destroys the overlay window. |
-
-`OverlayFailure`: `RuntimeMissing` (no WebView2 runtime - the user installs
-it), `LibraryIncomplete` (`WebView2Loader.dll` missing next to this library -
-reinstall it), `EnvironmentFailed` (the shared browser did not start - no
-overlays this session), `WindowFailed` / `ViewFailed` (this overlay could not
-be built), `CompositionUnavailable` (transparency cannot be delivered here - a
-solid panel would still work), `RendererCrashed` (the browser or its renderer
-died after bounded reload attempts - creating it again may work).
-
-Every event above is delivered from the game's main thread instead when the
-overlay was created with `DispatchOnMainThread = true`, and waits for your own
-`PumpEvents()` call with `Dispatch = EventDispatch.Manual`. That includes the
-latched `Ready` and `Failed`: outside the default overlay-thread mode, even a
-late subscription is queued rather than run inside the `+=`, so do not read
-your fallback flag on the frame you subscribed.
-
-`ExecuteScript(script, result)` answers the callback exactly once - with the
-JSON the script evaluated to, or `null` when it could not run at all (no page,
-a page that is no longer your target, an overlay that closed, a rejected
-call, a renderer that crashed under it). That holds even if you dispose the
-handle while the script is still running: closing the overlay answers whoever
-is waiting, rather than leaving them waiting forever - with
-`EventDispatch.Manual` too, where the answers owed at that moment go out on the
-spot rather than into a queue nobody will pump again. While the handle is
-alive, though, a Manual overlay hands you its answers on `PumpEvents()` like
-everything else, so keep pumping while you wait for one. The one case where
-nothing is delivered is the game shutting down. A script that throws is reported by the browser as the JSON
-`"null"`, which is indistinguishable from a script that really evaluated to
-null.
-
-`VisibilityChanged` is the event to use for "is my overlay showing": it fires
-only on real transitions, including the `false` when a failure hides the
-overlay - but not while the game is shutting down, where the library stays
-quiet so nothing starts a fallback on the way out. `Closed` also fires for your own `Hide()`, so it cannot tell a player
-closing the window from the mod closing it; that will narrow in a future major
-version.
-
-Windows keep the spot the player gave them: toggling does not recenter, and
-the position and size survive restarts (`%LOCALAPPDATA%\WebOverlay\window-bounds.txt`).
-A remembered spot that is no longer on any screen falls back to the centered
-default, HUDs always follow the game window instead, and `RememberBounds =
-false` restores the old center-on-every-show behaviour.
-
-## Named channels and request/reply
-
-One untyped string in each direction works, but every mod ends up inventing
-the same `prefix:payload` convention and writing the page half by hand. The
-library provides it instead, as `window.overlay` - injected before any page
-script runs, on every document:
-
-```csharp
-overlay.Post("fps", "144");                        // mod -> page, on a channel
-overlay.ChannelMessage += (channel, payload) => { ... };  // page -> mod
-overlay.Request("zoom", "1.5", answer => { ... });        // mod asks, page answers
-overlay.OnRequest("stash", query => LookUp(query));       // page asks, mod answers
-```
-
-```js
-overlay.on('fps', value => show(value));           // mod -> page
-overlay.send('button', 'reload');                  // page -> mod
-overlay.onRequest('zoom', v => applyZoom(v));      // mod asks; may return a promise
-overlay.request('stash', 'ammo').then(json => ...) // page asks, resolves with the answer
-```
-
-Two things a channel message can be beyond "send this now":
-
-```csharp
-overlay.Post("config", json, PostOptions.Retain);       // every page that loads gets it
-overlay.Post("frame", data, PostOptions.LatestOnly);    // only while it is the newest
-```
-
-**Retained** is the answer to a trap: the library reloads a page by itself
-after a renderer crash, and the fresh document starts from its own defaults -
-so configuration a mod sent once is quietly gone mid-session, and the mod's own
-dirty-check sees no change to re-send. A retained payload is remembered per
-channel and handed to every page that loads afterwards, before anything else
-reaches it. Retargeting the overlay with `LoadHtml` or `Navigate` forgets them:
-the page changed, so its state is not the new page's state. (Setting state up
-*before* naming the first page is fine - that page is the one it was meant
-for.)
-
-**Latest-only** drops a payload that has not been sent yet when a newer one on
-the same channel arrives, which is what per-frame telemetry wants. It applies
-while the library still holds the message; once it has gone to the browser
-there is no queue here to collapse. The other half is in the page, which is
-where a backlog actually forms:
-
-```js
-overlay.on('frame', draw, { latest: true });   // newest payload, once per frame
-```
-
-A request is answered **exactly once**: with the other side's reply, with
-`null` when nothing answers that channel, and with `null` when the deadline
-(five seconds by default, `Request(..., timeoutMilliseconds)` to change it)
-passes. So neither side can hang the other, whatever the page does.
-
-When an answer is not ready yet, take the deferred form of `OnRequest` and
-call `reply` later, from wherever the answer arrives:
-
-```csharp
-overlay.OnRequest("rescan", (payload, reply) => StartCoroutine(Rescan(reply)));
-```
-
-The page can raise its own deadline with `overlay.request(channel, payload,
-timeoutMs)` when it expects to wait. A reply that arrives after the page gave
-up is dropped rather than resolving a stale promise, and a handler that throws
-before replying answers `null`.
-
-Pages also learn what they are running in without asking the mod: the library
-puts `wo-composed`, `wo-chroma` or `wo-opaque` on the root element (and
-`overlay.env.transparency` says the same), so a stylesheet can adapt to the
-kind of transparency it actually got. `OverlayOptions.InjectTheme` additionally
-sets the library palette as CSS variables - see [`docs/STYLE.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/STYLE.md).
-
-`window.overlay` exists only inside an overlay. A page that should also open in
-an ordinary browser wants one guard line (`if (window.overlay) { ... }`) rather
-than a console full of errors.
-
-**Order.** Messages a mod posts arrive at the page in the order it posted
-them - across channels, not merely within one, because every send goes through
-a single queue rather than one queue per channel. Before the page is ready they
-wait in that queue and are flushed in the same order; `Retain` values replay
-first, when the page loads, in the order the mod first set each channel. So
-posting a value and then asking the page about it is safe as written.
-
-`LatestOnly` is the one exception, and deliberately: a newer message replaces
-the one still waiting on that channel and takes its place, so the page sees the
-newest payload at the position of the first one that was waiting. If the queue
-overflows the extra sends are dropped with a warning, never reordered.
-
-The plain `Post` / `MessageReceived` pair is untouched and keeps working:
-anything that is not a well-formed envelope reaches `MessageReceived`
-verbatim, including a page's own JSON. The protocol reserves exactly one
-name - a top-level `__wo` key in a JSON message - and channel names beginning
-with `__wo.` belong to the library.
-
-## Shaping a HUD, and moving a window
-
-An `Interactive` HUD takes the mouse over its whole rectangle, which is fine
-for a small panel and useless for one that covers the screen. `SetShape` cuts
-the overlay down to the rectangles it actually uses:
-
-```csharp
-overlay.SetShape(new[] { new OverlayRegion(20, 20, 260, 120) });
-overlay.SetShape(null);                                  // whole window again
-```
-
-```js
-overlay.setShape([document.querySelector('#panel')]);    // elements or {x,y,w,h}
-```
-
-Inside those rectangles the overlay draws and takes the mouse; outside them
-the game gets the click and nothing is painted. Rectangles are measured from
-the top-left of the page, so a framed window keeps its title bar, and a shape
-the library cannot read is ignored rather than applied as "no shape" - losing
-a shape would hand a full-screen HUD back the whole mouse. **Both halves are the same
-mechanism and cannot be separated** - what is cut away is cut away for both -
-so pad the rectangles a little if your content has soft shadows, and call it
-again when the layout changes. Windows offers no way to keep the picture and
-give up only the mouse: answering the hit test with "not me" passes clicks
-only to windows of the same thread, which the game never is (measured: the
-click reaches nothing at all), and the mechanism that does route clicks across
-processes is the one used here, which clips.
-
-`SetBounds(x, y, width, height)` moves or resizes a window at runtime, in
-screen coordinates; any argument left null keeps its current value. It is not written to the
-remembered-bounds store - that belongs to the player - but it does win over a
-remembered spot for the rest of the session. HUDs follow the game picture, so
-this is for panels.
-
-## Pages with real files
-
-`LoadHtml` takes one self-contained string, which is enough for a panel but
-awkward once a UI has scripts, fonts or images - and the document itself is
-capped at 2 MB by the browser. `VirtualHosts` serves a folder of yours under a
-host name instead:
-
-```csharp
-var overlay = WebOverlays.Create("Studio", new OverlayOptions
-{
-    VirtualHosts = new[] { new VirtualHost("yourmod.assets", assetFolder) },
-});
-overlay.Navigate("https://yourmod.assets/index.html");
-```
-
-Navigating there, rather than pushing markup in with `LoadHtml`, is what makes
-the difference - the page then has a **real origin**, and with it:
-
-- assets load from disk as ordinary relative URLs, fonts included;
-- `localStorage` and `sessionStorage` work, isolated per host name, so your UI
-  can remember its own state;
-- no 2 MB document limit;
-- real file paths in the developer tools instead of one giant inline document.
-
-An **inline page has none of that**: `LoadHtml` documents run in an opaque
-origin, where `localStorage`, `sessionStorage` and `document.cookie` each throw
-`SecurityError` on first touch (measured). A page that reads `localStorage`
-without a `try`/`catch` therefore aborts the surrounding script and leaves a
-half-built UI with no visible error - if your page wants storage, give it a
-virtual host.
-
-The mapped folder is served read-only, and the mapping exists only inside your
-overlay's own browser view - nothing outside it can reach the files. Inside it,
-`fetch` and XHR from another origin are denied; a different origin you allow in
-the same overlay can still load files as a script, image or iframe, so map a
-folder that holds only what your interface serves. (That is
-`DENY_CORS` rather than the stricter `DENY`, deliberately: an inline `LoadHtml`
-page has an opaque origin, and under `DENY` even your own markup could not
-reach its assets - measured, rows 66 and 67.)
-
-**Web fonts are the trap.** They are fetched in CORS mode by specification, so
-the default refuses every face: the page renders in a fallback and nothing
-reports it. Two shapes meet this, and the second is easy to miss:
-
-- A page on one host of yours loading a face from another host of yours. The
-  face is cross-origin, so it is refused.
-- **An inline `LoadHtml` page loading a face from your only host.** A
-  `LoadHtml` document has an opaque origin, so it is cross-origin to *every*
-  mapped host - including the single one you gave it. Having one host is not
-  protection here.
-
-Either way, say what the folder holding the fonts may serve:
-
-```csharp
-VirtualHosts = new[]
-{
-    new VirtualHost("yourmod.ui", pageFolder),
-    new VirtualHost("yourmod.fonts", fontFolder) { Access = HostAccess.Allow },
-},
-```
-
-`Access` is a property of the host being **read**, not of a pair - it belongs on
-the host the fonts come from, never on the page's own. And it is not free:
-`Allow` is the equivalent of that folder answering
-`Access-Control-Allow-Origin: *` to every origin in the overlay, including any
-remote origin you put in `AllowedOrigins`. So point it at a folder holding only
-what the page may read - which is the reason to split the hosts rather than map
-your whole plugin directory.
-
-The mapped origin is trusted for navigation and messages exactly like a
-`Navigate` target; pick a host name unique to your mod, since it is also the key
-its storage belongs to.
-
-Mapping is all-or-nothing on purpose. If a folder is missing, a host name is
-malformed, or the runtime is too old to map folders at all, the overlay fails
-with `VirtualHostFailed` instead of starting, and navigation to that host stays
-refused. Otherwise a host name that happens to resolve would quietly fetch a
-real site from the internet under an origin your page - and this library's
-message bridge - treat as your own folder.
-
-## Previewing a page without starting the game
-
-Building a HUD by launching a raid to look at it gets old fast. The repository
-carries the host this library was tested with, and one of its modes shows your
-page in a real overlay - same window, same transparency, same message bridge:
-
-```bash
-dotnet build WebOverlay/WebOverlay.csproj -c Release
-dotnet run --project tools/Probe -c Release -- preview path/to/page.html --transparent
-```
-
-It serves the file from its own folder, so relative assets and storage behave
-as they will in the mod; `--post <channel> <text>` feeds the page messages,
-whatever the page sends back is printed, and `--screenshot` saves what it
-looks like. [`tools/Probe/sample-page.html`](https://github.com/maschine34675/WebOverlay/blob/main/tools/Probe/sample-page.html) is a worked example to start from,
-and [`tools/Probe/README.md`](https://github.com/maschine34675/WebOverlay/blob/main/tools/Probe/README.md) has the rest.
-
-## Security defaults
-
-The overlay is meant for pages the mod itself provides, and the defaults
-enforce that:
-
-- Navigation is allowed only to origins the mod itself asked for (each
-  `Navigate` URL's origin, plus `OverlayOptions.AllowedOrigins`); redirects
-  and followed links to anywhere else are cancelled.
-- Messages are dropped unless they come from an allowed origin, so a foreign
-  page never reaches the message bridge. Outgoing sends are bound to the
-  mod's target at origin granularity: a redirect to a different path on the
-  same origin still counts as the target, as in the classic origin model.
-- Popups are suppressed, permission prompts (camera, location, ...) are
-  denied, `alert()`-style script dialogs are off, and the browser's password
-  saving and form autofill are disabled on runtimes that support those
-  settings (2021 or newer; older ones keep their defaults) - the browser
-  profile is shared by every mod using the library (one per Windows user
-  under `%LOCALAPPDATA%\WebOverlay`), so nothing sensitive should be stored
-  in it.
-- Browser accelerator keys (print, find, refresh) are off unless the overlay
-  was created with `DevTools = true` - same runtime caveat.
-- One script of the library's own runs in every document, before the page's
-  scripts: it provides `window.overlay` for named channels. It only wraps the
-  message bridge the page already had, so it grants no new reach; the name
-  `overlay` and the `__wo` prefix are reserved for it.
-
-## Translucency and HUDs
-
-Two options in `OverlayOptions` control how much of the game shows through:
-
-- **`Opacity`** (0.15 to 1.0) fades the whole window - content included -
-  evenly. The overlay stays a normal interactive window; this suits panels that
-  should not completely cover the game.
-- **`Transparent`** turns the overlay into a HUD. Pixels the page leaves
-  unpainted show the game; painted content floats over it. Without
-  `Interactive` the window ignores the mouse and never takes focus, so the
-  game stays fully playable. Unless a size is set the HUD covers the game's
-  whole picture, and the page decides where on it something appears (a sized
-  HUD sits at the picture's top-left corner).
-- **`Interactive`** (on a `Transparent` overlay) forwards mouse input to the
-  page: HTML buttons, hover states and wheel scrolling work while the game
-  keeps the keyboard. The window swallows mouse input over its whole
-  rectangle, so either size an interactive overlay to its content or cut it
-  down with `SetShape` (see above). `CloseKeys` do
-  not apply (no keyboard); hide it from the mod's own hotkey. Wheel scrolling
-  over the unfocused overlay relies on Windows' "scroll inactive windows"
-  setting (default on in Windows 10/11).
-
-On Windows 8+ with a 2021+ WebView2 runtime, HUDs are **composition hosted**:
-transparency is true per-pixel alpha, so `rgba()` glass, soft shadows and
-clean antialiasing all blend with the game (`Opacity` is ignored there - fade
-in the page's CSS instead). On older systems a display-only HUD falls back to
-a **chroma key** with these rules; an interactive one fails instead:
-
-- Per-pixel transparency is binary: semi-transparent page pixels blend towards
-  near-black rather than the game - solid dark panels are the safe look.
-- `rgb(3,1,3)` is the reserved transparency key; avoid painting it.
-
-The page can read which of the two it got - `IWebOverlay.Transparency` on the
-mod side, `overlay.env.transparency` and a `wo-composed` / `wo-chroma` /
-`wo-opaque` class on the root element in the page - so one stylesheet can
-serve both.
-
-### What a HUD has to decide for itself
-
-An overlay is an operating-system window sitting above the game. That is what
-makes it work at all, and it is also the source of every surprise below. None
-of these are library behaviour the mod can turn off; they are decisions the
-mod has to make. Each is one line once known, and invisible until a player
-reports it.
-
-- **It floats over the game's own screens too** - the inventory, the map, the
-  menus, the death sequence. A HUD that should only exist during play has to
-  say so: in EFT that is
-  `EftScreenManager.Instance.CheckCurrentScreen(EEftScreenType.BattleUI)` plus
-  the player's `HealthController.IsAlive`, checked on a timer or a screen
-  event, with `Hide()` when it no longer holds.
-- **The hideout looks exactly like a raid** to every obvious test: it registers
-  a `GameWorld`, the game reaches `GameStatus.Started`, and there is a player
-  flagged `IsYourPlayer`. Exclude it by world type (`HideoutGameWorld`) or your
-  HUD will greet the player over their workbench.
-- **Pick one mechanism for showing and hiding the page.** A page that toggles a
-  CSS class *and* writes `style.opacity` will find the inline value wins every
-  time - this is ordinary CSS precedence, not the overlay, and it has cost more
-  than one review round.
-
-Two traps that used to belong here have been closed by the library: page-side
-configuration no longer has to be re-sent on every `PageLoaded` - send it with
-`PostOptions.Retain` and the library replays it after its own reload (1.8.0) -
-and `Show()` refuses exclusive fullscreen by itself, logging once, rather than
-leaving each caller to guard it (1.7.0).
-
-## Performance
-
-Numbers from the library's empirical probe host (WebView2 runtime 151) on a
-machine that only has Windows' software rasterizer - one measured data
-point, not a guarantee for other hardware. The method: a page that echoes
-every message straight back, timed from `Post` to the answering
-`MessageReceived`.
-
-- **Round trip** (game → page → game): median 0.48 ms, 95th percentile
-  0.71 ms over 200 round trips.
-- **Throughput**: a burst of 1000 round trips finished in 104 ms - about
-  9,600 messages per second. One `Post` per rendered frame, as the demo's
-  cube HUD does, uses a fraction of that even at high refresh rates.
-- **Visible latency**: a message that changes what the page shows becomes
-  visible within one to two display frames.
-- The browser renders in its own process tree, so the page's layout,
-  painting and JavaScript never run on the game's thread; a `Post` costs the
-  game only assembling and queueing the string. The browser processes still
-  share the machine's CPU and GPU, though - budget a heavy page like any
-  program running alongside the game.
-
-### 3D content: WebGL
-
-Pages get Chromium's regular **WebGL2** (ANGLE over Direct3D 11), so
-libraries like Three.js just work - the demo's F7 cube is one, fed by
-per-frame `Post` messages. Even the probe machine's software rasterizer held
-~30 fps at 340×340; with a GPU present Chromium hardware-accelerates the
-same path. WebGPU is not exposed by the tested runtime (`navigator.gpu` is
-absent) - target WebGL.
-
-## Requirements and limits
-
-- Needs the Microsoft WebView2 runtime, which current Windows 10 and 11
-  installations already include - and which any machine that has started the
-  SPT launcher demonstrably has, since the launcher's own interface is a web UI
-  hosted in WebView2. Without it the failure surfaces asynchronously: the first
+| [`docs/API.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/API.md) | every member, the options, events, failure causes, channels and request/reply, threading, ordering |
+| [`docs/RECIPES.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/RECIPES.md) | HUDs and transparency, shaping, real files and web fonts, previewing without the game, performance, security defaults |
+| [`docs/TROUBLESHOOTING.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/TROUBLESHOOTING.md) | by symptom: dead mouse, flickering cursor, wrong fonts, missing window - and what a useful bug report contains |
+| [`docs/SOFT-DEPENDENCY.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/SOFT-DEPENDENCY.md) | using the library as an optional dependency without breaking anyone, plus the version table |
+| [`docs/STYLE.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/STYLE.md) | the shared design tokens `InjectTheme` provides |
+| [`docs/INTERNALS.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/INTERNALS.md) | how it works and why it looks like this; the review history |
+| [`docs/FAULT-TESTS.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/FAULT-TESTS.md) | the measured evidence - one row per proven behaviour |
+| [`CHANGELOG.md`](https://github.com/maschine34675/WebOverlay/blob/main/CHANGELOG.md) | what changed between versions; this file describes the library as it is now |
+
+## Requirements
+
+- Windows with the Microsoft WebView2 runtime. Without it, the first
   `WebOverlays.Create` still returns a handle whose `Failed` event fires
   shortly after; later calls return null.
-- Overlays keep to a browser of their own. The runtime is shared with anything
-  else using it, the launcher included, but the browser *process* is not: this
-  library gives its browser a user data folder of its own, and WebView2 only
-  pools processes across environments that share a folder. So nothing here can
-  disturb - or be disturbed by - another application's WebView2.
-- Needs borderless windowed or windowed mode. In exclusive fullscreen a window
-  over the game would minimise it, so `Show()` refuses and logs there. Current
-  Escape From Tushonka appears to stay borderless even when set to fullscreen,
-  so this is insurance rather than a case you are likely to meet;
-  `WebOverlayPlugin.IsDisplayModeSupported` is still public for a mod that
-  wants to explain the situation in its own interface.
-- **A window over the middle of the screen takes the mouse away from the
-  game.** While the game has focus it locks the cursor to the centre of its own
-  window, and Windows delivers mouse movement to whatever window sits under the
-  pointer - so a panel covering that point receives the movement instead, and
-  the player cannot turn. Nothing reports an error: the cursor state is
-  correct, the game has the foreground, and the input simply never arrives.
-  Holding a mouse button restores it, because that gives the game window a
-  capture.
+- Borderless windowed or windowed mode - in exclusive fullscreen a window over
+  the game would minimise it, so `Show()` refuses and logs.
+- The library runs a browser of its own, with its own user data folder, so it
+  neither disturbs nor is disturbed by any other application's WebView2 - the
+  SPT launcher included.
 
-  It is worth knowing while choosing a size and a position, and the default is
-  the trap: a window that sets no `Width` and `Height` gets 80% by 85% of the
-  game's picture, centred on it, which cannot avoid that point. A smaller one
-  placed to the side never meets the problem at all, and setting a size of your
-  own is the cheapest way past this whole section.
+The sharp edges of a window over a game's cursor and keyboard are in
+[`docs/TROUBLESHOOTING.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/TROUBLESHOOTING.md);
+what a HUD has to decide for itself - menus, the hideout, showing and hiding -
+is in
+[`docs/RECIPES.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/RECIPES.md#translucency-and-huds).
 
-  Measured with the library's own setting - **Diagnostics / Log cursor state**
-  in the F12 configuration menu, behind its Advanced switch. It reports which
-  window the system has in front, what the cursor is doing, and whether Unity
-  sees the mouse move at all. Off by default, and of no use except while
-  writing a bug report.
+## Reporting a problem
 
-  Its neighbour, **Diagnostics / Log page problems**, answers the other kind of
-  report: a script error, a rejected promise, a console error or a font that
-  would not load, from inside the page itself. Nothing in there reaches the log
-  otherwise - a refused font renders as a silent fallback, and the report says
-  "it looks wrong" and nothing more. Also off by default. The hooks are part
-  of the script injected when a window is created, so switching it on reaches
-  windows opened afterwards - not one already on screen, and not merely the
-  next page in it.
-
-  `ClickThroughWhenUnfocused` is the answer for a panel that cannot avoid it:
-  while the game is in front, the mouse passes straight through the overlay to
-  the game. The panel stays visible and keeps updating; what it loses is being
-  clickable, so bring it back with its hotkey rather than by clicking it. Off
-  by default, because a panel that does not cover the centre wants no such
-  thing - and pointless for a HUD, which never holds the foreground anyway.
-  It engages only while the game actually holds the mouse, so in menus the
-  panel behaves like any other window.
-
-- A framed overlay takes the foreground, and a game that captures the mouse
-  keeps capturing it - which leaves the window unreachable mid-raid. Set
-  `FreeCursorWhileShown` and the library hands the cursor back while such an
-  overlay is the window in front.
-
-  It does that by asking the game to want the cursor, not by overruling it.
-  The game decides once per frame what the cursor state should be and writes
-  it only when the live state disagrees - so a mod that simply sets
-  `Cursor.visible` creates that disagreement every frame, and the two
-  alternate at frame rate. That is the flickering cursor every overlay mod
-  runs into, and it is worse than it looks: the game's write also swaps the
-  cursor bitmap for a transparent one, which a mod forcing the property never
-  restores. Setting the game's own "show the cursor" flag instead means there
-  is nothing to disagree about, and the single write the game then performs
-  restores visibility, lock mode and bitmap together.
-
-  The flag is reached by reflection, so this library still references nothing
-  but BepInEx and Unity. A game that does not have it falls back to setting the
-  properties directly, which flickers - better than an unreachable window. Note
-  that the flag is global and has no counter: a second mod releasing it takes
-  the cursor from the first. A mod doing this itself, rather than through this
-  library, should raise `EFT.GlobalEvents.ToggleShowInGameCursorEvent` the way
-  the game does - or register an input node whose `ShouldLockCursor()` returns
-  `ECursorResult.ShowCursor`, which composes properly because the input tree
-  takes the maximum across nodes.
-- `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`
-  turn a configurable hotkey into the virtual-key codes `CloseKeys` wants.
-- While the overlay holds the keyboard the game does not see key presses, and
-  the other way round. That is why the window has a title bar with a close
-  button by default, and why `OverlayOptions.CloseKeys` exists. The title bar
-  is recolored to a dark game-appropriate grey (Windows 11 exact, Windows 10
-  dark mode, older keeps the stock look); `OverlayOptions.Frame = false`
-  removes it entirely - then the close keys are the only way out, so make sure
-  they are set.
-
-## How it works, and why it looks like this
-
-- **The bundled `WebView2Loader.dll` is a bootstrapper, not the browser.** It is
-  160 KB that locates the WebView2 runtime already installed on the machine,
-  loads its client DLL and forwards to it; every browser feature comes from that
-  runtime. The runtime itself is a full Chromium build of several hundred
-  megabytes which Microsoft distributes rather than letting apps ship it: it is
-  in-box on Windows 11, was rolled out to Windows 10 through Microsoft Edge, and
-  updates itself through the Edge updater, not through this library. That is
-  also why the loader's own version matters so little - it is version-agnostic
-  by design and only skips runtimes below its minimum. Which features exist is
-  decided per interface at `QueryInterface` time, so an older runtime does not
-  fail to load; individual capabilities simply fall back, exactly as HUD
-  transparency does when composition support is missing.
-- **One browser for the whole game, almost always.** Every WebView2 environment
-  starts its own browser process tree and wants its user-data folder to itself,
-  so the library keeps a single environment and gives out as many overlay
-  windows as mods ask for. There is one exception, forced by the browser: a
-  browser that is hosting a transparent overlay refuses to create a windowed
-  one (`ERROR_INVALID_STATE`), and environments sharing a user data folder
-  share the browser. So when a mod opens a window while another mod's
-  transparent overlay is up, that window gets a second browser of its own -
-  about six processes and a quarter of a gigabyte, measured, which is why it is
-  created only for that case and not up front. Pages in it have their own
-  browser profile, so per-origin storage does not carry across.
-- **Its own thread.** WebView2 is COM and needs a thread that is STA and pumps
-  messages. The game's main thread is neither, so the library runs one.
-- **Owned popup windows, not child windows.** Unity presents through a
-  flip-model swapchain, which does not composite child windows.
-- **Hand-built COM vtables instead of Microsoft's managed wrapper.** The wrapper
-  cannot be used under Unity's Mono: the SDK marks inherited vtable slots with
-  `_VtblGap`, Mono ignores those markers, and native calls then land on the
-  wrong function - measured, it kills the process with no managed exception.
-  Function pointers taken from delegates work reliably, so every interface used
-  here is bound by explicit slot number, taken from the official `WebView2.h`.
-  Members of versioned interfaces (`ICoreWebView2Controller2` and later) are
-  reached only via an explicit `QueryInterface` plus an absolute slot counted
-  through every inherited member - and each such slot must be proven by an
-  observable effect before it is trusted; see `Interop/WebView2Api.cs`.
-- **A HUD is composed, not drawn into its window.** The browser renders into a
-  DirectComposition visual instead of a child window
-  (`WS_EX_NOREDIRECTIONBITMAP`), which is what makes true per-pixel alpha and
-  forwarded mouse input possible at all. One trap worth knowing if you build
-  something similar: `WS_EX_TRANSPARENT` only takes a window out of hit-testing
-  when `WS_EX_LAYERED` is set as well, so a display-only HUD carries both -
-  learned from a release where it swallowed every click.
-- **The chroma key is what older systems fall back to.** DWM applies
-  `LWA_COLORKEY` to a window's classic redirection surface, which Chromium's
-  GPU compositing bypasses - so keying the page's own pixels does not work
-  (measured). What does work: `DefaultBackgroundColor` alpha 0 makes the
-  browser render nothing where the page paints nothing, those pixels show the
-  window's key-color background brush, and the chroma key replaces exactly
-  them with the game. Hit-testing reads the same surface, which is why such a
-  HUD is click-through everywhere and cannot be selective.
-
-One caution: WebView2 transparency has regressed before in runtime updates
-(opaque instead of transparent, runtime 145.x, fixed since). If a HUD suddenly
-shows a dark background after a Windows update, suspect the runtime first.
-
-## Roadmap
-
-- Keyboard forwarding for interactive HUDs (text fields in glass panels).
-- Touch/pen input via `SendPointerInput`.
+Say the library version (the `Anvil-WebOverlay <version> ready.` line in
+`BepInEx/LogOutput.log`), the SPT version and window mode, and attach that log
+from a session where it happened. For mouse or focus problems, switch on
+**Diagnostics / Log cursor state** first (F12 menu, behind Advanced); for a
+page that looks wrong, **Diagnostics / Log page problems**. The full checklist
+is at the end of
+[`docs/TROUBLESHOOTING.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/TROUBLESHOOTING.md#reporting-a-problem).
 
 ## Building
 
-The projects are classic net472 csproj files that reference BepInEx and Unity
-assemblies from an SPT installation: build with
-`dotnet build WebOverlay/WebOverlay.csproj -c Release -p:SptRoot=<your SPT folder>`.
-`SptRoot` defaults to three folders above the project, so a working copy that
-sits in `<your SPT folder>/Development/WebOverlay` needs no argument at all -
-and the build only copies its output into a folder that really is an SPT
-installation. [`scripts/New-ReleasePackage.ps1`](https://github.com/maschine34675/WebOverlay/blob/main/scripts/New-ReleasePackage.ps1) produces the release zips
-including the license files, verified against a manifest allowlist.
+Classic net472 projects referencing BepInEx and Unity assemblies from an SPT
+installation:
 
-[`tools/Probe`](https://github.com/maschine34675/WebOverlay/blob/main/tools/Probe) is the host that drives the built DLL outside the game - the
-proof behind every hand-bound vtable slot in this library, and the source of
-every row in [`docs/FAULT-TESTS.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/FAULT-TESTS.md). It is not part of any release. Its
-`preview` mode is the one meant for consumers rather than for the library
-itself.
+```bash
+dotnet build WebOverlay/WebOverlay.csproj -c Release -p:SptRoot=<your SPT folder>
+```
+
+`SptRoot` defaults to three folders above the project, so a working copy at
+`<SPT>/Development/WebOverlay` needs no argument. **A successful build deploys
+the DLL into that SPT installation** - only into a folder that really is one,
+and `-p:DeployToSpt=false` makes a build that touches nothing.
+[`scripts/New-ReleasePackage.ps1`](https://github.com/maschine34675/WebOverlay/blob/main/scripts/New-ReleasePackage.ps1)
+produces the release zips including the license files, verified against a
+manifest allowlist; it also compiles the README's quickstart exactly as a
+reader would paste it, and refuses to package if it does not build.
+[`tools/Probe`](https://github.com/maschine34675/WebOverlay/blob/main/tools/Probe)
+is the test host behind
+[`docs/FAULT-TESTS.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/FAULT-TESTS.md);
+it ships in no release, and its `preview` mode shows your own page in a real
+overlay without starting the game.
 
 ## Third-party components
 

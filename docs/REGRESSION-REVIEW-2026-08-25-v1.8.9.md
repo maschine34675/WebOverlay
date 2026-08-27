@@ -1,5 +1,10 @@
 # Regression-Review: WebOverlay v1.8.9
 
+> **Historical snapshot.** This report describes the commit named in its
+> header, at that date. Its findings were addressed in the releases that
+> followed - see `CHANGELOG.md`. It is kept as evidence, not as a
+> description of the current library.
+
 **Datum:** 25. August 2026  
 **WebOverlay-Basis:** `b5182fcc006364a9090c6ffe6c84cf5702e178d7` (`main`, Commit-Message `Put the cursor diagnostic behind Advanced (v1.8.9)`)  
 **Verglichen mit:** `6349a8aab8a4bfb31c6289a770c14e5de6d0b3e9` (`Ask the game for the cursor instead of overruling it (v1.8.3)`)  

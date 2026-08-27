@@ -20,6 +20,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "The library build failed."
 }
 
+
+# The README promises a quickstart that compiles as pasted; a release that
+# breaks that promise must not package. The check needs the freshly built
+# library, so it runs after the build.
+& (Join-Path $repositoryRoot 'tools\Check-Quickstart.ps1')
+if ($LASTEXITCODE -ne 0) {
+    throw "The README quickstart no longer compiles - fix the example (or the API) before packaging."
+}
 $artifactDirectory = Join-Path $repositoryRoot 'artifacts'
 $stageRoot = Join-Path $artifactDirectory "Anvil-WebOverlay-v$version"
 $archivePath = Join-Path $artifactDirectory "Anvil-WebOverlay-v$version.zip"
@@ -30,6 +38,7 @@ $pluginDirectory = Join-Path $stageRoot 'BepInEx\plugins\Anvil-WebOverlay'
 New-Item -ItemType Directory -Path $pluginDirectory -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot "WebOverlay\bin\$Configuration\Anvil-WebOverlay.dll") -Destination $pluginDirectory
+Copy-Item -LiteralPath (Join-Path $repositoryRoot "WebOverlay\bin\$Configuration\Anvil-WebOverlay.xml") -Destination $pluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\WebView2\WebView2Loader.dll') -Destination $pluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\WebView2\WebView2-LICENSE.txt') -Destination $pluginDirectory
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'ThirdParty\WebView2\WebView2-NOTICE.txt') -Destination $pluginDirectory
@@ -39,6 +48,7 @@ Copy-Item -LiteralPath (Join-Path $repositoryRoot 'README.md') -Destination $plu
 # The zip must contain exactly these files - never game or BepInEx assemblies.
 $expected = @(
     'BepInEx\plugins\Anvil-WebOverlay\Anvil-WebOverlay.dll',
+    'BepInEx\plugins\Anvil-WebOverlay\Anvil-WebOverlay.xml',
     'BepInEx\plugins\Anvil-WebOverlay\WebView2Loader.dll',
     'BepInEx\plugins\Anvil-WebOverlay\WebView2-LICENSE.txt',
     'BepInEx\plugins\Anvil-WebOverlay\WebView2-NOTICE.txt',
