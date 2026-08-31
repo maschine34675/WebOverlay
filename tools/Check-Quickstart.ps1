@@ -55,6 +55,14 @@ New-Item -ItemType Directory -Path $work | Out-Null
 
 Set-Content -Path (Join-Path $work 'Plugin.cs') -Value $plugin -Encoding UTF8
 
+# The examples are copy templates and rot the same way the quickstart did,
+# so they are held to the same standard: compiled, verbatim, every packaging
+# run.
+$examples = Get-ChildItem (Join-Path $repo 'examples') -Filter '*.cs'
+foreach ($example in $examples) {
+    Copy-Item $example.FullName (Join-Path $work $example.Name)
+}
+
 $csproj = @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -66,7 +74,7 @@ $csproj = @"
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
-    <Compile Include="Plugin.cs" />
+    <Compile Include="*.cs" />
   </ItemGroup>
 $itemGroup
 </Project>
@@ -79,5 +87,5 @@ if ($LASTEXITCODE -ne 0) {
     $output | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
-Write-Host 'Quickstart check passed: the README example compiles exactly as a reader would paste it.'
+Write-Host "Quickstart check passed: the README example and $($examples.Count) template(s) under examples/ compile exactly as a reader would paste them."
 exit 0

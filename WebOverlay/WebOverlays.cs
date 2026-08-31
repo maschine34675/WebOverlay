@@ -3,7 +3,7 @@ using System;
 namespace WebOverlay
 {
     /// <summary>
-    /// Shows web pages in windows over Escape From Tarkov, so a mod can build a
+    /// Shows web pages in windows over Escape From Tushonka, so a mod can build a
     /// user interface in HTML instead of an immediate-mode toolkit.
     ///
     /// Everything is safe to call from Unity's thread and nothing blocks it:
@@ -359,7 +359,19 @@ namespace WebOverlay
         Allow,
     }
 
-    /// <summary>How an overlay window should look and behave.</summary>
+    /// <summary>
+    /// How an overlay window should look and behave.
+    ///
+    /// For a WINDOW the player uses in a raid: set <see cref="Width"/> and
+    /// <see cref="Height"/> (never leave both 0 - the default is 80% of the
+    /// picture, centred, exactly where the game reads the mouse while the
+    /// player turns), set <see cref="FreeCursorWhileShown"/>, and consider
+    /// <see cref="ClickThroughWhenUnfocused"/>. If your handlers touch Unity
+    /// objects, set <see cref="DispatchOnMainThread"/>. For a HUD: set
+    /// <see cref="Transparent"/> and none of the cursor options. The
+    /// repository's examples/ folder holds both shapes, compiled verbatim on
+    /// every release.
+    /// </summary>
     public sealed class OverlayOptions
     {
         /// <summary>Width in pixels; 0 means 80% of the game's window.</summary>

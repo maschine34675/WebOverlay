@@ -83,7 +83,7 @@ using WebOverlay;
 [BepInPlugin("com.you.yourmod", "You-YourMod", "1.0.0")]
 // With a version: your code fails at JIT time if a member is missing, long
 // after BepInEx would have called a bare GUID dependency satisfied.
-[BepInDependency("com.anvil.weboverlay", "1.9.1")]
+[BepInDependency("com.anvil.weboverlay", "1.10.0")]
 public class YourPlugin : BaseUnityPlugin
 {
     private IWebOverlay overlay;
@@ -107,7 +107,23 @@ public class YourPlugin : BaseUnityPlugin
 
         // Asynchronous and non-blocking: null means overlays are already known
         // to be unusable, anything later arrives through Failed.
-        overlay = WebOverlays.Create("My panel", new OverlayOptions());
+        overlay = WebOverlays.Create("My panel", new OverlayOptions
+        {
+            // A size of your own, always: the default is 80% of the picture,
+            // centred - exactly where the game reads the mouse while the
+            // player turns.
+            Width = 720,
+            Height = 460,
+            // A framed window takes the foreground while the game keeps the
+            // mouse captured; these two hand the cursor back and forth so
+            // both sides stay usable.
+            FreeCursorWhileShown = true,
+            ClickThroughWhenUnfocused = true,
+            // Events arrive on the game's main thread, so a handler may touch
+            // Unity objects. Leave this off and they arrive on the library's
+            // own thread instead - where touching Unity is a crash.
+            DispatchOnMainThread = true,
+        });
         if (overlay == null)
         {
             Logger.LogWarning("overlays are unavailable (is the WebView2 runtime installed?)");
@@ -169,6 +185,33 @@ panel, and **F7** a Three.js WebGL cube that follows the player camera. Its
 source, [`WebOverlay.Demo/DemoPlugin.cs`](https://github.com/maschine34675/WebOverlay/blob/main/WebOverlay.Demo/DemoPlugin.cs),
 is the reference consumer - every pattern in it is there because something
 needed it.
+
+## Templates
+
+[`examples/`](https://github.com/maschine34675/WebOverlay/tree/main/examples)
+holds three files sized like a real first plugin, compiled verbatim by the
+same check that holds the quickstart:
+[`PanelPlugin.cs`](https://github.com/maschine34675/WebOverlay/blob/main/examples/PanelPlugin.cs)
+(a hotkey window with raid-suitable options),
+[`HudPlugin.cs`](https://github.com/maschine34675/WebOverlay/blob/main/examples/HudPlugin.cs)
+(a transparent click-through HUD, with the hideout decision as a comment), and
+[`WebOverlayGate.cs`](https://github.com/maschine34675/WebOverlay/blob/main/examples/WebOverlayGate.cs)
+(the complete soft-dependency gate - copy it rather than inventing the
+pattern).
+
+## Used by
+
+Shipping mods built on this library, each a worked answer to "how do I":
+
+- [CraftQueue](https://github.com/maschine34675/CraftQueue) - a hideout craft
+  queue whose web panel is an optional dependency with a browser fallback.
+- [ModProfiler](https://github.com/maschine34675/ModProfiler) - a per-mod CPU
+  profiler; web window when the library is there, IMGUI overlay when not.
+- [QuestMarker](https://github.com/maschine34675/QuestMarkers) - world-anchored
+  quest markers in a transparent HUD; a hard dependency.
+- [RaidReviewOverlay](https://github.com/maschine34675/RaidReviewOverlay) -
+  Raid Review's web interface in a window over the game.
+- ScopeRangefinder's Web Style Studio uses it next (in development).
 
 ## Documentation
 
@@ -236,6 +279,14 @@ is the test host behind
 [`docs/FAULT-TESTS.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/FAULT-TESTS.md);
 it ships in no release, and its `preview` mode shows your own page in a real
 overlay without starting the game.
+
+## If you are an AI coding agent
+
+Read [`AGENTS.md`](https://github.com/maschine34675/WebOverlay/blob/main/AGENTS.md),
+then stop reading documentation and copy a file from
+[`examples/`](https://github.com/maschine34675/WebOverlay/tree/main/examples).
+The quickstart above is already raid-suitable; the classic generated-code
+mistakes are listed there as imperatives.
 
 ## Third-party components
 

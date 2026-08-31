@@ -14,6 +14,45 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+### Added
+
+- `examples/` - three copy templates sized like a real first plugin, compiled
+  verbatim by the same check that holds the quickstart: `PanelPlugin.cs` (a
+  hotkey window with raid-suitable options), `HudPlugin.cs` (a transparent
+  click-through HUD, with the hideout decision as a comment), and
+  `WebOverlayGate.cs` (the complete soft-dependency gate, so nobody has to
+  build it from prose again - `docs/SOFT-DEPENDENCY.md` now points at it
+  instead of at files in other repositories).
+- `AGENTS.md` - an imperative contract for AI coding agents building a
+  consumer mod, which a first-contact assessment identified as the actual
+  reader of this repository: do this, never do that, copy a template, ignore
+  the historical reports. The README links it.
+- A **Used by** section in the README naming the shipping consumers -
+  CraftQueue, ModProfiler, QuestMarker, RaidReviewOverlay, ScopeRangefinder's
+  studio next. A library without visible users reads as a library without
+  users.
+
+### Changed
+
+- The README quickstart creates its overlay with raid-suitable options -
+  size, `FreeCursorWhileShown`, `ClickThroughWhenUnfocused`,
+  `DispatchOnMainThread`, each with the reason in a comment - instead of a
+  bare `new OverlayOptions()`. The bare form was the file people (and
+  agents) actually paste, and every one of its defaults was a documented trap
+  the demo already avoided. `OverlayOptions` itself now carries the same
+  guidance as a class-level doc comment, because a consumer referencing the
+  installed DLL reads IntelliSense, not GitHub.
+- The dated review reports left the repository (`docs/reviews/` is ignored
+  now): for a newcomer they read as a list of current bugs, and for a coding
+  agent as findings to "fix" - both wrong, since what came of them is in the
+  changelog and the fault table. `INTERNALS.md` says where the history went.
+- The roadmap section is gone. The library is feature-complete; anything new
+  starts as a consumer wish, the way everything here has.
+- One last wording slip in the `WebOverlays` class comment - the game is
+  Escape From Tushonka, and the XML file ships that sentence into
+  IntelliSense.
+
+
 ## [1.10.0]
 
 ### Forge version notes

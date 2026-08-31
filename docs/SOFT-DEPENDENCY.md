@@ -6,11 +6,14 @@ extra view. That is a **soft dependency**, and on Mono it takes more than a
 `try`/`catch`: a mod that gets it slightly wrong either dies at startup on a
 machine without the library, or, worse, quietly breaks *other people's* mods.
 
-Every rule below comes from something that actually went wrong. Two shipping
-gates follow all of them and are worth reading as references:
-
-- `CraftQueue.Client/UI/WebOverlayGate.cs` - falls back to the external browser
-- `ModProfiler/UI/WebOverlayGate.cs` - falls back to its own IMGUI overlay
+Every rule below comes from something that actually went wrong. Do not build
+the gate from prose: copy
+[`examples/WebOverlayGate.cs`](../examples/WebOverlayGate.cs), which follows
+every rule and is compiled verbatim on every release. Two shipping mods carry
+the same gate in the wild - [CraftQueue](https://github.com/maschine34675/CraftQueue)
+falls back to the external browser,
+[ModProfiler](https://github.com/maschine34675/ModProfiler) to its own IMGUI
+overlay.
 
 ## Put every reference in one class
 

@@ -562,7 +562,8 @@ own review flagged and could not fix.
 
 **But not as sketched.** `public bool AllowCrossOrigin` can only reach ALLOW.
 There are three kinds, and this repository has already been asked once for the
-*stricter* one: WOV-1812 in `docs/reviews/CODE-REVIEW-2026-08-22-c200995.md` recommended
+*stricter* one: WOV-1812 in the 2026-08-22 code review (a dated report kept outside the
+repository) recommended
 DENY. A bool forecloses that half of the design space permanently, under a
 contract that says minor releases never change what a consumer depended on. So:
 

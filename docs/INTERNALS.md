@@ -63,11 +63,6 @@ One caution: WebView2 transparency has regressed before in runtime updates
 (opaque instead of transparent, runtime 145.x, fixed since). If a HUD suddenly
 shows a dark background after a Windows update, suspect the runtime first.
 
-## Roadmap
-
-- Keyboard forwarding for interactive HUDs (text fields in glass panels).
-- Touch/pen input via `SendPointerInput`.
-
 ## The proof behind it
 
 [`tools/Probe`](../tools/Probe) is a host that drives the built DLL outside
@@ -80,12 +75,14 @@ enforces them.
 
 ## Review history
 
-The dated reports under [`docs/reviews/`](reviews/) - `CODE-REVIEW-*`,
-`REGRESSION-REVIEW-*`, `FOLLOW-UP-REVIEW-*` - and the `CONSUMER-API-WISHLIST`
-pair here are **historical snapshots**: each describes the exact commit named
-in its header, and many of their findings were fixed in the releases that
-followed - not all, which is why the open ones keep reappearing in newer
-reports until a release closes them. None of these files describes the
+The library was reviewed repeatedly during development - code reviews,
+regression reviews per release, and two outside first-contact assessments.
+Those reports are dated snapshots of the commits named in their headers and
+live outside the repository; what came of them is recorded where it belongs:
+fixes in [CHANGELOG.md](../CHANGELOG.md), measurements in
+[FAULT-TESTS.md](FAULT-TESTS.md). The `CONSUMER-API-WISHLIST` pair in this
+folder is the one piece of that history kept here, because its answers
+explain several API decisions. None of these files describes the
 current state. What is true now lives in three places: this
 documentation, [FAULT-TESTS.md](FAULT-TESTS.md) for what is measured, and
 [CHANGELOG.md](../CHANGELOG.md) for how it got here.
