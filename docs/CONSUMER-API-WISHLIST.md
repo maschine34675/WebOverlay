@@ -664,3 +664,110 @@ What the 1.8 series already answered needed no workaround and is worth saying
 so: channels with `OnRequest`, retained posts, the manual pump, the version
 gate, `Failed` with a cause, and `FreeCursorWhileShown` from 1.8.5 on - all
 used exactly as documented.
+
+---
+
+# Fifth round (2026-09-01, from the CombatLog side)
+
+Written after hardening CombatLog's immutable post-raid report against
+overlay-lifecycle races and checking the result against WebOverlay 1.10.0.
+Entries 1-27 are covered by the earlier rounds and their answers; this round
+starts at 28 and repeats none of them. Neither entry is an ordinary player
+failure seen in CombatLog. Both are contract gaps exposed by bounded failure
+paths the library deliberately supports and tests.
+
+## 28. Tell a caller whether a `Post` entered the library queue
+
+**Today:** every `IWebOverlay.Post` overload returns `void`. Since 1.10.0,
+fire-and-forget commands go through the bounded overlay-thread command queue;
+once its 4,096 slots are occupied, a new command is dropped with one warning.
+`Request` and `ExecuteScript` preserve their exactly-once obligations by
+answering `null` when that happens, but a one-way `Post` gives its caller no
+signal at all.
+
+**Why it hurts:** a finished CombatLog report is immutable. The consumer keeps
+the last payload and deliberately does not post the same retained state again,
+because rebuilding the page would discard the reader's open rows and scroll
+position. Its gate can currently report only that an overlay handle existed
+when `Post` was called. Under the already-proven command-queue flood, the
+retained post can therefore be dropped before the overlay window sees it while
+CombatLog records it as sent and never retries. `Retain` cannot repair a command
+that did not reach the window that owns the retained set.
+
+**Sketch:**
+
+```csharp
+bool TryPost(string channel, string payload, PostOptions options);
+```
+
+`true` means only "accepted by the library-owned command queue"; `false` means
+the command never entered it because the handle was disposed, the host was
+stopping or the queue refused it. It does not mean that a later page-load
+outbox accepted the message, or that Chromium received, parsed or rendered the
+payload. A consumer that needs that stronger acknowledgement still builds it
+with the existing channel and request/reply API. Keep the released `void Post`
+overloads, with `TryPost` as the additive form for one-shot state a consumer
+must retry when the library itself refused it.
+
+This is not entry 17 under another name. It asks about the queue WebOverlay
+owns, before Chromium receives anything, and promises no control over messages
+already handed to Chromium's IPC queue.
+
+## 29. Tell a consumer how a visibility request finished
+
+**Today:** `Show`, `Hide` and `Toggle` are asynchronous `void` commands.
+`VisibilityChanged` deliberately reports only a real native transition. If
+`Show` is refused because the game is in exclusive fullscreen, the library
+correctly leaves an already hidden window hidden, resets its desired state and
+raises neither `Failed` nor a made-up visibility change. A command dropped by
+the bounded queue is equally silent. `IsVisible` says only what is true now; it
+cannot distinguish "still waiting", "already there", "refused" and "never
+queued".
+
+**Why it hurts:** CombatLog needs the true visibility to stop report delivery
+and event pumping while the window is hidden. It now carries a requested state,
+an awaiting flag, continued manual pumping and a 30-second deadline around
+each interactive show/hide request. That is a generic asynchronous-window state
+machine, and another consumer that wants to stop work after a refused open has
+to build the same one.
+
+**Sketch:**
+
+```csharp
+void Show(Action<VisibilityRequestResult> completed);
+void Hide(Action<VisibilityRequestResult> completed);
+```
+
+The result must distinguish an applied change, an already-reached target,
+exclusive-fullscreen refusal, a superseding request, queue rejection, terminal
+failure and disposal. The exact surface is less important than the settlement
+contract: correlate the answer to one request, settle it exactly once under the
+same result-delivery rules as `Request` and `ExecuteScript`, and define what
+delayed window creation does to it. The quiet-shutdown rule for
+`VisibilityChanged` stays unchanged; an accepted completion remains an
+obligation and still settles exactly once. A public `DesiredVisible` alone
+would still make the consumer poll and could not say which queued request it
+observed. The released
+parameterless methods stay, and `Toggle` needs no result overload for
+CombatLog's concrete case.
+
+Do not implement this by raising `VisibilityChanged(false)` for a refused
+`Show`: no transition happened, and entry 18 deliberately kept that event
+truthful. Exclusive fullscreen also remains a reversible player setting rather
+than a terminal overlay failure.
+
+## What CombatLog actually needs
+
+1. **28 accepted posts** - the correctness item. It lets the immutable retained
+   report retry the rare command the library itself declined, without inventing
+   an acknowledgement protocol in the page.
+2. **29 visibility settlement** - the boilerplate item. It replaces a timeout
+   and consumer-owned state machine while preserving the existing visibility
+   and fullscreen semantics.
+
+The implementation found no new case for binary messages or an in-memory
+resource provider: its PNGs already live on disk, so entry 27's virtual-host
+answer still applies. `ChannelsFailed`, `FailureMessage`, page diagnostics,
+retained/latest-only posts and manual dispatch already exist; using them, and
+declaring the real hard minimum library version, are CombatLog work rather than
+new WebOverlay API wishes.

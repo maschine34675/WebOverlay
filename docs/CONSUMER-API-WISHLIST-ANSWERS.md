@@ -11,8 +11,10 @@ answered at the end of this document. Of those, 10, 12, 13, 18, 19 and 21
 shipped in v1.7.0, and 11, 16 and 17 in v1.8.0 - 17 as the two halves the
 library can honestly deliver. The three without an API half followed as
 repository work: 20 as `tools/Probe`, 14 as `docs/SOFT-DEPENDENCY.md`, and 22
-as the README's "What a HUD has to decide for itself". Both lists are now
-answered in full.
+as the README's "What a HUD has to decide for itself". Entries 23-27 are
+answered below; 23, 25 (page side) and 26 shipped in v1.9.0. Entries 28 and
+29 arrived later from CombatLog and are answered at the end - together with
+two things found underneath them that neither entry asked about.
 
 **One correction to this document:** entry 7 below proposes hit-test regions
 as the better answer, keeping the picture and giving up only the mouse. That
@@ -719,3 +721,358 @@ ScopeRangefinder should simply set its own size.
 4. **24 as documentation and tooling** - the audit belongs here.
 5. **25 page-side**, then the browser-side half if the page-side proves too
    narrow.
+
+---
+
+# Answers to the fifth round
+
+Written against 1.10.0. Every factual claim in both entries was checked
+against the code, and the first design for entry 29 was taken apart before it
+reached this page - the refuted version is recorded below, because the next
+person to think of it will think of it for the same good-sounding reasons.
+Two findings that neither entry asked about are answered at the end: the
+command queue both entries lean on is shared by every mod in the process, and
+the exclusive-fullscreen refusal that entry 29 wants reported very probably
+never fires in the game.
+
+## Verdicts at a glance
+
+| | | |
+|---|---|---|
+| 28 | `TryPost` | **yes** - three additive overloads; two answers differ from the sketch |
+| 29 | visibility settlement | **yes** - as `Show(cb)`/`Hide(cb)`; the deeper fix that suggests itself is refuted |
+| - | the shared command queue | **found underneath both** - process-wide, the 1.10.0 comment over-promises; a per-window share is recommended |
+| - | the fullscreen refusal | **probably dead in the game** - one in-game check, then a cheap fix |
+
+## 28. `TryPost` - yes, with two corrections to the sketch
+
+Every claim checks out. The three `Post` overloads route through the handle's
+private `post()` (`WebOverlays.cs:1272-1280`), which discards the bool the host
+returns. `remember()` runs *inside* the queued action (`OverlayWindow.cs:1895-1924`),
+so a command the queue refused never reaches the retained set - the entry's
+"Retain cannot repair it" is exactly right, and it is worse than the entry
+says: after the silent renderer-crash reload the page is replayed the
+*previous* payload, so the consumer's bookkeeping and the page diverge for the
+rest of the session. CombatLog's gate returns true whenever a handle exists
+(`WebOverlayGate.cs:212-226`), `_lastPayload` is set, and the equality check
+suppresses every retry.
+
+Two facts the entry does not know, and which decide the shape of the answer:
+
+- **The queue is one static queue for every handle of every mod**
+  (`OverlayHost.cs:24`). CombatLog posts one `LatestOnly` frame per second and
+  cannot fill 4,096 slots on its own; the flood that drops its post is another
+  mod's, or a stall of the overlay thread. See "Underneath both" below.
+- **The overflow warning fires once per process and is never reset**
+  (`OverlayHost.cs:224, 265`). A second flood - a different mod, an hour later
+  - logs nothing. A return value would be the only per-call signal there is.
+
+**Shape:** `bool TryPost(string message)`, `bool TryPost(string channel,
+string payload)`, `bool TryPost(string channel, string payload, PostOptions
+options)`, mirroring the three `Post` overloads. Adding members to
+`IWebOverlay` in a minor has precedent (`PumpEvents` 1.8.0, `ChannelsFailed`
+and `ChannelsAvailable` 1.10.0); the only implementer is `OverlayHandle`, and
+no shipping consumer reflects over the interface's members - every gate casts
+`as WebOverlay.IWebOverlay` inside a NoInlining body.
+
+**Where the answer differs from the sketch:**
+
+1. **Shutdown answers `true`, not `false`.** Every accept-and-swallow path in
+   the library answers true while `Stopping` (`OverlayHost.TryPost:260`,
+   `DispatchToMainThread:472`), and that true is load-bearing: it is what keeps
+   `Request` and `ExecuteScript` from answering null - and waking a fallback -
+   during teardown (`WebOverlays.cs:1181-1189, 1226-1227`). A second `TryPost`
+   with the opposite answer to the same question is a trap for whoever aligns
+   them later, and a consumer has no "later" at shutdown anyway. Documented as:
+   during shutdown the library accepts everything and does nothing, like every
+   other call. Pinned by a row through the shutdown seam the probe already has.
+2. **"Failed" is not in the false set.** `Failure` is a plain auto-property
+   written on the overlay thread (`OverlayWindow.cs:389`) and would be read
+   unsynchronised; a stale `Unknown` answers true and the command is then
+   refused silently by `refuseAfterFailure` - which is just the "true is not
+   delivery" case the entry already concedes. `Failed` is latched and the
+   consumer already knows. So false means exactly two things: the handle was
+   disposed before the call, or the command queue refused it.
+
+**What the documentation of `true` has to say,** because consumers will read
+it as delivery: a post that entered the queue can still be lost to the
+100-entry outbox before the page loads (non-retained sends), to a document
+that is not the mod's target, to a retarget (`LoadHtml`/`Navigate` forgets
+both outbox and retained set), to a renderer crash without `Retain`, to a
+failure or close that lands before the command runs, and to the browser
+itself - `PostMessageToPage` discards the HRESULT of `PostWebMessageAsString`
+(`OverlayWindow.cs:2057`), so the library does not know either. `Retain` is
+what makes a true durable across reloads. False means retry later, never fall
+back; a retry is a new send at a new position, so a consumer that posts on
+several channels and retries one has reordered its own traffic (the library's
+cross-channel guarantee is untouched). Until the per-window share exists, a
+false may be another mod's doing.
+
+**The alternative that was weighed and is not the answer:**
+`ExecuteScript(script, result)` is *already* an exactly-once delivery that
+answers null on queue refusal, failure, outbox overflow, non-target document,
+renderer crash and dispose, and returns the page's own value when it ran -
+strictly stronger than "entered the queue", with no library change. CombatLog
+could ship one page function today on 1.10.0 and call it with the report. It
+is not the answer because it needs a page-side function (the entry rejects a
+protocol in the page), loses `Retain`'s replay after the silent crash reload
+(recoverable by clearing `_lastPayload` on `PageLoaded`, which fires on that
+reload too), and because it makes the consumer route around a fact the
+library already holds and throws away. But it is the bridge until 1.11.0.
+
+**Rejected:** coalescing `Retain` posts into a per-handle map synced by one
+work item. A retained post merging into an already-queued sync item is
+delivered before a plain post queued in between - a cross-channel reorder
+against entry 26's guarantee. An ordering-preserving per-handle FIFO variant
+exists, but it still needs a bound, hence a refusal, hence this entry; it
+belongs with the queue work below, not in place of `TryPost`.
+
+**Rows:** extend `flood` - during the stall, count trues and falses (falses
+above zero, trues at most 4,096, one warning); after the stall the page's
+echoes equal the trues exactly, which is the first assertion that ties true to
+delivery on a healthy page and false to non-delivery; `TryPost` on a disposed
+handle is false; the shutdown seam pins the true. A second row proves the
+disclaimer: a fresh overlay, 101 raw `TryPost`s before any page, all true plus
+"the outbox is full", then `LoadHtml` and exactly 100 echoes. Counterproof in
+the ledger's convention: make the handle discard the host's answer - falses
+drop to zero and echoes fall below trues, both assertions fail.
+
+**Consumer side:** CombatLog's floor rises to the version that ships this, in
+the straddle body that calls it.
+
+## 29. Visibility settlement - yes, as `Show(cb)`/`Hide(cb)`, not as un-droppable visibility
+
+Every claim checks out. The refusal path (`OverlayWindow.cs:2255-2270`) warns
+once per overlay, resets `desiredVisible`, raises nothing; a dropped command
+is equally silent; `IsVisible` is one volatile bool with no request identity.
+One thing the entry understates: a `Show()` refused while the window is
+*visible* takes the same branch, leaves it visible and flips `desiredVisible`
+to false - so the next `Toggle` calls `Show()` again, refused again, now
+without a log line. No row covers that case.
+
+**CombatLog's hazard is real, and consumer-fixable today.** Traced: the
+raid-start `Hide()` is a bare static call; if the queue refuses it, the next
+`Update` re-issues once through `RequestVisibility(false)`; if that is refused
+too, the in-raid predicate `_open || (_awaitingVisibility && _requestedVisible)`
+is false for a pending Hide, so nothing retries; at the 30-second deadline
+`_open = nativeVisible && _requestedVisible` is false regardless of the native
+state, pumping stops, and an 1100x720 window sits over the raid while CombatLog
+believes it is closed - until the next post-raid toggle, which consults
+`IsVisible()` and heals it. Adding `|| WebOverlayGate.IsVisible()` to the
+in-raid predicate closes that today, on 1.10.0. Which is the entry's own
+framing: 29 is the boilerplate item; 28 is the correctness item. Noted in
+passing: `LoadHtml` is one-shot state on the same droppable path
+(`WebOverlayGate.cs:129`); under the same flood at first open the page never
+loads and nothing re-issues it. Neither `TryPost` nor `Show(cb)` closes that
+class - the queue work below does.
+
+**Shape:** `public enum VisibilityOutcome { Applied, AlreadyThere,
+RefusedFullscreen, Superseded, Failed, Disposed, QueueRefused }`, plus
+`void Show(Action<VisibilityOutcome> completed)` and
+`void Hide(Action<VisibilityOutcome> completed)`. The parameterless three are
+unchanged, `Toggle` gets no overload, `VisibilityChanged` stays exactly as
+truthful as entry 18 made it, and **the window keeps `desiredVisible`**.
+
+**The refuted deeper fix.** The obvious next step is to make visibility
+un-droppable: let the handle own `desiredVisible`, hold at most one pending
+"apply" work item per handle on the never-refused path, and have later calls
+merely flip the flag. It is wrong on four counts:
+
+1. The window changes its own desired state without any handle call - the
+   close key (`OverlayWindow.cs:1504`), `WM_CLOSE` (`:2960`), and the fullscreen
+   refusal (`:2268`). Every `Toggle` consumer registers its toggle key as a
+   close key, so the canonical interaction is press-to-close through the
+   window, press-to-reopen through the handle. Today `Toggle` reads the window's
+   flag on the overlay thread and shows; with a handle-owned flag it would Hide
+   an already hidden window and the player would press twice.
+2. Two Hides coalesced into one apply fire `Closed` once; row B5 promises
+   "on every hide, unchanged until 2.0".
+3. The apply runs at the *first* call's queue position, ahead of a `LoadHtml`
+   or `SetBounds` posted in between - a new ordering class that appears exactly
+   under the stall it was meant to survive.
+4. It puts a lock on the caller's thread on a path that has none, while
+   `Show()`/`Hide()` call `SetForegroundWindow` across threads to the game
+   window - a deadlock class the probe host cannot reproduce, because its
+   `GameWindow` is zero.
+
+`Show(cb)` through the droppable path, with the share below making refusal
+self-inflicted, is simpler and equally robust for the real hazard.
+
+**Settlement rules** - the part the entry rightly called more important than
+the surface:
+
+- Settled exactly once, or - only once shutdown has begun - not at all. Never
+  dropped for a full queue, never dropped because the handle was disposed.
+- Delivered like an `ExecuteScript` answer: inline on the overlay thread, on
+  the game's main thread through the non-droppable queue, or on the next
+  `PumpEvents` - and delivered by `Dispose` too. It may run synchronously
+  inside the call on the calling thread when refused at call time, and after
+  `Dispose` it may arrive on the overlay thread whatever the dispatch mode.
+- Precedence at every settle point: `Disposed` > `Failed` > `RefusedFullscreen`
+  > `Superseded` > `Applied`/`AlreadyThere`. The work item re-checks the
+  handle's `disposed` before touching the window: a queued `Show(cb)` that runs
+  after `Dispose` would otherwise show the window, have its `VisibilityChanged`
+  dropped by the disposed handle, and report `Applied` for a transition the
+  consumer can never observe.
+- **A parked request is the mainline, not an edge.** `drainWork` drains
+  commands before creations (`OverlayHost.cs:955-967`), so every consumer's
+  first `Show(cb)` runs before `Create()` does, is parked, and is settled from
+  inside `configure()` before `Ready` fires. `Applied` means the native window
+  and precedes `Ready` and `PageLoaded` on every first open. `Hide(cb)` on a
+  failed or closed window settles `Failed`/`Disposed` rather than parking:
+  `Hide()` tests only `window == IntPtr.Zero`, and a creation that fails before
+  `createWindow` leaves it zero forever - the "creation will call this again"
+  comment at `:2250` is false for the `Failed` state.
+- Mechanism mirrors `ScriptCall`: a once-only `VisibilityCall` list on the
+  window, walked by the creation tail, by a newer request (`Superseded`), by
+  `fail()` and by `CloseFromHost`, with the handle wrapping the completion in
+  its own once flag so on-the-spot and window-side settles cannot both fire.
+- **No ordering promise against `VisibilityChanged`.** Under Manual dispatch
+  `PumpEvents` drains answers *first* (`WebOverlays.cs:955-965`), so the
+  completion arrives before the event of the same transition in the same pump;
+  under main-thread dispatch both ride one FIFO but the event is droppable and
+  the completion is not. `Applied`/`AlreadyThere` are self-sufficient: they
+  assert the state at settlement. `VisibilityChanged` is for transitions the
+  consumer did not ask for - player close, failure, destroy. CombatLog's
+  reconcile tolerates the inversion by accident (it collapses to the last
+  value); a consumer that reacts inside the completion and reads the later
+  event as "it came back" is the failure mode, and the doc has to say so.
+- A parked completion has no bound of its own. The environment wait is bounded
+  (30 s / 10 s); the controller request in `OverlayWindow` has no timer at
+  all. So this cannot fully replace CombatLog's deadline unless creation is
+  bounded - add `fail(ViewFailed, "the browser view did not arrive within N
+  seconds")` as a separate row, or say in the rule text that a parked request
+  waits for creation.
+
+**Three pre-existing holes the design would inherit, to carry with it:**
+
+- Quiet shutdown leaks on the settle paths. `Show()`/`Hide()` have no
+  `Stopping` gate and `Shutdown()`'s `WM_APP_WORK` drains the whole queue;
+  `DispatchToMainThread` tests `!mainThreadPumpAvailable` *before* `stopping`,
+  and the plugin clears the pump before it calls `Shutdown()`
+  (`WebOverlayPlugin.cs:364-368`), so after that point main-thread events and
+  answers fall through to inline delivery on the overlay thread;
+  `CloseFromHost` raises `Closed` ungated. Row 21 proves only the
+  `closeEverything` path. Fix: test `stopping` first, early-return
+  `Show()`/`Hide()` while stopping, gate `Closed` like `VisibilityChanged`,
+  and a row that queues a `Show(cb)` on a visible overlay in all three modes
+  and counts zero callbacks through shutdown.
+- `Show()` on a failed window is swallowed forever with `desiredVisible` left
+  true, so the next `Toggle` calls `Hide()` on the surviving HWND and fires
+  `Closed`. Settle `Failed` in that branch and fix the comment.
+- Between `createWindow` and `configure()` the HWND exists while the browser
+  does not; a `Show()` drained in that sub-gap shows an empty popup and raises
+  `VisibilityChanged(true)` before `Ready`. Park on `state == Creating` rather
+  than `window == IntPtr.Zero`, which also removes the flash.
+
+**Rows:** queued `Show(cb)` then `Dispose` before it drains - one `Disposed`,
+never `Applied`, no `VisibilityChanged` (counterproof: without the run-time
+disposed check it reports `Applied`); creation gap Show, Hide, Show -
+`Superseded`, `Superseded`, `Applied`, one transition; creation gap Hide only -
+`AlreadyThere`; creation failure with a parked request, then `Dispose` from the
+`Failed` handler - exactly one `Failed`; `DisplayModeProbe` false - `Show(cb)`
+gives `RefusedFullscreen`, `IsVisible` false, no event, no `Failed`, and the
+following `Toggle` issues `Show` again; environment-missing failure, then
+`Show(cb)` and `Hide(cb)` - both `Failed` on the spot (counterproof: without the
+Failed-first check the Hide parks forever); Manual mode - record and assert the
+documented completion-before-event order; `Show(cb)` during the H13 stall -
+`QueueRefused` exactly once, on the calling thread; shutdown in all three modes
+as above. The first-open row is the primary proof, not an edge row: its
+counterproof (the tail does not settle) makes every consumer's very first
+completion never arrive.
+
+**Consumer side:** CombatLog keeps `_awaitingVisibility` armed until the
+completion instead of a deadline, routes the raid-start Hide through the same
+state machine (today it bypasses it), and keeps pumping while a completion is
+outstanding - its current pump predicate strands a completion for a Hide issued
+while the panel is closed.
+
+## Underneath both: the command queue is shared by every mod
+
+Verified: `work` is one static `ConcurrentQueue` with one static counter and
+one static warn latch (`OverlayHost.cs:24, 222-224`), and nothing in `TryPost`
+or `Post` knows which window a command belongs to. The comment at
+`OverlayHost.cs:214-221` - "a consumer posting in a hot loop must cost itself,
+not every mod in the process" - and the 1.10.0 changelog sentence are true
+only of the heap bound. Once mod A holds the 4,096 slots, mod B's next
+`Show()`, `Hide()`, `LoadHtml()` or `Post()` is refused, and after the first
+warning nobody is named.
+
+Honest scope: this is latent, not observed. Every shipping streamer throttles
+or gates on `IsPageLoaded` - QuestMarkers, ModProfiler at one snapshot per half
+second, CombatLog at one per second, ScopeRangefinder on user actions - and the
+only measured rate anywhere is the probe's 9,600 per second. No player has met
+it. But the library is public, and a third party's hot loop drops everyone
+else's one-shot commands; entries 28 and 29 would then merely *report* that.
+
+**Recommendation:** a per-window share under the kept global ceiling - 1,024
+per window, 4,096 in total; the outbox limit of 100 is the honest anchor for
+"no healthy consumer queues more than this". Owner token is the
+`OverlayWindow` (every producer already holds it), the queue element becomes
+typed, the per-window counter is decremented in `drainQueue` before the action
+runs, the warn latch moves to the window and names `title` and `ownerName`, and
+non-droppable items - `Dispose`, page answers - stay outside the share and are
+never refused. Victims are then *admitted*, not unaffected: it is one FIFO on
+one thread, so mod B's command waits behind mod A's backlog, about half a
+second at the measured rate. Say so.
+
+Cost: forty-odd internal lines and real probe work. The stall seam reflects
+`OverlayHost.Post` by name without parameter types (`NewApi.cs:2720`) and needs
+a typed lookup once the signature changes; row 78 describes the mechanism
+being replaced and must be re-run, not carried forward; three rows are new -
+a second overlay admitted and delivered during the first one's flood, with the
+warning naming the flooder (counterproof: share disabled, the second overlay's
+`ExecuteScript` answers null-by-refusal, which is today's behaviour); the
+flooder disposed while over its share (`CloseFromHost` still runs, the counter
+returns to zero); the global ceiling reached honestly. Fix the comment, and
+add a changelog line saying plainly that 1.10.0's bound was shared.
+
+Effect on the two entries: a false from `TryPost` or a `QueueRefused` becomes
+self-inflicted, disposed or shutdown. `TryPost` stays right - it is the honest
+per-call signal - but the advice next to false changes from "retry" to "you
+flooded yourself".
+
+## The fullscreen refusal is probably dead in the game
+
+The probe the plugin registers is `Screen.fullScreenMode !=
+FullScreenMode.ExclusiveFullScreen` (`WebOverlayPlugin.cs:85, 399-400`), and it
+is evaluated only on the overlay thread - in `Show()` (`OverlayWindow.cs:2245-2247`,
+eagerly inside the diagnostic string, and `:2255`) and in the creation tail
+(`:648`), never from `Update`. Mono.Cecil over the game's
+`UnityEngine.CoreModule.dll`: `Screen.get_fullScreenMode` is an internal call
+carrying only `[NativeName("GetFullscreenMode")]`, while `get_width` and
+`get_height` carry `[NativeMethod(IsThreadSafe = true)]`. Unity's binding
+generator guards the former to the main thread, and
+`OverlayHost.DisplayModeSupported` turns any exception into "supported"
+(`OverlayHost.cs:514-521`). So the refusal that rows 31 and 49 prove - by
+replacing the delegate in a non-Unity host - very likely never fires in the
+game. Nobody noticed because every consumer still guards on the main thread
+before calling `Show()`, and because the game apparently never reaches
+exclusive fullscreen at all (`TROUBLESHOOTING.md:30-35`). The cursor probe, by
+contrast, runs from `Update` and is fine.
+
+This is reasoned from metadata, not measured in the game, so: one diagnostic
+first - log the exception type inside that catch under `Diagnose` and toggle
+the game's display mode once. If it throws, the fix is the shape
+`MainThreadPumpAvailable` already has: the plugin's `Update` caches the answer
+into a volatile field and the probe returns it; the ledger's manual section
+records that the in-game row cannot be automated. Answer 18 and
+`RECIPES.md:67-71` ("`Show()` refuses it by itself") are, on this evidence,
+inverted in reality today; `RefusedFullscreen` stays in the enum because the
+fix makes it real.
+
+## Suggested order
+
+1. **28** - three overloads, the two rows, the consumer floor.
+2. **29** - the two overloads and the enum, carrying the three pre-existing
+   fixes, the nine rows, and the creation-bound decision.
+3. **The per-window share** - its own commit, row 78 re-proven, rows 79-81.
+4. **The fullscreen probe** - after the in-game check.
+
+All four in one minor. Documentation the release touches beyond the API table:
+the `SOFT-DEPENDENCY.md` version table gains its row (it is what a gate author
+copies from); `INTERNALS.md` currently describes the command queue nowhere and
+must, before forty lines land in it; the `FAULT-TESTS.md` mode list is already
+behind `Program.cs` and gets refreshed rather than extended; and `AGENTS.md`
+gains the two rules the new members invite breaking - false means retry later,
+never fall back, and never wait for a completion in `OnDestroy`.
