@@ -83,7 +83,7 @@ Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
 `spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`,
 `failed-nav`, `generation`, `ready-load`, `click-through`, `vhost-cors`,
 `ordering`, `page-diag`, `bounds-locked`, `nav-race`, `channels-dead`,
-`downloads`, `flood`.
+`downloads`, `flood`, `trypost`, `share`, `visibility-result`.
 Running the program with no mode takes the normal path: create, load, render,
 message back.
 

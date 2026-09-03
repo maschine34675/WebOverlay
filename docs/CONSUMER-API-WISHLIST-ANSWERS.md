@@ -14,7 +14,8 @@ repository work: 20 as `tools/Probe`, 14 as `docs/SOFT-DEPENDENCY.md`, and 22
 as the README's "What a HUD has to decide for itself". Entries 23-27 are
 answered below; 23, 25 (page side) and 26 shipped in v1.9.0. Entries 28 and
 29 arrived later from CombatLog and are answered at the end - together with
-two things found underneath them that neither entry asked about.
+two things found underneath them that neither entry asked about. All four
+shipped in v1.11.0.
 
 **One correction to this document:** entry 7 below proposes hit-test regions
 as the better answer, keeping the picture and giving up only the mouse. That

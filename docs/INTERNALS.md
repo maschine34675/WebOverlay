@@ -31,6 +31,39 @@ similar.
   browser profile, so per-origin storage does not carry across.
 - **Its own thread.** WebView2 is COM and needs a thread that is STA and pumps
   messages. The game's main thread is neither, so the library runs one.
+- **One command queue, drained by that thread, for every overlay of every
+  mod.** A handle's `Show`, `Post`, `LoadHtml` and the rest are closures
+  queued for the overlay thread; creations sit in a second queue so that a
+  browser start, which pumps messages while it waits, never runs another
+  creation from inside itself. Commands are drained *before* creations, which
+  has a consequence every consumer meets on its first open: the `Show` and
+  `LoadHtml` posted right after `Create` run before the window exists, so
+  they defer - the window records what was asked and the creation tail
+  applies it once the browser view is there (a command that lands while the
+  creation is already waiting for its view defers the same way). The queue
+  is bounded in two tiers since 1.11.0: a share per overlay (1,024 waiting
+  commands) under a ceiling for the whole queue (4,096). Fire-and-forget
+  commands are refused past either bound - past the share with a warning
+  naming the overlay and its mod, at most once a minute; past the ceiling
+  with a queue-wide warning that names nobody - so a mod posting in a loop
+  costs itself, not the mod next to it, which only waits behind the backlog
+  until the whole queue is at its ceiling. Obligations - a `Dispose`, an
+  answer owed to the page - are counted against the ceiling but never
+  refused and never against a share, since their number is bounded by the
+  calls that created them. 1.10.0 had the ceiling alone, and the first mod
+  to fill it had every other mod's next command refused; the comment said
+  otherwise, which is why this paragraph exists.
+- **Every callback-taking call settles exactly once.** Script results,
+  request answers and visibility answers all follow one shape: a once-only
+  call object held by the window, answered on every path that gives up on it
+  - the completion, a failure, a close, and for script and request answers a
+  retarget - and delivered through the handle's result path, which survives
+  `Dispose` and goes quiet only during shutdown; a queue refusal is answered
+  by the handle itself, before the window is involved. A visibility answer additionally has a
+  precedence (`Disposed` over `Failed` over `RefusedFullscreen` over
+  `Superseded` over the two normal outcomes) and one parking slot per window
+  for the creation gap; a newer request settles the parked one as
+  superseded, so at most one ever waits.
 - **Owned popup windows, not child windows.** Unity presents through a
   flip-model swapchain, which does not composite child windows.
 - **Hand-built COM vtables instead of Microsoft's managed wrapper.** The wrapper

@@ -146,6 +146,9 @@ internal static class Program
             case "generation": NewApi.Generation(args.Length > 1 ? args[1] : null); return;
             case "ready-load": NewApi.ReadyLoad(); return;
             case "click-through": NewApi.ClickThrough(); return;
+            case "trypost": NewApi.TryPostProbe(); return;
+            case "share": NewApi.Share(); return;
+            case "visibility-result": NewApi.VisibilityResult(); return;
 
             // Not a fault-matrix row: the mode for looking at your own page.
             case "preview":

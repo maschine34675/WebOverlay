@@ -83,7 +83,7 @@ using WebOverlay;
 [BepInPlugin("com.you.yourmod", "You-YourMod", "1.0.0")]
 // With a version: your code fails at JIT time if a member is missing, long
 // after BepInEx would have called a bare GUID dependency satisfied.
-[BepInDependency("com.anvil.weboverlay", "1.10.0")]
+[BepInDependency("com.anvil.weboverlay", "1.11.0")]
 public class YourPlugin : BaseUnityPlugin
 {
     private IWebOverlay overlay;

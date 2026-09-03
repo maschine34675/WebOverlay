@@ -9,7 +9,7 @@ using UnityEngine;
 using WebOverlay;
 
 [BepInPlugin("com.you.yourhud", "You-YourHud", "1.0.0")]
-[BepInDependency("com.anvil.weboverlay", "1.10.0")]
+[BepInDependency("com.anvil.weboverlay", "1.11.0")]
 public class HudPlugin : BaseUnityPlugin
 {
     private IWebOverlay hud;

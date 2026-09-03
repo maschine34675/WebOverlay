@@ -68,7 +68,10 @@ Two traps that used to belong here have been closed by the library: page-side
 configuration no longer has to be re-sent on every `PageLoaded` - send it with
 `PostOptions.Retain` and the library replays it after its own reload (1.8.0) -
 and `Show()` refuses exclusive fullscreen by itself, logging once, rather than
-leaving each caller to guard it (1.7.0).
+leaving each caller to guard it (1.7.0 on paper, 1.11.0 in the game: until
+then the plugin's probe read the display mode off the main thread and the
+refusal never fired - a guard on your side was load-bearing after all, which
+is why nobody noticed).
 
 ## Shaping a HUD, and moving a window
 

@@ -12,7 +12,7 @@ using WebOverlay;
 [BepInPlugin("com.you.yourpanel", "You-YourPanel", "1.0.0")]
 // A hard minimum version, not a bare GUID: a member your code uses fails at
 // JIT time long after BepInEx would have called a bare dependency satisfied.
-[BepInDependency("com.anvil.weboverlay", "1.10.0")]
+[BepInDependency("com.anvil.weboverlay", "1.11.0")]
 public class PanelPlugin : BaseUnityPlugin
 {
     private IWebOverlay overlay;

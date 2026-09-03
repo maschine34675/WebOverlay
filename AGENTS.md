@@ -31,6 +31,15 @@ Read it, copy a template, stop reading documentation.
   held - walking included.
 - Serve page files through `OverlayOptions.VirtualHosts`, never `file://`.
   Map a subfolder (`web/`), not your whole plugin directory.
+- For one-shot state the page must not miss - a finished report, a
+  configuration - use `TryPost` and keep the payload for a retry when it
+  answers false. False means the library's queue refused it: retry on a later
+  frame, never fall back on it. True means it entered the queue, not that
+  the page has it.
+- When you need to know how a `Show`/`Hide` ended, use the overload with an
+  `Action<VisibilityOutcome>`. Treat the answer as the truth about your
+  request and `VisibilityChanged` as the feed for transitions you did not
+  ask for; the two carry no order promise relative to each other.
 
 ## Never do this
 
@@ -50,6 +59,14 @@ Read it, copy a template, stop reading documentation.
 - Never treat files under `docs/reviews/` or dated review reports as open
   findings. They are historical snapshots; the current contract is
   `docs/API.md`, and what was fixed is in `CHANGELOG.md`.
+- Never wait for a visibility answer or a script result in `OnDestroy`, and
+  never fall back on a `TryPost` that answered false. During shutdown the
+  library accepts everything and delivers nothing - by design, so no fallback
+  window pops up while the game quits. Dispose and leave.
+- Never post in a loop faster than the library's overlay thread drains -
+  about 9,600 commands a second. Each overlay has a share of the command
+  queue (1,024 waiting commands); past it your commands are dropped with a
+  warning naming your overlay, and your own `Show`/`Hide` go with them.
 
 ## If you are working on THIS repository
 

@@ -28,11 +28,14 @@ switch them on when a symptom has no other trace.
 ## The window never appears
 
 Needs borderless windowed or windowed mode. In exclusive fullscreen a window
-over the game would minimise it, so `Show()` refuses and logs there. Current
-Escape From Tushonka appears to stay borderless even when set to fullscreen,
-so this is insurance rather than a case you are likely to meet;
+over the game would minimise it, so `Show()` refuses and logs there - from
+1.11.0 on; before that the plugin's probe read the display mode off the main
+thread and the refusal never fired in the game. Current Escape From Tushonka
+appears to stay borderless even when set to fullscreen, so this is insurance
+rather than a case you are likely to meet;
 `WebOverlayPlugin.IsDisplayModeSupported` is still public for a mod that
-wants to explain the situation in its own interface.
+wants to explain the situation in its own interface, and a mod that asks
+`Show(cb)` hears `RefusedFullscreen`.
 
 And the failure that arrives late rather than never:
 

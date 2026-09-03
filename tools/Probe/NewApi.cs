@@ -622,11 +622,24 @@ internal static partial class NewApi
         check("Q1 the overlay became visible", before == 1 && overlay.IsVisible, "events=" + before);
 
         // The game is quitting: the host tears every overlay down.
+        int closedCount = 0;
+        overlay.Closed += () => Interlocked.Increment(ref closedCount);
         shutdown.Invoke(null, null);
         Thread.Sleep(3000);
         int after;
         lock (seen) after = seen.Count;
         check("Q2 shutdown raises no visibility event", after == before, "events=" + after);
+        // Closed used to be the one event without the gate; since 1.11.0 it
+        // keeps the same rule, because a handler is a handler.
+        check("Q3 nor a Closed for the visible window it tears down", closedCount == 0, "closed=" + closedCount);
+        // The internal droppable poster answers true while stopping, and
+        // that answer is what keeps a refused script from being answered
+        // null on the way out. Counterproof: make it answer false, and the
+        // callback fires inline.
+        bool scriptAnswered = false;
+        overlay.ExecuteScript("1", v => scriptAnswered = true);
+        Thread.Sleep(1500);
+        check("Q4 a script asked for after shutdown is never answered", !scriptAnswered, "");
         finish();
     }
 
@@ -2716,8 +2729,6 @@ internal static partial class NewApi
     internal static void Flood()
     {
         var warnings = hookWarnings();
-        Type host = typeof(WebOverlays).Assembly.GetType("WebOverlay.OverlayHost");
-        MethodInfo hostPost = host.GetMethod("Post", BindingFlags.NonPublic | BindingFlags.Static);
 
         bool loaded = false;
         int echoes = 0;
@@ -2733,22 +2744,23 @@ internal static partial class NewApi
 
         // Stall the overlay thread with one legitimate (non-droppable) item,
         // then flood past the limit while nothing can drain.
-        hostPost.Invoke(null, new object[] { (Action)(() => Thread.Sleep(1500)) });
-        Thread.Sleep(100);
+        stallOverlayThread(1500);
         for (int i = 0; i < 6000; i++)
             overlay.Post("flood " + i);
 
-        check("H13 the flood is refused with a warning instead of growing without bound",
-            warned(warnings, "command queue is full"), "");
+        check("H13 the flood is refused with a warning naming the overlay instead of growing without bound",
+            warned(warnings, "further ones are being dropped") && warned(warnings, "FloodProbe"), "");
 
-        // An obligation created DURING the flood: answered exactly once, one
-        // way or the other - refused-null now, or the real value after the
-        // stall - never silence.
+        // An obligation created DURING the flood: answered exactly once, and
+        // deterministically refused-null here, because the flooder's own
+        // share is what is full - never silence.
         string answer = "unanswered";
-        overlay.ExecuteScript("1 + 1", v => answer = v ?? "null-by-refusal");
+        int answers = 0;
+        overlay.ExecuteScript("1 + 1", v => { answer = v ?? "null-by-refusal"; Interlocked.Increment(ref answers); });
         wait(() => answer != "unanswered", 8000);
-        check("H14 an answer owed during the flood is still delivered",
-            answer != "unanswered", "answer=" + answer);
+        Thread.Sleep(2000);
+        check("H14 an answer owed during the flood is delivered exactly once, refused-null",
+            answer == "null-by-refusal" && answers == 1, "answer=" + answer + " answers=" + answers);
 
         // And afterwards, life goes on.
         Thread.Sleep(1800);

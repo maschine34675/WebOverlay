@@ -93,10 +93,12 @@ stops hearing.
 | Member | Meaning |
 |---|---|
 | `Show()`, `Hide()`, `Toggle()` | Visibility. `IsVisible` reads the current state. |
+| `Show(completed)`, `Hide(completed)` | The same, with an answer: an `Action<VisibilityOutcome>` settled exactly once - `Applied`, `AlreadyThere`, `RefusedFullscreen`, `Superseded`, `Failed`, `Disposed` or `QueueRefused` (see below). 1.11.0. |
 | `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
 | `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
 | `Post(channel, payload)` | Send on a named channel; arrives at the page's `overlay.on(channel, ...)`. |
 | `Post(channel, payload, options)` | The same, `Retain`ed for pages that load later or only worth sending while `LatestOnly` (see below). |
+| `TryPost(...)` | The three `Post` overloads with an answer: true when the command entered the library's queue, false when it did not and will not (see below). 1.11.0. |
 | `PumpEvents()` | Deliver this overlay's waiting events, for `Dispatch = Manual`. |
 | `Request(channel, payload, answer)` | Ask the page a question; answered exactly once, `null` on timeout. |
 | `OnRequest(channel, handler)` | Answer questions the page asks with `overlay.request(...)`; null removes the handler. Take `(payload, reply)` instead of returning a value when the answer is not ready yet. |
@@ -154,7 +156,28 @@ only on real transitions, including the `false` when a failure hides the
 overlay - but not while the game is shutting down, where the library stays
 quiet so nothing starts a fallback on the way out. `Closed` also fires for your own `Hide()`, so it cannot tell a player
 closing the window from the mod closing it; that will narrow in a future major
-version.
+version. Since 1.11.0 it keeps the same shutdown silence as the others.
+
+**Visibility answers (1.11.0).** `Show(completed)` and `Hide(completed)` say
+how the request ended, exactly once - or, only once the game is shutting
+down, not at all. The answer travels like a script result: overlay thread,
+main thread, or your next `PumpEvents()`, and it is still delivered after
+`Dispose()`. `Applied` means the overlay is now in the requested state and was
+not before; `AlreadyThere` that it already was, with no event raised;
+`RefusedFullscreen` that the game is in exclusive fullscreen and the overlay
+stays hidden and alive; `Superseded` that a newer `Show`, `Hide` or `Toggle`
+replaced the request while it waited for the browser view; `Failed` and
+`Disposed` what they say, with `Disposed` winning over everything the request
+may have done; `QueueRefused` that the library's command queue refused it
+(see the flood note below) and nothing will happen - retry later. Two things
+to know: every consumer's *first* request waits for the browser view and is
+answered before `Ready` - whether it ran before the creation or while the
+creation was waiting for the view - and `Applied` then means the native
+window, ahead of `PageLoaded`; and there is no order promise between the
+answer and the `VisibilityChanged` it caused - under `Manual` dispatch a
+pump that finds both waiting delivers the answer first, and one may find
+only the event. Use the answer for the request you made and the event for
+transitions you did not ask for.
 
 Windows keep the spot the player gave them: toggling does not recenter, and
 the position and size survive restarts (`%LOCALAPPDATA%\WebOverlay\window-bounds.txt`).
@@ -214,9 +237,30 @@ A request is answered **exactly once**: with the other side's reply, with
 `null` when nothing answers that channel, with `null` when the deadline
 (five seconds by default, `Request(..., timeoutMilliseconds)` to change it)
 passes - and with an immediate `null` in the one pathological case of the
-overlay command queue being full under a message flood, rather than a caller
+overlay command queue refusing it under a message flood, rather than a caller
 waiting five seconds for a timeout on a question nobody was ever asked.
 `ExecuteScript(script, result)` answers `null` in that same case. So neither side can hang the other, whatever the page does.
+
+**The flood note.** The library's command queue is one queue for every
+overlay of every mod, drained by one thread. Each overlay has a share of it
+(1,024 waiting commands) under a ceiling for the whole queue (4,096). A mod
+posting faster than the overlay thread drains - about 9,600 commands a
+second, or any rate at all while that thread is stalled - is refused at its
+own share, with a warning naming the overlay and its mod (at most once a
+minute), while every other overlay's commands still enter until the whole
+queue reaches its ceiling - they only wait behind the flooder's backlog,
+about a tenth of a second at full rate. A plain `Post` refused this way is
+dropped with nothing said to the caller, the log line being the only trace;
+`TryPost` answers false instead, so one-shot state a page must not miss - a
+finished report, a configuration - can be kept for a retry. True is
+admission, not delivery: a queued message can still be lost to the outbox
+limit before the page loads (plain sends - a `Retain`ed one is kept), to a
+document that is not your target, to a retarget, to a renderer crash without
+`Retain`, or to a failure racing it; the page acknowledges through `Request`
+or `ExecuteScript(script, result)` when it must. During shutdown `TryPost`
+answers true, like every other call's silent acceptance. Before 1.11.0 the
+bound was the ceiling alone, so one mod's flood refused every other mod's
+next command.
 
 When an answer is not ready yet, take the deferred form of `OnRequest` and
 call `reply` later, from wherever the answer arrives:
@@ -250,7 +294,10 @@ posting a value and then asking the page about it is safe as written.
 `LatestOnly` is the one exception, and deliberately: a newer message replaces
 the one still waiting on that channel and takes its place, so the page sees the
 newest payload at the position of the first one that was waiting. If the queue
-overflows the extra sends are dropped with a warning, never reordered.
+refuses a send it is dropped with a warning (or, through `TryPost`, answered
+false), never reordered - and a send you retry is a new send at a new
+position, so a mod that retries one channel of several has reordered its own
+traffic.
 
 The plain `Post` / `MessageReceived` pair is untouched and keeps working:
 anything that is not a well-formed envelope reaches `MessageReceived`

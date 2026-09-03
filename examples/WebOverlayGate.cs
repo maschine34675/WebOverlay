@@ -33,7 +33,7 @@ namespace YourMod.UI
         /// log says which of the two happened, because silence here reads as
         /// a bug in your mod.
         /// </summary>
-        public static readonly Version MinimumVersion = new Version(1, 10, 0);
+        public static readonly Version MinimumVersion = new Version(1, 11, 0);
 
         private static bool? loaded;
         private static Version foundVersion;

@@ -174,6 +174,22 @@ namespace WebOverlay
             public bool Settle() => System.Threading.Interlocked.Exchange(ref settled, 1) == 0;
         }
 
+        /// <summary>
+        /// One Show or Hide whose caller asked how it ended. Only ever held
+        /// while the browser view is still being built - every other request
+        /// is answered where it runs - and only one at a time: a newer
+        /// request settles the parked one as superseded. Settling is
+        /// once-only, so the creation tail, a failure and a close cannot
+        /// answer the same request twice between them.
+        /// </summary>
+        private sealed class VisibilityCall
+        {
+            public Action<VisibilityOutcome> Completion;
+            private int settled;
+
+            public bool Settle() => System.Threading.Interlocked.Exchange(ref settled, 1) == 0;
+        }
+
         private IntPtr window;
         private IntPtr controller;
         private IntPtr webView;
@@ -211,6 +227,10 @@ namespace WebOverlay
         private string pendingUrl;
         private string pendingHtml;
         private bool desiredVisible = true;
+        // Set once the browser view exists. Show and Hide defer until then,
+        // and a Show that wants an answer waits here for the creation tail.
+        private bool viewReady;
+        private VisibilityCall parkedShow;
         private volatile bool isVisible;
         private CreationState state = CreationState.Creating;
         private bool pageReady;
@@ -277,14 +297,15 @@ namespace WebOverlay
         /// can trust it as state rather than having to compare against its own
         /// flag - which is what Closed, firing on every Hide, forces today.
         /// </summary>
-        private void setVisible(bool value, bool notify = true)
+        private bool setVisible(bool value, bool notify = true)
         {
             if (isVisible == value)
-                return;
+                return false;
             OverlayHost.LogDiagnostic("overlay '" + title + "': shown -> " + value);
             isVisible = value;
             if (notify)
                 VisibilityChanged?.Invoke(value);
+            return true;
         }
         public Action Ready;
         public Action Failed;
@@ -390,6 +411,58 @@ namespace WebOverlay
 
         public string FailureMessage { get; private set; }
 
+        // This window's share of the host's command queue: how many of its
+        // droppable commands are waiting right now, and when it was last
+        // told about refusing more - once, then at most once a minute while
+        // the flood lasts, and again for a flood an hour later.
+        private int queuedCommands;
+        private int commandOverflowWarnedAt;
+
+        internal bool TakeCommandSlot()
+        {
+            if (System.Threading.Interlocked.Increment(ref queuedCommands) <= OverlayHost.WindowShare)
+                return true;
+            System.Threading.Interlocked.Decrement(ref queuedCommands);
+            if (OverlayHost.ShouldWarnAgain(ref commandOverflowWarnedAt))
+                OverlayHost.LogWarning("overlay '" + title + "' (" + ownerName + ") has "
+                    + OverlayHost.WindowShare + " commands waiting and further ones are being dropped"
+                    + " - is it posting in a loop?");
+            return false;
+        }
+
+        internal void ReleaseCommandSlot() => System.Threading.Interlocked.Decrement(ref queuedCommands);
+
+        /// <summary>
+        /// Answers a visibility request, exactly once - or, once the game is
+        /// shutting down, not at all: the answer path would wake the consumer
+        /// on the way out, which nothing here may do.
+        /// </summary>
+        private static void settleVisibility(VisibilityCall call, VisibilityOutcome outcome)
+        {
+            if (call == null || !call.Settle() || OverlayHost.Stopping)
+                return;
+            try
+            {
+                call.Completion(outcome);
+            }
+            catch (Exception ex)
+            {
+                OverlayHost.LogWarning("a visibility completion threw ("
+                    + ex.GetType().Name + ": " + ex.Message + ").");
+            }
+        }
+
+        /// <summary>
+        /// A newer visibility request replaces whatever was still waiting for
+        /// the browser view - with or without a completion of its own.
+        /// </summary>
+        private void supersedeParkedShow()
+        {
+            VisibilityCall parked = parkedShow;
+            parkedShow = null;
+            settleVisibility(parked, VisibilityOutcome.Superseded);
+        }
+
         /// <summary>
         /// Marks the overlay broken and tells the consumer, exactly once. The
         /// window is hidden rather than destroyed - the consumer still owns the
@@ -430,6 +503,10 @@ namespace WebOverlay
                 ShowWindow(window, SW_HIDE);
                 setVisible(false, !OverlayHost.Stopping);
             }
+            // A Show still waiting for the browser view will never get one.
+            VisibilityCall parked = parkedShow;
+            parkedShow = null;
+            settleVisibility(parked, VisibilityOutcome.Failed);
             if (!OverlayHost.Stopping)
                 Failed?.Invoke();
         }
@@ -645,8 +722,38 @@ namespace WebOverlay
                 startPendingNavigation();
             else
                 navigationOwedToShim = true;
+            // The browser view exists from here on: what the mod asked for
+            // while it was starting is applied now, and a Show that waited
+            // for an answer gets it here - before Ready, so a Ready handler
+            // that asks again finds its earlier question already answered.
+            // This is the ordinary path, not an edge: a consumer's first Show
+            // runs either before its Create does (commands are drained before
+            // creations) or while the creation is waiting for the view, and
+            // both orderings park here. The slot is emptied before the apply,
+            // so a consumer that answers the transition by asking again finds
+            // nothing older to supersede.
+            viewReady = true;
+            VisibilityCall parked = parkedShow;
+            parkedShow = null;
             if (desiredVisible)
-                Show();
+            {
+                try
+                {
+                    applyShow(parked);
+                }
+                catch
+                {
+                    // The creation fails from here - the completion's own
+                    // catch does that - and a request nobody holds any more
+                    // would otherwise never be answered.
+                    settleVisibility(parked, VisibilityOutcome.Failed);
+                    throw;
+                }
+            }
+            else
+            {
+                settleVisibility(parked, VisibilityOutcome.Superseded);
+            }
 
             // Ready last: everything internal is done, and a consumer handler
             // that throws must not be able to leave the overlay half-built.
@@ -2178,7 +2285,10 @@ namespace WebOverlay
         /// </summary>
         private static void answer(Action<string> result, string value)
         {
-            if (result == null)
+            // Nothing is delivered during shutdown - the contract says so,
+            // and until 1.11.0 this one path did not keep it: the answers
+            // settled by the closing of every overlay went out inline.
+            if (result == null || OverlayHost.Stopping)
                 return;
             try
             {
@@ -2239,19 +2349,56 @@ namespace WebOverlay
             WebView2Api.Method<WebView2Api.NoArgsDelegate>(webView, WebView2Api.WebView_OpenDevToolsWindow)(webView);
         }
 
-        public void Show()
+        /// <summary>
+        /// Shows the window, and - when the caller asked - says how that
+        /// ended. Precedence at every answer: a closed window, then a failed
+        /// one, then the display mode, then whether anything changed. The
+        /// answer settles exactly once, or not at all once the game is
+        /// shutting down, and it never waits on anything but the browser
+        /// view being built.
+        /// </summary>
+        public void Show(Action<VisibilityOutcome> completed = null)
         {
-            desiredVisible = true;
+            // Nothing may wake a consumer on the way out, and a window shown
+            // now would only be torn down a moment later.
+            if (OverlayHost.Stopping)
+                return;
+            VisibilityCall call = completed == null ? null : new VisibilityCall { Completion = completed };
+            supersedeParkedShow();
             OverlayHost.LogDiagnostic("overlay '" + title + "': Show() entered, window="
                 + window.ToString("X") + " state=" + state
                 + " displayMode=" + OverlayHost.DisplayModeSupported);
-            if (window == IntPtr.Zero || state == CreationState.Failed)
+            if (closed)
             {
-                // Nothing to show yet - creation will call this again once the
-                // window exists, because desiredVisible is now set.
-                OverlayHost.LogDiagnostic("overlay '" + title + "': Show() deferred");
+                settleVisibility(call, VisibilityOutcome.Disposed);
                 return;
             }
+            if (state == CreationState.Failed)
+            {
+                // Nothing will ever show this window again, and the desired
+                // state stays as it was: recording "wanted" here made the
+                // next Toggle hide a dead window and fire Closed for it.
+                settleVisibility(call, VisibilityOutcome.Failed);
+                return;
+            }
+            desiredVisible = true;
+            if (!viewReady)
+            {
+                // Nothing to show yet - the creation tail shows it once the
+                // browser view exists, because desiredVisible is now set, and
+                // answers the request then. Deferring on the view rather than
+                // on the HWND is deliberate: the HWND exists before the view
+                // does, and a Show that ran in between used to put an empty
+                // popup on screen and report it as visible.
+                OverlayHost.LogDiagnostic("overlay '" + title + "': Show() deferred");
+                parkedShow = call;
+                return;
+            }
+            applyShow(call);
+        }
+
+        private void applyShow(VisibilityCall call)
+        {
             if (!OverlayHost.DisplayModeSupported)
             {
                 // A window over an exclusive-fullscreen game minimises it, and
@@ -2266,6 +2413,7 @@ namespace WebOverlay
                         + " where a window over it would minimise it. Use borderless windowed.");
                 }
                 desiredVisible = false;
+                settleVisibility(call, VisibilityOutcome.RefusedFullscreen);
                 return;
             }
             // Repositioning on every Show is what reset the window each toggle.
@@ -2284,25 +2432,51 @@ namespace WebOverlay
                 SetForegroundWindow(window);
             else
                 SetTimer(window, TrackTimerId, TrackIntervalMilliseconds, IntPtr.Zero);
-            setVisible(true);
+            bool changed = setVisible(true);
+            settleVisibility(call, changed ? VisibilityOutcome.Applied : VisibilityOutcome.AlreadyThere);
         }
 
-        public void Hide()
+        /// <summary>
+        /// Hides the window; see <see cref="Show"/> for how a request is
+        /// answered. A window whose browser view does not exist yet cannot be
+        /// showing - Show defers on the same condition - so the request is
+        /// already met and answered at once, with nothing parked.
+        /// </summary>
+        public void Hide(Action<VisibilityOutcome> completed = null)
         {
-            desiredVisible = false;
-            if (window == IntPtr.Zero)
+            if (OverlayHost.Stopping)
                 return;
+            VisibilityCall call = completed == null ? null : new VisibilityCall { Completion = completed };
+            supersedeParkedShow();
+            if (closed)
+            {
+                settleVisibility(call, VisibilityOutcome.Disposed);
+                return;
+            }
+            if (state == CreationState.Failed)
+            {
+                // Already hidden by the failure; a dead window is not "there".
+                settleVisibility(call, VisibilityOutcome.Failed);
+                return;
+            }
+            desiredVisible = false;
+            if (!viewReady)
+            {
+                settleVisibility(call, VisibilityOutcome.AlreadyThere);
+                return;
+            }
             if (options.Transparent)
                 KillTimer(window, TrackTimerId);
             setControllerVisible(false);
             ShowWindow(window, SW_HIDE);
-            setVisible(false);
+            bool changed = setVisible(false);
             // Hand the keyboard back to the game, not to whatever sits behind.
             // A HUD never had it, so there is nothing to hand back.
             if (!options.Transparent
                 && OverlayHost.GameWindow != IntPtr.Zero && IsWindow(OverlayHost.GameWindow))
                 SetForegroundWindow(OverlayHost.GameWindow);
             Closed?.Invoke();
+            settleVisibility(call, changed ? VisibilityOutcome.Applied : VisibilityOutcome.AlreadyThere);
         }
 
         /// <summary>
@@ -2447,6 +2621,11 @@ namespace WebOverlay
             closed = true;
             bool wasVisible = isVisible;
             isVisible = false;
+            // A Show still waiting for the browser view is answered before
+            // the view is torn down, with the one outcome a closed window has.
+            VisibilityCall parked = parkedShow;
+            parkedShow = null;
+            settleVisibility(parked, VisibilityOutcome.Disposed);
             // Each native resource on its own: one failing close must not skip
             // the rest, and every pointer is nulled regardless so a retry can
             // never double-release.
@@ -2553,14 +2732,15 @@ namespace WebOverlay
                 answer(open.Answer, null);
             clearOutbox();
             OverlayHost.Unregister(this);
-            if (wasVisible)
+            // Same reasoning as in fail(): during shutdown this would only
+            // wake a fallback while the game is going away. Closed used to
+            // fire here regardless, as the one event with no shutdown gate;
+            // since 1.11.0 it keeps the rule the others keep, because a
+            // handler is a handler whichever event runs it.
+            if (wasVisible && !OverlayHost.Stopping)
             {
                 Closed?.Invoke();
-                // Same reasoning as in fail(): during shutdown this would only
-                // wake a fallback while the game is going away. Closed keeps
-                // its long-standing behaviour, unchanged here.
-                if (!OverlayHost.Stopping)
-                    VisibilityChanged?.Invoke(false);
+                VisibilityChanged?.Invoke(false);
             }
         }
 

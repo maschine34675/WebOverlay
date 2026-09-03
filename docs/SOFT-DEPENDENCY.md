@@ -148,6 +148,7 @@ Set `MinimumVersion` from the newest member you actually use:
 | 1.8.8 | `OverlayOptions.ClickThroughWhenUnfocused` - the member exists from 1.8.6, but 1.8.6 engaged it whenever the panel was not in front, leaving it unclickable in menus too |
 | 1.9.0 | `VirtualHost.Access` / `HostAccess` |
 | 1.10.0 | `ChannelsFailed`, `ChannelsAvailable`, `OverlayOptions.AllowDownloads` |
+| 1.11.0 | `TryPost`, `Show(Action<VisibilityOutcome>)` / `Hide(Action<VisibilityOutcome>)`, `VisibilityOutcome` |
 
 1.8.4 through 1.8.7 were never released; the first build a player can install
 that has any of the 1.8.4-1.8.7 work is **1.8.8**. Gate on that rather than on

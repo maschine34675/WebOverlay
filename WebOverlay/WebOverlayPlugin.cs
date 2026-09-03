@@ -82,7 +82,15 @@ namespace WebOverlay
             // Only Unity knows the display mode, and the rest of the library
             // deliberately does not know Unity; this is how Show() can refuse
             // exclusive fullscreen without every consumer remembering to.
-            OverlayHost.DisplayModeProbe = () => IsDisplayModeSupported;
+            // The probe answers from a value Update caches, not from Unity
+            // directly: it is asked on the overlay thread, and
+            // Screen.fullScreenMode is not one of Unity's thread-safe
+            // bindings - the throw was swallowed as "supported", so the
+            // refusal never fired in the game before 1.11.0. Seeded here so
+            // a consumer asking from its own Awake, before this Update ran,
+            // is not told "supported" by a default.
+            displayModeSupported = Screen.fullScreenMode != FullScreenMode.ExclusiveFullScreen;
+            OverlayHost.DisplayModeProbe = () => displayModeSupported;
             // Whether the game is holding the mouse rather than lending it to
             // the player. ClickThroughWhenUnfocused only matters then; in a
             // menu the cursor is free and a window may be clicked as usual.
@@ -102,6 +110,8 @@ namespace WebOverlay
         /// </summary>
         private void Update()
         {
+            // Read where Unity allows it, answered wherever it is asked.
+            displayModeSupported = Screen.fullScreenMode != FullScreenMode.ExclusiveFullScreen;
             OverlayHost.PumpMainThread();
             // Whether the overlay is the window in front, asked of the OS -
             // Unity's own notion of focus does not have to agree, and the game
@@ -392,12 +402,19 @@ namespace WebOverlay
             return found;
         }
 
+        // Written by Update on the main thread, read by the overlay thread
+        // and by consumers on whichever thread asks. True until the first
+        // frame, which is what a non-Unity host wants too.
+        private static volatile bool displayModeSupported = true;
+
         /// <summary>
         /// A window over the game cannot work in exclusive fullscreen: showing
-        /// it would minimise the game. Mods should check this and fall back.
+        /// it would minimise the game. <see cref="IWebOverlay.Show()"/> refuses
+        /// it by itself; this is for a mod that wants to explain the situation
+        /// in its own interface. Safe to call from any thread - it reports
+        /// what the main thread last saw.
         /// </summary>
-        public static bool IsDisplayModeSupported =>
-            Screen.fullScreenMode != FullScreenMode.ExclusiveFullScreen;
+        public static bool IsDisplayModeSupported => displayModeSupported;
 
         /// <summary>
         /// The Win32 virtual-key code for a Unity key, or 0 when there is

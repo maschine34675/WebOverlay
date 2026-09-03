@@ -5,8 +5,9 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-78 were added for v1.3.0 to v1.10.0
-(runtime 151.0.4129.93).
+and re-run unchanged for v1.4.0; rows 10-92 were added for v1.3.0 to v1.11.0
+(runtime 151.0.4129.93). Row 21 grew two assertions in v1.11.0 (Q3, Q4) and
+row 78 was re-proven there against a changed mechanism.
 
 The Result column says how the row is evidenced. `PASS` means the probe
 asserts it automatically; anything else names what was actually done, because a
@@ -34,7 +35,7 @@ row that claims more than the automation delivers is worse than no row.
 | 18 | Show/Hide/Show, redundant calls, then destruction | `VisibilityChanged` reports only real transitions and the final false | PASS |
 | 19 | A script occupying the renderer for seconds, then `Dispose` before it completes | the close answers the caller with null, exactly once, and the late completion changes nothing | PASS |
 | 20 | `ExecuteScript` with a result, handle disposed before the main-thread pump runs | the result is still delivered - unlike an event, which is dropped on purpose - and a call on an already disposed handle is answered too | PASS |
-| 21 | Host shutdown with a visible overlay | no `VisibilityChanged`, so nothing wakes a consumer fallback while the game quits | PASS |
+| 21 | Host shutdown with a visible overlay | no `VisibilityChanged` and, since 1.11.0, no `Closed` either, and a script asked for afterwards is never answered - so nothing wakes a consumer fallback while the game quits | PASS |
 | 22 | Named channels end to end: both directions of send, both directions of request, a promise answer, a channel nobody answers, a page that never answers | every request answered exactly once (null on timeout), payloads with quotes, newlines, backslashes and non-ASCII survive verbatim | PASS |
 | 23 | A page using `window.overlay` in its first script, and a page sending plain text and its own JSON | the shim is there before page script runs; non-envelope messages arrive at `MessageReceived` untouched and no protocol traffic leaks into it | PASS |
 | 24 | An interactive HUD shaped down to one rectangle, from the page and from the mod, then cleared | inside the shape it paints and takes real clicks; outside, the click reaches the window behind and nothing is painted; clearing restores both | PASS |
@@ -91,7 +92,21 @@ row that claims more than the automation delivers is worse than no row.
 | 75 | The channel shim rejected (via the test seam - a real browser never rejects the library's own shim on demand) | `ChannelsFailed` fires, `ChannelsAvailable` answers false, a late subscription still hears it, and the raw message bridge keeps working. The seam fakes the browser's ANSWER, so these rows prove the signal path, not the browser's ability to fail | PASS |
 | 76 | A healthy overlay, same questions | `ChannelsAvailable` answers true and the event stays quiet | PASS |
 | 77 | A page-initiated download (`a[download]`, clicked by script) | blocked, with a warning naming the URL, and the overlay is unharmed; with `AllowDownloads` the library stays out of it. Slot 75 on ICoreWebView2_4 and the args slots are thereby proven - a blocked download is an effect no wrong slot could fake | PASS |
-| 78 | Six thousand posts while the overlay thread is deliberately stalled | the command queue refuses past its bound with one warning; a script answer owed during the flood is still delivered exactly once; the overlay works normally afterwards | PASS |
+| 78 | Six thousand posts while the overlay thread is deliberately stalled | the overlay is refused past its share of the queue with a warning naming it; a script answer owed during the flood is still delivered exactly once - refused-null, since the flooder's own share is what is full; the overlay works normally afterwards. Re-proven for 1.11.0 against the per-overlay share; the 1.10.0 row described the queue-wide bound, which row 83 now covers | PASS |
+| 79 | `TryPost` under the same flood, six thousand times | the caller is told: the accepted count is at most the overlay's share (1,024) and the rest answer false, with the warning naming the overlay; after the stall the page receives exactly the accepted ones; a disposed handle answers false; during shutdown the answer is true, like every other call's silent acceptance. Counterproof: with the handle discarding the host's answer, no post answers false and the page receives fewer than were accepted | PASS |
+| 80 | A hundred and one `TryPost`s before the page exists | all hundred and one enter the queue - true is admission, not delivery - and the page then receives the outbox's hundred, the extra one announced as dropped | PASS |
+| 81 | One overlay flooding while a second, from the same process, keeps working | the flooder is refused at its share and the warning names it; the neighbour's `TryPost` still answers true, its `ExecuteScript` answers the real value rather than refused-null, its `Hide(cb)` answers `Applied`, its message reaches its page once the backlog has drained, and no warning names the neighbour. Counterproof: with the share raised to the ceiling the neighbour's commands are refused - 1.10.0's behaviour | PASS |
+| 82 | The flooder disposed while over its share, after a second flood seconds after the first | it still closes - a Dispose is an obligation, outside the share - and the second flood is not warned about again: one warning per overlay, then at most one a minute. That it is named again an hour later is the same stamp read the other way, not spent an hour of the probe's time on | PASS |
+| 83 | Five overlays flooding together | the ceiling above every share is reached and refused with the queue-wide warning | PASS |
+| 84 | A `Show(cb)` queued behind a stall, and the handle disposed before it ran | answers `Disposed`, never `Applied`, and the window is never shown for a handle that can no longer see it. Counterproof: without the run-time disposed check the window is shown and its transition raised for the disposed handle | PASS |
+| 85 | Show, Hide, Show with answers queued before the creation runs - the ordering every consumer's first open takes when commands are drained before creations | `Superseded`, `AlreadyThere`, `Applied`, exactly one visibility transition, and the window showing after creation. The other ordering - a Show that lands while the creation is waiting for its view, where 1.10.0 showed a bare popup - takes the same deferral but is not exercised here: nothing in the public API tells a window shown before its view from one shown with it | PASS |
+| 86 | A `Hide(cb)` alone in the creation gap | `AlreadyThere`, no transition, and the window stays hidden through creation | PASS |
+| 87 | A `Show(cb)` refused by the display mode | `RefusedFullscreen`, no transition, no failure - and `Toggle` afterwards shows, because the refusal reset the window's own desired state, which is what `Toggle` reads | PASS |
+| 88 | A `Show(cb)` parked on a creation that then fails, the handle disposed from the `Failed` handler | `Failed`, exactly once - the parked request is answered before the handler runs, so the handler's Dispose cannot answer it again | PASS |
+| 89 | `Show(cb)` and `Hide(cb)` on an overlay that has already failed | both answer `Failed` at once rather than wait for a view that will never come. Counterproof: without the failed-first precedence the Show parks on a view that will never come - the row's own Hide is what answers it, as `Superseded` - and the Hide answers `AlreadyThere` for a dead window | PASS |
+| 90 | A `Hide(cb)` under manual dispatch, pumped once both are waiting | the pump delivers the answer and the event, the answer first - the documented order, asserted so it cannot drift unnoticed. A pump racing the two enqueues can find only the event, which is why the contract promises no order | PASS |
+| 91 | A `Show(cb)` while the overlay's share of the queue is full | `QueueRefused` without entering the queue - synchronously on the calling thread in this host, which has no main-thread pump; under main-thread dispatch it arrives on the next frame like any answer | PASS |
+| 92 | A `Show(cb)` in flight when shutdown begins, on a visible overlay | never answered; the close on the way out raises neither `Closed` nor `VisibilityChanged`; a script asked for afterwards is never answered. Counterproof for the `Closed` half: with the gate removed the row and row 21's Q3 see the event. The "never answered" half is guarded twice - the window's settle helper and the handle's - and was not counterproven on its own | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):
@@ -124,6 +139,15 @@ Not automated (manually covered in game during development, or accepted):
 - Freeing the cursor while the game holds it: needs Unity and a game that
   captures the mouse, so it is covered in game rather than here.
 - The `KeyCode` to virtual-key table, which is a table.
+- The exclusive-fullscreen refusal as the game exercises it. Rows 31, 49 and
+  87 replace the display-mode probe in a non-Unity host and prove the
+  library's half; the plugin's half - reading `Screen.fullScreenMode` on the
+  main thread and answering from the cache on the overlay thread - needs the
+  game in exclusive fullscreen, which current Escape From Tushonka appears
+  never to enter. Before 1.11.0 the probe read the property on the overlay
+  thread, where Unity's binding is not thread-safe, and the throw was
+  swallowed as "supported"; reasoned from the binding metadata, and a probe
+  that throws now says so under Diagnose.
 
 ## Running it
 
@@ -135,14 +159,18 @@ dotnet build WebOverlay/WebOverlay.csproj -c Release
 dotnet run --project tools/Probe -c Release -- channels
 ```
 
-Modes: `fault-loader`, `fault-bightml`, `fault-dispose-race`,
-`fault-redirect`, `script-roundtrip`, `bounds-save`/`bounds-verify`, `latency`,
-`glass`, `glass-click`, `cube`, `storage`, `vhost`, `vhost-fail`,
-`nav-reject`, `dispatch`, `failure-kind`, `script-result`, `visibility`,
-`close-race`, `shutdown-quiet`, `channels`, `shape`, `bounds-api`,
-`shape-guards`, `api17`, `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`,
-`spare-browser`, `spare-folder`, `retained`, `latest-only`, `manual-pump`,
-`failed-nav`, `generation`; no mode at all is the normal path.
+Modes, in the order `tools/Probe/Program.cs` lists them: `fault-loader`,
+`fault-bightml`, `fault-dispose-race`, `fault-redirect`, `script-roundtrip`,
+`bounds-save`/`bounds-verify`, `latency`, `glass`, `glass-click`, `cube`,
+`storage`, `vhost`, `vhost-cors`, `ordering`, `page-diag`, `bounds-locked`,
+`nav-race`, `channels-dead`, `downloads`, `flood`, `dispatch`, `failure-kind`,
+`vhost-fail`, `nav-reject`, `script-result`, `visibility`, `close-race`,
+`shutdown-quiet`, `channels`, `shape`, `bounds-api`, `shape-guards`, `api17`,
+`mixed`, `mixed-reverse`, `dcomp-first`, `footprint`, `spare-browser`,
+`spare-folder`, `retained`, `latest-only`, `manual-pump`, `failed-nav`,
+`generation`, `ready-load`, `click-through`, `trypost`, `share`,
+`visibility-result`; no mode at all is the normal path, and `preview` is not
+a row but the mode for looking at your own page.
 
 `glass`, `glass-click`, `cube`, `shape` and `shape-guards` sample real screen
 pixels and send real mouse input, so they need a desktop that is actually being

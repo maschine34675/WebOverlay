@@ -419,7 +419,7 @@ namespace WebOverlay
         /// window ignores the mouse and never takes focus, so the game stays
         /// fully playable - which also means <see cref="CloseKeys"/> cannot
         /// apply: hide the HUD from the mod's own hotkey via
-        /// <see cref="IWebOverlay.Hide"/> or Toggle. Unless a size is set, the
+        /// <see cref="IWebOverlay.Hide()"/> or Toggle. Unless a size is set, the
         /// HUD covers the game's whole client area, and <see cref="Frame"/>
         /// is ignored (<see cref="Opacity"/> too when composition hosted -
         /// fade in the page's CSS instead; the chroma-key fallback still
@@ -577,6 +577,71 @@ namespace WebOverlay
         public VirtualHost[] VirtualHosts { get; set; }
     }
 
+    /// <summary>
+    /// How a <see cref="IWebOverlay.Show(Action{VisibilityOutcome})"/> or
+    /// <see cref="IWebOverlay.Hide(Action{VisibilityOutcome})"/> request
+    /// ended. Answered exactly once per request - or, only once the game is
+    /// shutting down, not at all. Arrived in 1.11.0.
+    /// </summary>
+    public enum VisibilityOutcome
+    {
+        /// <summary>
+        /// The overlay is now in the requested state and was not before. The
+        /// matching <see cref="IWebOverlay.VisibilityChanged"/> was raised no
+        /// later than this answer was queued; under
+        /// <see cref="EventDispatch.Manual"/> a
+        /// <see cref="IWebOverlay.PumpEvents"/> call that finds both waiting
+        /// delivers the answer first - and one may find only the event.
+        /// </summary>
+        Applied = 0,
+
+        /// <summary>
+        /// The overlay already was in the requested state. Nothing changed
+        /// and no <see cref="IWebOverlay.VisibilityChanged"/> was raised.
+        /// </summary>
+        AlreadyThere,
+
+        /// <summary>
+        /// A Show refused because the game is in exclusive fullscreen, where
+        /// a window over it would minimise it. The overlay stays alive and
+        /// hidden - the player can switch modes - so this is neither a
+        /// visibility change nor a failure.
+        /// </summary>
+        RefusedFullscreen,
+
+        /// <summary>
+        /// A newer Show, Hide or Toggle on this overlay replaced the request
+        /// before it was applied; the newer request reports the result. Only
+        /// possible while the browser view is still being built, which is
+        /// where a request waits.
+        /// </summary>
+        Superseded,
+
+        /// <summary>
+        /// The overlay had failed before the request could be applied - for a
+        /// Hide as much as for a Show, since a dead window is not "there".
+        /// </summary>
+        Failed,
+
+        /// <summary>
+        /// The handle was disposed before, or while, the request was being
+        /// applied. A disposed handle stops dispatching events, so whatever
+        /// the request did is not reported to it - under
+        /// <see cref="EventDispatch.OverlayThread"/> an event already in
+        /// flight can still arrive inline before this answer - and this
+        /// outcome wins over every other.
+        /// </summary>
+        Disposed,
+
+        /// <summary>
+        /// The library's command queue refused the request: this overlay had
+        /// its share of commands waiting already, or the whole queue was at
+        /// its ceiling. Nothing was queued and nothing will happen. Retry
+        /// later; never fall back on it.
+        /// </summary>
+        QueueRefused,
+    }
+
     /// <summary>A single overlay window.</summary>
     public interface IWebOverlay : IDisposable
     {
@@ -614,6 +679,41 @@ namespace WebOverlay
         void Hide();
         void Toggle();
 
+        /// <summary>
+        /// <see cref="Show()"/> that says how it ended, through
+        /// <paramref name="completed"/>, exactly once - or, only once the game
+        /// is shutting down, not at all. The answer travels like an
+        /// <see cref="ExecuteScript(string, Action{string})"/> result: the
+        /// overlay thread, the game's main thread, or your next
+        /// <see cref="PumpEvents"/>, and it is still delivered after
+        /// <see cref="IDisposable.Dispose"/>. It may run synchronously inside
+        /// this call when the request is refused at once, and after a
+        /// dispose it may arrive on the overlay thread whatever the dispatch
+        /// mode. Keep pumping a manual overlay while an answer is
+        /// outstanding, and never wait for one in <c>OnDestroy</c>.
+        ///
+        /// A request that arrives before the browser view exists - every
+        /// consumer's first does, whether it runs before the creation or
+        /// while the creation is waiting for the view - waits for the view
+        /// and is answered before <see cref="Ready"/>.
+        /// <see cref="VisibilityOutcome.Applied"/> means the native window,
+        /// not the page: it precedes <see cref="PageLoaded"/>. There is no
+        /// order promise between the answer and the
+        /// <see cref="VisibilityChanged"/> it caused: use the answer for the
+        /// request you made and the event for transitions you did not ask
+        /// for. Arrived in 1.11.0.
+        /// </summary>
+        void Show(Action<VisibilityOutcome> completed);
+
+        /// <summary>
+        /// <see cref="Hide()"/> that says how it ended; everything said for
+        /// <see cref="Show(Action{VisibilityOutcome})"/> applies. A window
+        /// whose browser view does not exist yet is already hidden and is
+        /// answered <see cref="VisibilityOutcome.AlreadyThere"/> at once.
+        /// Arrived in 1.11.0.
+        /// </summary>
+        void Hide(Action<VisibilityOutcome> completed);
+
         /// <summary>Loads a URL, for a mod that already serves pages.</summary>
         void Navigate(string url);
 
@@ -639,6 +739,47 @@ namespace WebOverlay
         /// it is the newest.
         /// </summary>
         void Post(string channel, string payload, PostOptions options);
+
+        /// <summary>
+        /// <see cref="Post(string)"/> that says whether the command entered
+        /// the library's command queue. False means it did not and will not:
+        /// the handle was disposed, or the queue refused it - this overlay
+        /// had its share of commands waiting already, or the whole queue was
+        /// at its ceiling. Retry later; never fall back on it. During
+        /// shutdown the library accepts everything and does nothing, like
+        /// every other call, so the answer is true then.
+        ///
+        /// True is not delivery. A queued message can still be lost to the
+        /// outbox limit before the page loads (plain sends; a
+        /// <see cref="PostOptions.Retain"/>ed one is kept), to a document
+        /// that is not the mod's target, to a retarget - <see cref="LoadHtml"/>
+        /// and <see cref="Navigate"/> forget both the outbox and the retained
+        /// set - to a renderer crash without <see cref="PostOptions.Retain"/>,
+        /// to a failure or close that lands first, and to the browser itself,
+        /// which does not report whether it took the string. What
+        /// <see cref="PostOptions.Retain"/> buys is that a true survives
+        /// reloads. A page that must acknowledge still does so through
+        /// <see cref="Request(string, string, Action{string})"/> or
+        /// <see cref="ExecuteScript(string, Action{string})"/>, both of which
+        /// answer null when refused. Arrived in 1.11.0.
+        /// </summary>
+        bool TryPost(string message);
+
+        /// <summary>
+        /// <see cref="Post(string, string)"/> that says whether the command
+        /// entered the library's command queue; see
+        /// <see cref="TryPost(string)"/> for what the answer means. Arrived in
+        /// 1.11.0.
+        /// </summary>
+        bool TryPost(string channel, string payload);
+
+        /// <summary>
+        /// <see cref="Post(string, string, PostOptions)"/> that says whether
+        /// the command entered the library's command queue; see
+        /// <see cref="TryPost(string)"/> for what the answer means. Arrived in
+        /// 1.11.0.
+        /// </summary>
+        bool TryPost(string channel, string payload, PostOptions options);
 
         /// <summary>
         /// Asks the page a question and takes its answer, from the page's
@@ -773,7 +914,7 @@ namespace WebOverlay
 
         /// <summary>
         /// Raised whenever the overlay is hidden or closed. Note that this
-        /// includes the mod's own <see cref="Hide"/>, so it cannot tell "the
+        /// includes the mod's own <see cref="Hide()"/>, so it cannot tell "the
         /// player closed it" from "we closed it" - use
         /// <see cref="VisibilityChanged"/> for state, and expect this event to
         /// narrow to real closes in a future major version.
@@ -1150,6 +1291,81 @@ namespace WebOverlay
                 window.Show();
         });
 
+        public void Show(Action<VisibilityOutcome> completed)
+        {
+            if (completed == null)
+            {
+                Show();
+                return;
+            }
+            Action<VisibilityOutcome> settle = visibilitySettler(completed);
+            if (disposed != 0)
+            {
+                settle(VisibilityOutcome.Disposed);
+                return;
+            }
+            if (!OverlayHost.TryPost(window, () =>
+                {
+                    // Disposed between the call and the run: the window may
+                    // still be alive - CloseFromHost is queued behind this -
+                    // but nothing it does now is observable to the consumer,
+                    // whose events stopped at Dispose.
+                    if (disposed != 0)
+                        settle(VisibilityOutcome.Disposed);
+                    else
+                        window.Show(settle);
+                }))
+            {
+                settle(VisibilityOutcome.QueueRefused);
+            }
+        }
+
+        public void Hide(Action<VisibilityOutcome> completed)
+        {
+            if (completed == null)
+            {
+                Hide();
+                return;
+            }
+            Action<VisibilityOutcome> settle = visibilitySettler(completed);
+            if (disposed != 0)
+            {
+                settle(VisibilityOutcome.Disposed);
+                return;
+            }
+            if (!OverlayHost.TryPost(window, () =>
+                {
+                    if (disposed != 0)
+                        settle(VisibilityOutcome.Disposed);
+                    else
+                        window.Hide(settle);
+                }))
+            {
+                settle(VisibilityOutcome.QueueRefused);
+            }
+        }
+
+        /// <summary>
+        /// Wraps a visibility completion so that it settles exactly once
+        /// wherever the answer comes from - the call itself, the window, a
+        /// failure, a close - travels like a script result, stays quiet
+        /// during shutdown, and reports Disposed whenever the handle is
+        /// disposed by the time it settles, because the outcome must agree
+        /// with what the consumer can still observe.
+        /// </summary>
+        private Action<VisibilityOutcome> visibilitySettler(Action<VisibilityOutcome> completed)
+        {
+            int once = 0;
+            return outcome =>
+            {
+                if (System.Threading.Interlocked.Exchange(ref once, 1) != 0 || OverlayHost.Stopping)
+                    return;
+                if (disposed != 0)
+                    outcome = VisibilityOutcome.Disposed;
+                raiseResult(() => completed(outcome));
+            };
+        }
+
         public void Navigate(string url) => post(() => window.Navigate(url));
 
         public void LoadHtml(string html) => post(() => window.LoadHtml(html));
@@ -1161,6 +1377,28 @@ namespace WebOverlay
 
         public void Post(string channel, string payload, PostOptions options) =>
             post(() => window.PostToChannel(channel, payload, options));
+
+        public bool TryPost(string message) => tryPost(() => window.PostMessageToPage(message));
+
+        public bool TryPost(string channel, string payload) =>
+            TryPost(channel, payload, PostOptions.None);
+
+        public bool TryPost(string channel, string payload, PostOptions options) =>
+            tryPost(() => window.PostToChannel(channel, payload, options));
+
+        /// <summary>
+        /// The same droppable path as <see cref="post"/>, with the host's
+        /// answer handed back instead of discarded. A disposed handle answers
+        /// false itself; the host answers true during shutdown by its own
+        /// rule, and that answer is passed on unchanged - two methods giving
+        /// opposite answers to one question would be the trap here.
+        /// </summary>
+        private bool tryPost(Action action)
+        {
+            if (disposed != 0)
+                return false;
+            return OverlayHost.TryPost(window, action);
+        }
 
         public void Request(string channel, string payload, Action<string> answer) =>
             Request(channel, payload, answer, 5000);
@@ -1178,7 +1416,7 @@ namespace WebOverlay
                 raiseResult(() => answer(null));
                 return;
             }
-            if (!OverlayHost.TryPost(() => window.RequestFromPage(channel, payload,
+            if (!OverlayHost.TryPost(window, () => window.RequestFromPage(channel, payload,
                 value => raiseResult(() => answer(value)), timeoutMilliseconds)))
             {
                 // The queue is full, so the question never left. Answering
@@ -1223,7 +1461,7 @@ namespace WebOverlay
                 raiseResult(() => result(null));
                 return;
             }
-            if (!OverlayHost.TryPost(() => window.ExecuteScript(script, value => raiseResult(() => result(value)))))
+            if (!OverlayHost.TryPost(window, () => window.ExecuteScript(script, value => raiseResult(() => result(value)))))
                 raiseResult(() => result(null));
         }
 
@@ -1276,7 +1514,7 @@ namespace WebOverlay
             // Fire-and-forget commands are the flood vector, so they take the
             // droppable path; obligations - answers, disposal - go through
             // OverlayHost.Post directly and are never dropped.
-            OverlayHost.TryPost(action);
+            OverlayHost.TryPost(window, action);
         }
     }
 }

@@ -12,9 +12,40 @@ depended on. So a mod gates on "at least X.Y" rather than on presence, and
 every entry below names the version a member arrived in - see
 [`docs/SOFT-DEPENDENCY.md`](docs/SOFT-DEPENDENCY.md).
 
-## [Unreleased]
+## [1.11.0]
+
+### Forge version notes
+
+- A mod can now ask whether a message entered the library's queue
+  (`TryPost`) and how a `Show` or `Hide` ended (`Show(cb)` / `Hide(cb)`), a
+  flooding mod is refused at its own share of the command queue instead of
+  every mod's, the exclusive-fullscreen refusal is no longer dead by
+  construction in the game, and the library is quieter on the way out.
+  Nothing changes for a well-behaved mod that does not use the new members.
 
 ### Added
+
+- `IWebOverlay.TryPost` - the three `Post` overloads with an answer: true
+  when the command entered the library's command queue, false when it did
+  not and will not (disposed handle, or the queue refused it). Consumer
+  wishlist entry 28. True is admission, not delivery - the XML doc lists what
+  can still lose a queued message - and false means retry later, never fall
+  back. During shutdown the answer is true, like every other call's silent
+  acceptance: two methods giving opposite answers to one question would have
+  been the trap. Rows 79-80.
+
+- `IWebOverlay.Show(Action<VisibilityOutcome>)` and
+  `Hide(Action<VisibilityOutcome>)` - the visibility commands with an answer,
+  settled exactly once: `Applied`, `AlreadyThere`, `RefusedFullscreen`,
+  `Superseded`, `Failed`, `Disposed` or `QueueRefused`. Consumer wishlist
+  entry 29. The answer travels like a script result (main thread, manual
+  pump, delivered after Dispose), a request made before the browser view
+  exists waits for it and is answered before `Ready` - which is every
+  consumer's first request, whether it runs before the creation or while the
+  creation waits for the view - and there is deliberately no order promise
+  between the answer and the `VisibilityChanged` it caused: under manual
+  dispatch a pump that finds both waiting delivers the answer first.
+  `VisibilityChanged` itself is untouched. Rows 84-92.
 
 - `examples/` - three copy templates sized like a real first plugin, compiled
   verbatim by the same check that holds the quickstart: `PanelPlugin.cs` (a
@@ -31,6 +62,60 @@ every entry below names the version a member arrived in - see
   CraftQueue, ModProfiler, QuestMarker, RaidReviewOverlay, ScopeRangefinder's
   studio next. A library without visible users reads as a library without
   users.
+
+### Fixed
+
+- The command queue's bound is per overlay first. 1.10.0 bounded the queue
+  at 4,096 and said a flooding mod "costs itself, not every mod in the
+  process" - which was true of the heap and false of the isolation: the
+  queue is one queue for every overlay of every mod, so the first mod to fill
+  it had every other mod's next `Show`, `Hide`, `LoadHtml` or `Post` refused,
+  and its one warning named nobody. Now each overlay has a share of 1,024
+  under the kept ceiling of 4,096; a flooder is refused at its share with a
+  warning naming the overlay and its mod - repeated at most once a minute
+  while the flood lasts, and again for a flood an hour later - obligations
+  (a Dispose, a page answer) never count against a share, and the ceiling
+  still holds above every share, refusing with the queue-wide warning that
+  names nobody. What a neighbour cannot be spared is the wait behind the
+  flooder's backlog - one queue, one thread, about a tenth of a second at
+  the measured rate. Latent rather than observed: every shipping consumer
+  throttles. Rows 81-83; row 78 re-proven against the share.
+
+- The exclusive-fullscreen refusal fires in the game. The plugin's probe read
+  `Screen.fullScreenMode` on the overlay thread, and that is not one of
+  Unity's thread-safe bindings (`get_width` is marked `IsThreadSafe`;
+  `get_fullScreenMode` is not); the throw was swallowed as "supported", so
+  `Show()` never refused anything in the game - rows 31 and 49 replace the
+  probe in a non-Unity host and proved only the seam, and every consumer
+  still guarded on the main thread, which is why nobody noticed. The plugin's
+  `Update` now caches the answer and the probe returns it; a probe that
+  throws is said under Diagnose. `WebOverlayPlugin.IsDisplayModeSupported`
+  reports the cached value and is safe from any thread. Reasoned from the
+  binding metadata, not measured in the game, which apparently never enters
+  the mode - the row is in the manual section.
+
+- Quiet shutdown holds on every settle path. `Closed` fired for a visible
+  window torn down on the way out, the one event without the gate; a
+  `Show()`/`Hide()` still queued when shutdown began ran and raised; a script
+  answer settled by the closing went out inline; and main-thread dispatch
+  tested the pump before the shutdown flag, so after the plugin took the pump
+  away every event and answer fell through to inline delivery on the overlay
+  thread. All four keep the rule now: nothing wakes a consumer during
+  shutdown. Row 92 and the extended row 21 (Q3, Q4).
+
+- A `Show()` in the moment between the window and the browser view showed
+  an empty popup and reported it visible before `Ready`. `Show` and `Hide`
+  now defer on the view rather than on the window, so the window appears
+  with its browser view rather than as a bare popup. Not exercised by the
+  probe: the moment is a few hundred milliseconds inside creation, and
+  nothing in the public API distinguishes a window shown before its view
+  from one shown with it. Row 85 exercises the same deferral for the other
+  ordering, commands queued before the creation runs.
+
+- `Show()` on a failed overlay recorded "wanted" and was swallowed, so the
+  next `Toggle` hid a dead window and fired `Closed` for it; the comment
+  promised a re-run that only creation performs. The desired state is left
+  alone on a failed overlay, and a `Show(cb)` there answers `Failed`. Row 89.
 
 ### Changed
 
@@ -51,6 +136,23 @@ every entry below names the version a member arrived in - see
 - One last wording slip in the `WebOverlays` class comment - the game is
   Escape From Tushonka, and the XML file ships that sentence into
   IntelliSense.
+
+### Notes
+
+- Rows 79-92, and row 78 re-proven. Counterproofs, in the ledger's own
+  convention of putting the fault back: the handle discarding the host's
+  answer (row 79), the share raised to the ceiling (row 81), the run-time
+  disposed check removed (row 84), the failed-first precedence removed (row
+  89), and `Closed` ungated again (row 92 and Q3). Not counterproven on its
+  own: the "never answered during shutdown" half of row 92, which two gates
+  guard - the window's settle helper and the handle's - so removing either
+  alone proves nothing.
+- The first design for entry 29 - visibility made un-droppable by letting the
+  handle own the desired state - was refuted before it was built: the window
+  changes that state itself on the close key, on `WM_CLOSE` and on the
+  fullscreen refusal, and every toggle consumer would have needed two key
+  presses. The record is in the wishlist answers; the refused design is
+  written down so it is not rediscovered.
 
 
 ## [1.10.0]

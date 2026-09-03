@@ -21,7 +21,19 @@ namespace WebOverlay
     /// </summary>
     internal static class OverlayHost
     {
-        private static readonly ConcurrentQueue<Action> work = new ConcurrentQueue<Action>();
+        /// <summary>
+        /// One queued command. The owner is the window a droppable command
+        /// was posted for, so its share of the queue can be given back when
+        /// the command runs; an obligation - a Dispose, a page answer - has
+        /// none, because it is never counted against a share.
+        /// </summary>
+        private struct WorkItem
+        {
+            public OverlayWindow Owner;
+            public Action Action;
+        }
+
+        private static readonly ConcurrentQueue<WorkItem> work = new ConcurrentQueue<WorkItem>();
 
         // Creating an overlay is the only work that may have to wait for a
         // browser to start, and waiting means pumping messages. Keeping it in
@@ -212,16 +224,50 @@ namespace WebOverlay
         }
 
         /// <summary>
-        /// The overlay thread's command queue is bounded like the main-thread
-        /// event queue, and for the same reason: a consumer posting in a hot
-        /// loop must cost itself, not every mod in the process. The value is
-        /// the same as MainThreadQueueLimit - at the measured ~9,600 messages
-        /// per second it is close to half a second of maximum-rate traffic
-        /// already waiting, which no healthy consumer reaches.
+        /// The overlay thread's command queue is bounded in two tiers. The
+        /// ceiling is the process's memory bound, like MainThreadQueueLimit -
+        /// at the measured ~9,600 messages per second it is close to half a
+        /// second of maximum-rate traffic already waiting. Below it, each
+        /// window has a share (<see cref="WindowShare"/>), and that is what
+        /// makes a mod posting in a hot loop cost itself rather than every
+        /// mod in the process: the queue is one queue, shared by every overlay
+        /// of every mod, so before 1.11.0 the first mod to fill it had every
+        /// other mod's next Show, Hide or Post refused. Now the flooder is
+        /// refused at its share while everyone else still enters; what they
+        /// cannot be spared is the wait behind the flooder's backlog, since it
+        /// is one queue drained by one thread - about a tenth of a second at
+        /// the measured rate. The share is generous by the same measure that
+        /// bounds the outbox: no healthy consumer has a hundred commands
+        /// waiting, let alone a thousand.
         /// </summary>
         private const int WorkQueueLimit = 4096;
+        internal const int WindowShare = 1024;
         private static int workQueued;
-        private static int workOverflowWarned;
+        private static int workOverflowWarnedAt;
+
+        /// <summary>
+        /// How often an overflow warning may repeat while the condition
+        /// lasts: once, then at most once a minute. A burst poster that fills
+        /// and drains its share five times a second must not write five lines
+        /// a second, and a mod that floods again an hour later must be named
+        /// again - one stamp serves both.
+        /// </summary>
+        internal const int OverflowWarnIntervalMilliseconds = 60000;
+
+        /// <summary>
+        /// Rate-limits one warning through a tick stamp: zero means never
+        /// warned, and the stored value is kept odd so a genuine tick count
+        /// can never read as zero. Safe from any thread - the caller that
+        /// wins the exchange is the one that logs.
+        /// </summary>
+        internal static bool ShouldWarnAgain(ref int warnedAt)
+        {
+            int now = System.Environment.TickCount | 1;
+            int last = Volatile.Read(ref warnedAt);
+            if (last != 0 && unchecked(now - last) < OverflowWarnIntervalMilliseconds)
+                return false;
+            return Interlocked.CompareExchange(ref warnedAt, now, last) == last;
+        }
 
         /// <summary>
         /// Creations are not bounded, deliberately: refusing one would need a
@@ -250,24 +296,32 @@ namespace WebOverlay
         }
 
         /// <summary>
-        /// Fire-and-forget work: dropped, with one warning, when the queue is
-        /// full. For work that carries an obligation - an answer somebody is
-        /// waiting for, a Dispose that releases native state - use
-        /// <see cref="Post"/>, which never drops.
+        /// Fire-and-forget work for one window: dropped, with a warning, when
+        /// that window's share or the queue's ceiling is full. Returns true
+        /// while the game is shutting down although nothing is queued then -
+        /// every path here accepts and swallows on the way out, and that
+        /// uniform answer is what keeps a refused Request or ExecuteScript
+        /// from waking a consumer's fallback during teardown. For work that
+        /// carries an obligation - an answer somebody is waiting for, a
+        /// Dispose that releases native state - use <see cref="Post"/>, which
+        /// never drops and is never counted against a share.
         /// </summary>
-        internal static bool TryPost(Action action)
+        internal static bool TryPost(OverlayWindow owner, Action action)
         {
             if (stopping)
                 return true;
+            if (owner != null && !owner.TakeCommandSlot())
+                return false;
             if (Interlocked.Increment(ref workQueued) > WorkQueueLimit)
             {
                 Interlocked.Decrement(ref workQueued);
-                if (Interlocked.Exchange(ref workOverflowWarned, 1) == 0)
+                owner?.ReleaseCommandSlot();
+                if (ShouldWarnAgain(ref workOverflowWarnedAt))
                     LogWarning("the overlay command queue is full (" + WorkQueueLimit
-                        + "); commands are being dropped - is a mod posting in a loop?");
+                        + "); commands are being dropped - are several mods posting in a loop?");
                 return false;
             }
-            work.Enqueue(action);
+            work.Enqueue(new WorkItem { Owner = owner, Action = action });
             wake();
             return true;
         }
@@ -276,12 +330,13 @@ namespace WebOverlay
         {
             if (stopping)
                 return;
-            // Counted but never refused: the count of obligations is bounded
-            // by the calls that created them, so this cannot run away - and
-            // dropping a Dispose would leak a native window, dropping an
-            // answer would break "answered exactly once".
+            // Counted against the ceiling but never refused, and never against
+            // a window's share: the count of obligations is bounded by the
+            // calls that created them, so this cannot run away - and dropping
+            // a Dispose would leak a native window, dropping an answer would
+            // break "answered exactly once".
             Interlocked.Increment(ref workQueued);
-            work.Enqueue(action);
+            work.Enqueue(new WorkItem { Owner = null, Action = action });
             wake();
         }
 
@@ -459,6 +514,16 @@ namespace WebOverlay
         /// </summary>
         internal static bool DispatchToMainThread(Action action, bool droppable)
         {
+            // During shutdown the game is past caring, and a queued handler
+            // could start a fallback while everything is being torn down.
+            // Asked before the pump check on purpose: the plugin takes the
+            // pump away just before it asks for the shutdown, and answering
+            // "no pump" then would hand the event to the caller to run inline
+            // on the overlay thread - the exact wake-up this swallow exists to
+            // prevent.
+            if (stopping)
+                return true;
+
             if (action == null || !mainThreadPumpAvailable)
             {
                 if (action != null && Interlocked.Exchange(ref mainThreadWarned, 1) == 0)
@@ -466,11 +531,6 @@ namespace WebOverlay
                         + " (DispatchOnMainThread works inside the game only).");
                 return false;
             }
-
-            // During shutdown the game is past caring, and a queued handler
-            // could start a fallback while everything is being torn down.
-            if (stopping)
-                return true;
 
             if (Interlocked.Increment(ref mainThreadQueued) > MainThreadQueueLimit && droppable)
             {
@@ -515,8 +575,16 @@ namespace WebOverlay
                 {
                     return probe();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    // Assuming "supported" is the safe answer for a window,
+                    // but a probe that throws is a probe that never refuses -
+                    // which is how the fullscreen refusal went dead for every
+                    // release before 1.11.0, when the plugin's probe read a
+                    // Unity property off Unity's thread. Said under Diagnose
+                    // so it can never be silent again.
+                    LogDiagnostic("the display-mode probe threw " + ex.GetType().Name
+                        + "; assuming the display mode is supported.");
                     return true;
                 }
             }
@@ -954,7 +1022,7 @@ namespace WebOverlay
 
         private static void drainWork()
         {
-            drainQueue(work);
+            drainCommands();
             // Creations wait while an environment is being created: that wait
             // pumps messages, and starting the next overlay from inside the
             // current one is exactly what the hold prevents. Commands are not
@@ -963,19 +1031,19 @@ namespace WebOverlay
             {
                 Interlocked.Decrement(ref creationsQueued);
                 run(creation);
-                drainQueue(work);
+                drainCommands();
             }
         }
 
-        private static void drainQueue(ConcurrentQueue<Action> queue)
+        private static void drainCommands()
         {
-            while (queue.TryDequeue(out Action action))
+            while (work.TryDequeue(out WorkItem item))
             {
-                if (ReferenceEquals(queue, work))
-                    Interlocked.Decrement(ref workQueued);
-                else if (ReferenceEquals(queue, creations))
-                    Interlocked.Decrement(ref creationsQueued);
-                run(action);
+                // Given back before the command runs, as the count was taken
+                // before it was queued: the slot measures what is waiting.
+                Interlocked.Decrement(ref workQueued);
+                item.Owner?.ReleaseCommandSlot();
+                run(item.Action);
             }
         }
 
