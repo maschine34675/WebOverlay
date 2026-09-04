@@ -12,6 +12,18 @@ depended on. So a mod gates on "at least X.Y" rather than on presence, and
 every entry below names the version a member arrived in - see
 [`docs/SOFT-DEPENDENCY.md`](docs/SOFT-DEPENDENCY.md).
 
+## [Unreleased]
+
+### Changed
+
+- `docs/TROUBLESHOOTING.md` names driver-level frame generation (AMD Fluid
+  Motion Frames, Lossless Scaling, NVIDIA Smooth Motion) as a cause of
+  stutter at unchanged frame rate while any overlay window is up - the first
+  field report of its kind, from a QuestMarkers player - with the likely
+  mechanism and the player-side fix. Nothing in the library changes: a
+  separate window over the game cannot avoid it, and the README's
+  requirements point there.
+
 ## [1.11.0]
 
 ### Forge version notes

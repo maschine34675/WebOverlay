@@ -120,6 +120,27 @@ WebView2 transparency has regressed before in runtime updates (opaque instead
 of transparent, runtime 145.x, fixed since). If it happens right after a
 Windows update, suspect the runtime before suspecting the mod.
 
+## The game stutters while a window is up, at unchanged frame rate
+
+Driver-level frame generation - AMD Fluid Motion Frames, Lossless Scaling,
+NVIDIA Smooth Motion - interpolates frames on their way to the screen, and it
+depends on Windows handing the game's frames to the screen directly. Any
+window over the game takes that away: as far as this can be told from
+outside, the moment something overlaps the game picture Windows composes the
+picture itself instead of flipping the game's frames straight through, and
+the frame generator's pacing goes with it. The result is stutter and jitter
+at an unchanged frame rate - the fingerprint of a pacing problem, not of
+load. An overlay from this library is such a window, as is a browser or a
+chat popout over the game; the overlays that get away with it draw inside
+the game's own frames, which a separate window cannot.
+
+A hidden window does not count, so a panel costs nothing while it is closed;
+a HUD is up for the whole raid. There is nothing the library can do about
+it. The fix is on the player's side: turn driver-level frame generation off
+for this game - upscaling without frame generation is unaffected. First
+reported by a QuestMarkers player on AMD Fluid Motion Frames 2.1, and it went
+away with that driver setting.
+
 ## Keys go to the window, or to the game, unexpectedly
 
 While the overlay holds the keyboard the game does not see key presses, and

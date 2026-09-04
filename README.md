@@ -236,6 +236,11 @@ Shipping mods built on this library, each a worked answer to "how do I":
 - The library runs a browser of its own, with its own user data folder, so it
   neither disturbs nor is disturbed by any other application's WebView2 - the
   SPT launcher included.
+- Driver-level frame generation (AMD Fluid Motion Frames, Lossless Scaling,
+  NVIDIA Smooth Motion) can stutter while any overlay window is up, at an
+  unchanged frame rate: a window over the game changes how Windows presents
+  the game's frames, and no separate window can avoid that. The mechanism and
+  the player-side fix are in the troubleshooting guide below.
 
 The sharp edges of a window over a game's cursor and keyboard are in
 [`docs/TROUBLESHOOTING.md`](https://github.com/maschine34675/WebOverlay/blob/main/docs/TROUBLESHOOTING.md);
