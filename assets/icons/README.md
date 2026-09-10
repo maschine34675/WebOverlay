@@ -1,4 +1,8 @@
-# WebOverlay icon concepts
+# Archived WebOverlay icon concepts
+
+Current Forge artwork: `../thumbnail.png` (1024 px), `../thumbnail.svg`,
+`../thumbnail-128.png` and `../thumbnail-64.png`. The older WebOverlay
+variants below have dated filenames; Anvil profile images are unchanged.
 
 Monochrome icon set for Anvil-WebOverlay. All final assets use a pure black
 background and a white, flat geometric glyph. The generated masters were
@@ -9,12 +13,12 @@ edge pixels introduced by high-quality downscaling.
 
 | No. | Concept | Master | 144 px |
 |---|---|---|---|
-| 01 | Floating browser panel in front of a monitor | `masters/weboverlay-01-floating-window-master.png` | `144/weboverlay-01-floating-window-144.png` |
-| 02 | Two offset and interlocking browser windows | `masters/weboverlay-02-stacked-windows-master.png` | `144/weboverlay-02-stacked-windows-144.png` |
-| 03 | Browser panel inside viewport corner brackets | `masters/weboverlay-03-viewport-panel-master.png` | `144/weboverlay-03-viewport-panel-144.png` |
-| 04 | Browser window inside a geometric visor/eye | `masters/weboverlay-04-visor-window-master.png` | `144/weboverlay-04-visor-window-144.png` |
-| 05 | Browser window split into two offset layers | `masters/weboverlay-05-split-layer-master.png` | `144/weboverlay-05-split-layer-144.png` |
-| 06 | Browser panel inside a HUD-style frame | `masters/weboverlay-06-hud-frame-master.png` | `144/weboverlay-06-hud-frame-144.png` |
+| 01 | Floating browser panel in front of a monitor | `masters/weboverlay-01-floating-window-master-old-2026-09-10.png` | `144/weboverlay-01-floating-window-144-old-2026-09-10.png` |
+| 02 | Two offset and interlocking browser windows | `masters/weboverlay-02-stacked-windows-master-old-2026-09-10.png` | `144/weboverlay-02-stacked-windows-144-old-2026-09-10.png` |
+| 03 | Browser panel inside viewport corner brackets | `masters/weboverlay-03-viewport-panel-master-old-2026-09-10.png` | `144/weboverlay-03-viewport-panel-144-old-2026-09-10.png` |
+| 04 | Browser window inside a geometric visor/eye | `masters/weboverlay-04-visor-window-master-old-2026-09-10.png` | `144/weboverlay-04-visor-window-144-old-2026-09-10.png` |
+| 05 | Browser window split into two offset layers | `masters/weboverlay-05-split-layer-master-old-2026-09-10.png` | `144/weboverlay-05-split-layer-144-old-2026-09-10.png` |
+| 06 | Browser panel inside a HUD-style frame | `masters/weboverlay-06-hud-frame-master-old-2026-09-10.png` | `144/weboverlay-06-hud-frame-144-old-2026-09-10.png` |
 
 The matching profile icon is a geometric anvil:
 
@@ -24,8 +28,8 @@ The matching profile icon is a geometric anvil:
 
 Preview sheets:
 
-- `weboverlay-variations-preview.png` — six large variants
-- `weboverlay-variations-144-preview.png` — variants at their actual 144 px size
+- `weboverlay-variations-preview-old-2026-09-10.png` — six large variants
+- `weboverlay-variations-144-preview-old-2026-09-10.png` — variants at their actual 144 px size
 - `weboverlay-and-profile-preview.png` — variants and matching anvil profile
 
 ## Generation prompt set
