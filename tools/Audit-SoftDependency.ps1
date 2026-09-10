@@ -49,7 +49,12 @@ if (-not $CecilPath) {
 if (-not $CecilPath -or -not (Test-Path $CecilPath)) {
     throw "Mono.Cecil was not found. Pass -CecilPath pointing at BepInEx/core/Mono.Cecil.dll."
 }
-Add-Type -Path (Resolve-Path $CecilPath)
+# Loaded from bytes rather than by path: BepInEx arrives as a download, so its
+# files carry a Zone.Identifier stream, and Add-Type -Path refuses a DLL marked
+# that way with "operation is not supported" (0x80131515). That is a failing
+# build step which says nothing about the audit, on a machine where nothing is
+# wrong. Bytes have no zone to check.
+[Reflection.Assembly]::Load([IO.File]::ReadAllBytes((Resolve-Path $CecilPath))) | Out-Null
 
 $module = [Mono.Cecil.ModuleDefinition]::ReadModule((Resolve-Path $AssemblyPath).Path)
 $violations = New-Object System.Collections.Generic.List[string]

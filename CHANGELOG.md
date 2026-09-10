@@ -375,6 +375,15 @@ every entry below names the version a member arrived in - see
   to `int` now, and the check is re-proven on 5.1 the same way it was on 7 -
   reported from another session, where it actually bit.
 
+  The same script then refused to start at all on a machine whose BepInEx came
+  from the release page: a download carries a `Zone.Identifier` stream, and
+  `Add-Type -Path` will not load a DLL marked that way - `operation is not
+  supported`, 0x80131515, naming `Mono.Cecil.dll` rather than anything the
+  consumer did. It reads as a broken script on a machine where nothing is
+  wrong. The assembly is loaded from its bytes now, which have no zone to
+  check; proven by writing the stream onto a copy and watching the old line
+  fail and the new one pass against that same file, on both hosts.
+
 ### Notes
 
 - Rows 63 to 71. Two of them settle questions this repository had been carrying
