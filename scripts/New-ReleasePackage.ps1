@@ -7,6 +7,11 @@
 # against whatever happens to be deployed under the SPT root. An outside
 # review caught both halves of this: a packaging run used to deploy as a side
 # effect, and the check used to prove the wrong binary.
+# Windows PowerShell 5.1 ships Microsoft.PowerShell.Archive 1.0.1.0, whose Compress-Archive
+# writes ZIP entry names with backslashes; unzip on Linux and macOS then extracts file names
+# instead of folders. PowerShell 7 writes the forward slashes the ZIP format requires.
+#Requires -Version 7
+
 [CmdletBinding()]
 param(
     [string] $Configuration = 'Release',
