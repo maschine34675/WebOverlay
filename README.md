@@ -83,7 +83,7 @@ using WebOverlay;
 [BepInPlugin("com.you.yourmod", "You-YourMod", "1.0.0")]
 // With a version: your code fails at JIT time if a member is missing, long
 // after BepInEx would have called a bare GUID dependency satisfied.
-[BepInDependency("com.anvil.weboverlay", "1.11.0")]
+[BepInDependency("com.anvil.weboverlay", "1.12.0")]
 public class YourPlugin : BaseUnityPlugin
 {
     private IWebOverlay overlay;
@@ -123,6 +123,10 @@ public class YourPlugin : BaseUnityPlugin
             // Unity objects. Leave this off and they arrive on the library's
             // own thread instead - where touching Unity is a crash.
             DispatchOnMainThread = true,
+            // While the window has the keyboard the game never sees F10, so
+            // the key that opened it must be a close key too. Escape stays.
+            // A plain letter or digit would type into the page instead.
+            CloseKeys = new[] { 0x1B, WebOverlayPlugin.VirtualKey(KeyCode.F10) },
         });
         if (overlay == null)
         {

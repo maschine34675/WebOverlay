@@ -12,7 +12,7 @@ using WebOverlay;
 [BepInPlugin("com.you.yourpanel", "You-YourPanel", "1.0.0")]
 // A hard minimum version, not a bare GUID: a member your code uses fails at
 // JIT time long after BepInEx would have called a bare dependency satisfied.
-[BepInDependency("com.anvil.weboverlay", "1.11.0")]
+[BepInDependency("com.anvil.weboverlay", "1.12.0")]
 public class PanelPlugin : BaseUnityPlugin
 {
     private IWebOverlay overlay;
@@ -30,11 +30,16 @@ public class PanelPlugin : BaseUnityPlugin
     {
         if (overlay != null)
         {
+            // The overlay's own Toggle, not a bool of yours: Escape, the
+            // close key and the title bar's close button all hide the panel
+            // without asking this plugin, and a flag of your own would then
+            // turn the next F9 into a press that does nothing. If you must
+            // keep one, update it from VisibilityChanged.
             overlay.Toggle();
             return;
         }
 
-        overlay = WebOverlays.Create("My panel - Escape closes", new OverlayOptions
+        overlay = WebOverlays.Create("My panel - F9 or Escape closes", new OverlayOptions
         {
             // A size of your own, always. The default is 80% of the picture,
             // centred - which sits exactly on the point the game reads mouse
@@ -56,6 +61,14 @@ public class PanelPlugin : BaseUnityPlugin
             // library's own thread, and touching Unity there is a crash you
             // built yourself.
             DispatchOnMainThread = true,
+
+            // A focused panel holds the keyboard, so Update above never sees
+            // F9 while the panel is open - the key that opened it has to be a
+            // close key as well, or the player is left with Escape. Prefer a
+            // key that types no character: a plain letter or digit goes to
+            // the page as typing and closes nothing. For a hotkey from your
+            // config, WebOverlayPlugin.CloseKeysFor(shortcut) builds this.
+            CloseKeys = new[] { 0x1B, WebOverlayPlugin.VirtualKey(KeyCode.F9) },
         });
         if (overlay == null)
         {

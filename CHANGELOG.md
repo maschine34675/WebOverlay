@@ -14,7 +14,81 @@ every entry below names the version a member arrived in - see
 
 ## [Unreleased]
 
+## [1.12.0]
+
+### Forge version notes
+
+- A frameless window can now be moved and resized from its own page, natively
+  and remembered like a framed one, and a window a mod places itself stays
+  where it was put. Shaped by the first third-party mod built on the library:
+  every change here answers something its code had to work around. Nothing
+  changes for a mod that does not use the new members or call `SetBounds`.
+
+### Added
+
+- The page's `overlay.beginMove()` and `overlay.beginResize(edge)` - a
+  frameless window's own title bar and resize corners. Called from a
+  pointerdown handler, they hand the gesture to the library, which takes the
+  mouse from the browser and places the window from the cursor's screen
+  position until the button is released: no round trip through the mod per
+  mouse movement, independent of Unity's `Screen` size, held to the minimum
+  size, and the end of a gesture that moved the window remembered exactly
+  like the end of a frame drag. Each call returns a promise that settles once
+  when the gesture ends - `'moved'`, `'unchanged'` or `'refused'` - because
+  the page itself is told nothing: once the library holds the mouse, the
+  browser sends it no `pointerup`, `pointercancel` or `lostpointercapture`
+  (measured). Refused: a request that arrives with the button already up, one
+  made while another gesture runs, an unknown edge (warned once per overlay),
+  a HUD's page, and touch or pen presses - mouse only. Rows 93-99 and
+  108-111, with real mouse input on one monitor.
+
+- `OverlayOptions.MinWidth` / `MinHeight` - the smallest the window may
+  become: the size it opens at, the player resizing a framed window, a page's
+  `beginResize`, `SetBounds` and a remembered size. 0 keeps the library's
+  floor of 200 x 150. Not for HUDs, and not larger than the screen.
+
+### Fixed
+
+- `SetBounds` called right after `Create` was dropped: commands run before
+  creations, so the window did not exist yet, and a mod's chosen spot never
+  arrived. It is now applied when the window first appears - a spot on no
+  screen falling back to the default, as a remembered one does - and two
+  early calls each keep what the other named. Rows 100, 112 and 113.
+
+- With `RememberBounds` off, every `Show` re-centred the window, undoing a
+  `SetBounds` - although its documentation has always said a mod's spot wins
+  for the rest of the session. It now does; a call that names nothing does
+  not count. Rows 101 and 111.
+
+  Both are behaviour changes for a mod that calls `SetBounds`, made because
+  the documented promise is the contract and the code broke it: such a mod
+  now gets its window where it put it, where 1.11.0 dropped or undid the
+  call. No shipping consumer of ours calls `SetBounds`; the first third-party
+  one did, and lost its saved position on every open to both.
+
 ### Changed
+
+- The quickstart and `examples/PanelPlugin.cs` make their hotkey a close
+  key, and the template says why it calls the overlay's `Toggle()` rather
+  than keeping a flag. Both gaps showed up together in a third-party mod
+  built from the quickstart: its hotkey could not close the window it had
+  opened, and after Escape the next press did nothing, because its own
+  "open" flag never heard about the close. `AGENTS.md` gains the matching
+  rules, and three more: no `SetBounds` from mouse events, no callbacks of
+  the page's own on `window.overlay`, no settings in `localStorage` of a
+  `LoadHtml` page.
+
+- The XML documentation of `CloseKeys`, `KeyPressed`, `LoadHtml`,
+  `SetBounds`, `Frame` and `CloseKeysFor` says what a consumer reading
+  IntelliSense needs. Only keys that type no character, or keys with Ctrl or
+  Alt held, ever reach the library from a focused overlay - measured for a
+  plain letter, Ctrl and Alt with that letter, F8, F9, F10 and an arrow
+  (rows 103-107 and 114-115), the rest being WebView2's documented rule. So a
+  plain letter hotkey cannot close one, although `CloseKeysFor` promised
+  "the same press closes it again". A close key hides the window without
+  asking the mod, and an inline page has no storage at all, which a
+  `try`/`catch` turns into silence. `TROUBLESHOOTING.md` gains the three
+  symptoms.
 
 - `docs/TROUBLESHOOTING.md` names driver-level frame generation (AMD Fluid
   Motion Frames, Lossless Scaling, NVIDIA Smooth Motion) as a cause of
@@ -23,6 +97,28 @@ every entry below names the version a member arrived in - see
   mechanism and the player-side fix. Nothing in the library changes: a
   separate window over the game cannot avoid it, and the README's
   requirements point there.
+
+### Notes
+
+- Rows 93-115. Counterproofs, fault put back and row watched failing: the
+  drag request unrouted (rows 93 and 95), the resize minimum removed (row
+  94), the save at the end of a gesture removed (row 95), the button check
+  removed (row 97's refusal), the pending `SetBounds` dropped (row 100), the
+  old `Show` condition restored (row 101), the library floor instead of the
+  mod's minimum (row 102), a press without movement saving (row 108), the
+  promise left unsettled at the end of a gesture (row 109), an empty
+  `SetBounds` opting out of re-centring (row 111), early calls overwriting
+  instead of merging (row 112), and the fallback for an early spot on no
+  screen removed (row 113). Row 102's first version passed with its fault in
+  place, because Windows enforces a framed window's minimum track size on
+  `SetWindowPos` as well; it now uses a frameless window. The first versions
+  of rows 112 and 113 passed with theirs in place too, because the window was
+  created before the calls arrived; they now hold the overlay thread while
+  the calls are queued. Rows 96, 98 and 99
+  have no counterproof, nor do the once-per-overlay warning, the re-check of
+  the button after taking the mouse, and pending bounds being ignored on a
+  HUD. Rows 103-107, 110 and 114-115 measure the browser, not a fix, and have
+  no counterproof by nature.
 
 ## [1.11.0]
 

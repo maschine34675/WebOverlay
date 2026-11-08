@@ -40,7 +40,8 @@ similar.
   `LoadHtml` posted right after `Create` run before the window exists, so
   they defer - the window records what was asked and the creation tail
   applies it once the browser view is there (a command that lands while the
-  creation is already waiting for its view defers the same way). The queue
+  creation is already waiting for its view defers the same way; a
+  `SetBounds` does too since 1.12.0, where it used to be dropped). The queue
   is bounded in two tiers since 1.11.0: a share per overlay (1,024 waiting
   commands) under a ceiling for the whole queue (4,096). Fire-and-forget
   commands are refused past either bound - past the share with a warning
@@ -66,6 +67,25 @@ similar.
   superseded, so at most one ever waits.
 - **Owned popup windows, not child windows.** Unity presents through a
   flip-model swapchain, which does not composite child windows.
+- **A frameless window moves under a capture of its own, not the system's
+  move loop.** The page's `beginMove`/`beginResize` arrive as a request on
+  a reserved channel after the press; the window checks the physical primary
+  button is still down (a late message must not take the mouse for a gesture
+  nobody is making), takes the mouse from the browser's child window with
+  `SetCapture`, checks the button once more, and places itself from
+  `GetCursorPos` against the start rectangle on every `WM_MOUSEMOVE` until
+  the button comes up. The system's modal loop would have done the move, but
+  a frameless window is a bare `WS_POPUP` with no sizing border for it to
+  resize; one mechanism for both halves is one mechanism to prove. The end
+  saves bounds exactly like `WM_EXITSIZEMOVE` does for a framed window - if
+  the window moved at all - and answers the page's request with the outcome,
+  bound to the asking document like every other answer. That answer is the
+  page's only sign of the end: once the capture is ours, the browser tells
+  the page nothing about the press (measured, row 110). One thing learnt on
+  the way:
+  Windows enforces a sizable window's minimum track size on `SetWindowPos`
+  too, so a framed window gets `MinWidth`/`MinHeight` twice - which is why
+  the row proving the library's own clamp uses a frameless one.
 - **Hand-built COM vtables instead of Microsoft's managed wrapper.** The wrapper
   cannot be used under Unity's Mono: the SDK marks inherited vtable slots with
   `_VtblGap`, Mono ignores those markers, and native calls then land on the

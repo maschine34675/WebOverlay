@@ -149,6 +149,7 @@ Set `MinimumVersion` from the newest member you actually use:
 | 1.9.0 | `VirtualHost.Access` / `HostAccess` |
 | 1.10.0 | `ChannelsFailed`, `ChannelsAvailable`, `OverlayOptions.AllowDownloads` |
 | 1.11.0 | `TryPost`, `Show(Action<VisibilityOutcome>)` / `Hide(Action<VisibilityOutcome>)`, `VisibilityOutcome` |
+| 1.12.0 | `OverlayOptions.MinWidth` / `MinHeight`, the page's `overlay.beginMove()` / `beginResize(edge)`, and `SetBounds` applied when called before the window exists and kept across `Show` with `RememberBounds` off - present since 1.6.0, but before 1.12.0 such a call was dropped or undone |
 
 1.8.4 through 1.8.7 were never released; the first build a player can install
 that has any of the 1.8.4-1.8.7 work is **1.8.8**. Gate on that rather than on

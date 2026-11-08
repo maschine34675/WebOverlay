@@ -5,7 +5,7 @@ outside the game. Every scenario runs the real library code path; the probe
 verifies outcomes through the public API and the library's log lines.
 
 Rows 1-9 were run on 2026-08-01 for v1.0.0 (WebView2 runtime 151.0.4129.59)
-and re-run unchanged for v1.4.0; rows 10-92 were added for v1.3.0 to v1.11.0
+and re-run unchanged for v1.4.0; rows 10-115 were added for v1.3.0 to v1.12.0
 (runtime 151.0.4129.93). Row 21 grew two assertions in v1.11.0 (Q3, Q4) and
 row 78 was re-proven there against a changed mechanism.
 
@@ -107,6 +107,29 @@ row that claims more than the automation delivers is worse than no row.
 | 90 | A `Hide(cb)` under manual dispatch, pumped once both are waiting | the pump delivers the answer and the event, the answer first - the documented order, asserted so it cannot drift unnoticed. A pump racing the two enqueues can find only the event, which is why the contract promises no order | PASS |
 | 91 | A `Show(cb)` while the overlay's share of the queue is full | `QueueRefused` without entering the queue - synchronously on the calling thread in this host, which has no main-thread pump; under main-thread dispatch it arrives on the next frame like any answer | PASS |
 | 92 | A `Show(cb)` in flight when shutdown begins, on a visible overlay | never answered; the close on the way out raises neither `Closed` nor `VisibilityChanged`; a script asked for afterwards is never answered. Counterproof for the `Closed` half: with the gate removed the row and row 21's Q3 see the event. The "never answered" half is guarded twice - the window's settle helper and the handle's - and was not counterproven on its own | PASS |
+| 93 | A frameless window's page calls `overlay.beginMove()` from pointerdown on its own bar, and the bar is dragged with real mouse input | the window moves by exactly what the cursor moved, size unchanged. Counterproof: with the drag channel unrouted the window stays put | PASS |
+| 94 | The page calls `beginResize('bottom-right')` on its corner, dragged inward, then far past the minimum | the window shrinks by what the cursor moved with the top-left corner fixed, and stops exactly at `MinWidth`/`MinHeight` rather than pushing the other edges. Counterproof: without the minimum in the resize the second drag goes below it | PASS |
+| 95 | The end of a page-started move, with `RememberBounds` on | the bounds store holds exactly the spot and size the window was left at, as after a frame drag. Counterproof: without the save at the end of the gesture the store is empty | PASS |
+| 96 | A click on a page button after a move and a resize | the page takes it: taking the mouse from the browser for the gesture leaves no stuck pressed state behind | PASS |
+| 97 | A move request that arrives with no button held - the page calls `beginMove()` from a channel message, then the cursor moves over the window | refused with a diagnostic line, and the window does not follow the cursor. Counterproof for the refusal: without the button check the line is missing. The window still does not follow, because the move handler also ends a gesture whose button is up - the second guard, not counterproven on its own | PASS |
+| 98 | A HUD's page calls `beginMove()` | refused with a warning naming the HUD, and the page's promise settles as `'refused'`; a HUD follows the game window | PASS |
+| 99 | A page asks to resize along an edge that does not exist | refused with a warning naming the request, nothing guessed, and the promise settles as `'refused'` | PASS |
+| 100 | `SetBounds` called right after `Create`, before the window exists | applied when the window first appears. Counterproof: with the pending call dropped, as before 1.12.0, the window opens at the centred default | PASS |
+| 101 | `RememberBounds` off, `SetBounds`, then `Hide` and `Show` | the mod's spot and size survive the `Show`, as the documentation always promised. Counterproof: with the old `Show` condition the window re-centres | PASS |
+| 102 | `SetBounds` below `MinWidth`/`MinHeight` on a frameless window | held at the minimum. Counterproof: clamping to the library floor instead gives 200 x 150. Measured on the way: on a framed window the counterproof did not bite, because Windows enforces a sizable window's minimum track size on `SetWindowPos` as well - so the row uses a frameless window to see the library's own clamp | PASS |
+| 103 | A plain letter in `CloseKeys`, pressed in a focused overlay (real keyboard input) | the page receives it as typing and the overlay stays open. Together with rows 104-107 and 114-115 this measures WebView2's rule that its host is handed only keys that type no character, or keys with Ctrl or Alt held: measured for a plain letter, that letter with Ctrl and with Alt, F8, F9, F10 and an arrow key. Insert, Home and the rest of the non-character keys follow the rule as WebView2 documents it, unmeasured. A measurement of the browser, not of a fix | PASS |
+| 104 | The same letter with Ctrl held | the overlay closes | PASS |
+| 105 | A function key that is not a close key | arrives in `KeyPressed`, overlay still open | PASS |
+| 106 | A function key in `CloseKeys` | closes a focused overlay | PASS |
+| 107 | F10 in `CloseKeys` - a system key to Windows, and the README quickstart's hotkey | closes a focused overlay too | PASS |
+| 108 | A press on the move bar that never moves, after a `SetBounds` placed the window elsewhere | nothing is saved - the remembered spot stays the one from row 95, not the mod's, which `SetBounds` promises never to persist - and the promise settles as `'unchanged'`. Counterproof: with the save made unconditional the store takes the mod's spot | PASS |
+| 109 | The promise of every gesture in rows 93-99 | settles exactly once per call: `'moved'` after a move and after each resize, `'refused'` for a request made with the button up. Counterproof: with the settle at the end of a gesture removed, the move's promise never settles | PASS |
+| 110 | The page's own pointer events for a press handed to `beginMove` | none: no `pointerup`, `pointercancel` or `lostpointercapture` arrives once the library holds the mouse (runtime 151). A measurement of the browser, and the reason the promise exists - should a later runtime start sending one, this row fails and the recipe loses a sentence | PASS |
+| 111 | `RememberBounds` off, the player drags the window, then `SetBounds(null, null, null, null)`, `Hide` and `Show` | the window re-centres as before: a call that names nothing does not opt out of it. Counterproof: without the guard the dragged spot survives the `Show` | PASS |
+| 112 | Two `SetBounds` before the window exists, one naming the position, one the size | the window opens with both: each call fills in only what it names. Counterproof: with the second call overwriting the first, the position is lost. The overlay thread is held while the calls are made: with the browser already up, the first version of this row and row 113 created the window before the calls arrived, took the live path, and passed with their faults in place | PASS |
+| 113 | `SetBounds` to a spot on no screen before the window exists | the window opens at the default instead, the rule a remembered spot follows - a frameless window opened off every screen could not even be dragged back. Counterproof: without the fallback it opens at -9000,-9000 | PASS |
+| 114 | The letter close key from row 103 with Alt held | the overlay closes - the Alt half of WebView2's rule, measured | PASS |
+| 115 | An arrow key in a focused overlay | arrives in `KeyPressed`, overlay still open | PASS |
 | 36 | A second browser whose data folder cannot be created | the library refuses the folder itself and logs it, so the browser never shows the player its own modal error box; the overlay fails cleanly, nothing is remembered, and the next one succeeds | PASS |
 
 Not automated (manually covered in game during development, or accepted):
@@ -169,11 +192,13 @@ Modes, in the order `tools/Probe/Program.cs` lists them: `fault-loader`,
 `mixed`, `mixed-reverse`, `dcomp-first`, `footprint`, `spare-browser`,
 `spare-folder`, `retained`, `latest-only`, `manual-pump`, `failed-nav`,
 `generation`, `ready-load`, `click-through`, `trypost`, `share`,
-`visibility-result`; no mode at all is the normal path, and `preview` is not
+`visibility-result`, `drag`, `bounds-early`, `keys`; no mode at all is the
+normal path, and `preview` is not
 a row but the mode for looking at your own page.
 
-`glass`, `glass-click`, `cube`, `shape` and `shape-guards` sample real screen
-pixels and send real mouse input, so they need a desktop that is actually being
+`glass`, `glass-click`, `cube`, `shape`, `shape-guards`, `click-through`,
+`drag` and `keys` sample real screen pixels or send real mouse and keyboard
+input, so they need a desktop that is actually being
 composited. Over
 RDP both a disconnected session *and* an `Active` session whose window is
 merely minimised return `rgb(0,0,0)` for every sample and swallow every click.

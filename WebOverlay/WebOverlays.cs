@@ -65,6 +65,8 @@ namespace WebOverlay
             {
                 Width = options.Width,
                 Height = options.Height,
+                MinWidth = options.MinWidth,
+                MinHeight = options.MinHeight,
                 Frame = options.Frame,
                 CloseKeys = options.CloseKeys == null ? null : (int[])options.CloseKeys.Clone(),
                 ContextMenu = options.ContextMenu,
@@ -391,13 +393,84 @@ namespace WebOverlay
         public int Height { get; set; }
 
         /// <summary>
+        /// The narrowest the window may become, in pixels; 0 means the
+        /// library's own floor of 200. Holds for the size the window opens
+        /// at, against the player resizing a framed window, against a page's
+        /// <c>overlay.beginResize</c>, against
+        /// <see cref="IWebOverlay.SetBounds"/> and against a remembered size.
+        /// Not for HUDs, which follow the game window, and not larger than
+        /// the screen. Arrived in 1.12.0.
+        /// </summary>
+        public int MinWidth { get; set; }
+
+        /// <summary>
+        /// The lowest the window may become, in pixels; 0 means the library's
+        /// own floor of 150. See <see cref="MinWidth"/>. Arrived in 1.12.0.
+        /// </summary>
+        public int MinHeight { get; set; }
+
+        /// <summary>
         /// Draw a title bar with a close button. On by default, and worth
         /// keeping: while the overlay holds the keyboard the game cannot see a
         /// toggle key, so without a frame the close keys are the only way out.
         /// </summary>
+        /// <remarks>
+        /// A frameless window gets its title bar and resize corners from its
+        /// own page: call <c>overlay.beginMove()</c> or
+        /// <c>overlay.beginResize('bottom-right')</c> from a pointerdown
+        /// handler, and the library moves or sizes the window natively until
+        /// the button is released - placed from the cursor's screen position,
+        /// held to <see cref="MinWidth"/>/<see cref="MinHeight"/>, and
+        /// remembered like a framed window when <see cref="RememberBounds"/>
+        /// is on, unless the press never moved. Each call returns a promise
+        /// that settles once when the gesture ends, with 'moved', 'unchanged'
+        /// or 'refused'; it is the page's only sign of the end, because the
+        /// page sees no pointerup for a press the library took over. Mouse
+        /// only. Never move a window from mouse events with
+        /// <see cref="IWebOverlay.SetBounds"/>: that lags a frame behind the
+        /// cursor and is never remembered. Arrived in 1.12.0.
+        /// </remarks>
         public bool Frame { get; set; } = true;
 
-        /// <summary>Virtual key codes that close the overlay. Escape by default.</summary>
+        /// <summary>
+        /// Virtual key codes that close the overlay while it has the keyboard.
+        /// Escape by default.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Put your own toggle key here too -
+        /// <see cref="WebOverlayPlugin.CloseKeysFor"/> or
+        /// <see cref="WebOverlayPlugin.VirtualKey"/> build the list. A focused
+        /// overlay holds the keyboard, so the game never sees your hotkey
+        /// while it is open; without this the key that opened the window
+        /// cannot close it again.
+        /// </para>
+        /// <para>
+        /// A close key hides the window without asking your mod. Keep no
+        /// "is it open" flag of your own, or update it from
+        /// <see cref="IWebOverlay.VisibilityChanged"/>: Escape, the frame's
+        /// close button and a failure all hide the overlay behind your back,
+        /// and a stale flag turns the next press of your hotkey into a press
+        /// that does nothing. <see cref="IWebOverlay.Toggle"/> follows the
+        /// window's own state and never drifts.
+        /// </para>
+        /// <para>
+        /// Only keys the browser treats as shortcuts arrive here: keys that
+        /// type no character (function keys, Escape, arrows, Insert, Home and
+        /// the like) and any key pressed with Ctrl or Alt held. A plain letter
+        /// or digit goes to the page as typing, so it can close the overlay
+        /// only as part of a Ctrl or Alt combination. Measured for a letter
+        /// alone and with Ctrl or Alt, F8, F9, F10 and an arrow key; the rest
+        /// is WebView2's documented rule.
+        /// </para>
+        /// <para>
+        /// Read once, at creation. A mod whose hotkey can change at runtime,
+        /// or that animates its own close, leaves its hotkey out of this list
+        /// and handles it in <see cref="IWebOverlay.KeyPressed"/> instead,
+        /// against the key's current value. An empty list is allowed; on a
+        /// frameless overlay the page then has to offer the way out.
+        /// </para>
+        /// </remarks>
         public int[] CloseKeys { get; set; } = { 0x1B };
 
         /// <summary>Allow the browser's right-click menu. Off by default.</summary>
@@ -718,6 +791,20 @@ namespace WebOverlay
         void Navigate(string url);
 
         /// <summary>Shows markup directly, so no web server is needed.</summary>
+        /// <remarks>
+        /// The document runs in an opaque origin, and that has three
+        /// consequences worth knowing before the page grows: `localStorage`,
+        /// `sessionStorage` and `document.cookie` each throw a SecurityError on
+        /// first touch, so nothing a page stores survives a restart - a
+        /// try/catch around them turns that into silence, not storage; every
+        /// other origin is cross-origin to it, so `fetch` from a mapped host
+        /// needs <see cref="HostAccess.Allow"/>; and the markup is limited to
+        /// 2 MB. A page that needs storage, files of its own or more room
+        /// belongs in a folder served through
+        /// <see cref="OverlayOptions.VirtualHosts"/> and opened with
+        /// <see cref="Navigate"/>. What a mod must keep across sessions it can
+        /// also keep itself, in its config, and hand the page on load.
+        /// </remarks>
         void LoadHtml(string html);
 
         /// <summary>
@@ -862,7 +949,16 @@ namespace WebOverlay
         /// Moves or resizes the overlay, in screen coordinates. Any argument
         /// left null keeps its current value. A window positioned this way is not written to the
         /// remembered-bounds store - that belongs to the player - but it does
-        /// win over a remembered spot for the rest of the session.
+        /// win over a remembered spot for the rest of the session, also when
+        /// <see cref="OverlayOptions.RememberBounds"/> is off. Called right
+        /// after Create, before the window exists, it is applied when the
+        /// window first appears, and a spot on no screen then falls back to
+        /// the default; before 1.12.0 such a call was dropped, and with
+        /// RememberBounds off every Show re-centred the window. A call that
+        /// names nothing changes nothing. A HUD follows the game window and
+        /// keeps no spot of its own. For a
+        /// window the player moves, see <see cref="OverlayOptions.Frame"/>
+        /// instead: this call is for a mod deciding where its window goes.
         /// </summary>
         void SetBounds(int? x, int? y, int? width, int? height);
 
@@ -901,7 +997,18 @@ namespace WebOverlay
         /// </summary>
         event Action<string, string> ChannelMessage;
 
-        /// <summary>Raised for keys pressed in the overlay that did not close it.</summary>
+        /// <summary>
+        /// Raised for keys pressed in the overlay that did not close it, with
+        /// the virtual key code. Same threading as the other events.
+        /// </summary>
+        /// <remarks>
+        /// The same rule as <see cref="OverlayOptions.CloseKeys"/> applies:
+        /// only keys the browser treats as shortcuts arrive - keys that type
+        /// no character, and any key with Ctrl or Alt held. This is the place
+        /// for a hotkey that can be rebound at runtime, or for one whose close
+        /// your page animates first: compare against the key's current value
+        /// here, and hide when your animation is done.
+        /// </remarks>
         event Action<int> KeyPressed;
 
         /// <summary>

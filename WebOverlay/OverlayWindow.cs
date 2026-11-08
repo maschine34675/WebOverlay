@@ -90,6 +90,45 @@ namespace WebOverlay
         // The shape the overlay is cut down to, or null for the whole window.
         private WebView2Api.RECT[] shape;
 
+        // A move or resize the page asked for, followed here until the button
+        // is released: which edges track the cursor (none for a move), and
+        // where cursor and window were when it began. Deltas are taken from
+        // that start rather than accumulated, so a dropped mouse message
+        // costs nothing.
+        private bool dragging;
+        private int dragEdges;
+        private POINT dragStartCursor;
+        private WebView2Api.RECT dragStartRect;
+        private bool warnedAboutHudDrag;
+        private bool warnedAboutBadDrag;
+        // Whether the gesture moved anything. A press on a title bar that
+        // never moves is a click, and a click must not write the spot the
+        // window happens to be at into the player's remembered bounds.
+        private bool dragChanged;
+        // The page's promise for the gesture in progress, and the document
+        // that holds it: page ids restart at 1 in every document, so an
+        // answer must never reach the next one.
+        private int dragRequestId;
+        private int dragRequestGeneration;
+        private const int DragLeft = 1;
+        private const int DragTop = 2;
+        private const int DragRight = 4;
+        private const int DragBottom = 8;
+
+        // A spot the mod chose with SetBounds. Before the window exists it
+        // waits here - commands run before creations, so a SetBounds right
+        // after Create always lands in that gap - and once chosen it outlives
+        // every Show for the rest of the session, RememberBounds or not.
+        private int? pendingX;
+        private int? pendingY;
+        private int? pendingWidth;
+        private int? pendingHeight;
+        private bool modPlaced;
+
+        private int minimumWidth => Math.Max(MinimumWidth, options.MinWidth);
+
+        private int minimumHeight => Math.Max(MinimumHeight, options.MinHeight);
+
         // Requests this overlay sent to the page and is still waiting on. A
         // page that never answers - no handler, a script error, a page that
         // navigated away mid-question - must not leave the mod hanging, so
@@ -474,6 +513,7 @@ namespace WebOverlay
         {
             if (state == CreationState.Failed)
                 return;
+            endDrag();
             state = CreationState.Failed;
             // Before anything can raise Failed: a handler reads these.
             Failure = kind;
@@ -1798,6 +1838,8 @@ namespace WebOverlay
                     applyShapeFromPage(payload);
                 else if (channel == ChannelProtocol.DiagChannel)
                     OverlayHost.LogPageDiagnostic(title, payload);
+                else if (channel == ChannelProtocol.DragChannel)
+                    beginDragFromPage(payload, 0);
                 return true;
             }
 
@@ -1815,10 +1857,16 @@ namespace WebOverlay
             // A question from the page. Answering exactly once matters on this
             // side too: the page is holding a promise open.
             int answered = 0;
+            if (reserved && channel == ChannelProtocol.DragChannel)
+            {
+                // The one internal question: answered when the gesture ends.
+                beginDragFromPage(payload, id);
+                return true;
+            }
             if (reserved)
             {
-                // No internal channel answers questions; say so at once rather
-                // than let the page wait out its own timeout.
+                // No other internal channel answers questions; say so at once
+                // rather than let the page wait out its own timeout.
                 OverlayHost.Post(() => PostMessageToPage(ChannelProtocol.Answer(channel, null, id)));
                 return true;
             }
@@ -1984,18 +2032,284 @@ namespace WebOverlay
         /// </summary>
         public void SetBounds(int? x, int? y, int? width, int? height)
         {
-            if (window == IntPtr.Zero)
+            // A call that names nothing changes nothing - including whether
+            // the window re-centres on Show.
+            if (closed || (x == null && y == null && width == null && height == null))
                 return;
+            modPlaced = true;
+            if (window == IntPtr.Zero)
+            {
+                // Not dropped, as it was before 1.12.0: applied when the
+                // window first appears. A later call fills in only what it
+                // names, exactly as it would on a live window.
+                pendingX = x ?? pendingX;
+                pendingY = y ?? pendingY;
+                pendingWidth = width ?? pendingWidth;
+                pendingHeight = height ?? pendingHeight;
+                return;
+            }
+            // The mod's call wins over a gesture the player is in the middle
+            // of; otherwise the next mouse movement would undo it.
+            endDrag();
+            applyBounds(x, y, width, height);
+        }
+
+        private void applyPendingBounds()
+        {
+            if (pendingX == null && pendingY == null && pendingWidth == null && pendingHeight == null)
+                return;
+            int? x = pendingX, y = pendingY, width = pendingWidth, height = pendingHeight;
+            pendingX = pendingY = pendingWidth = pendingHeight = null;
+            // A HUD follows the game window, and its tracker would undo the
+            // spot within half a second - a visible jump for nothing.
+            if (options.Transparent)
+                return;
+            applyBounds(x, y, width, height);
+            // The same rule a remembered spot obeys: one that is on no screen
+            // falls back to the default rather than open where nobody can
+            // reach it. A live SetBounds meets it at the next Show anyway.
+            if (isOffScreen())
+            {
+                OverlayHost.LogDiagnostic("overlay '" + title + "': the spot SetBounds asked for is on no"
+                    + " screen; using the default instead.");
+                positionOverGame();
+            }
+        }
+
+        private void applyBounds(int? x, int? y, int? width, int? height)
+        {
             if (!GetWindowRect(window, out WebView2Api.RECT current))
                 return;
             int left = x ?? current.left;
             int top = y ?? current.top;
-            int newWidth = Math.Max(MinimumWidth, width ?? (current.right - current.left));
-            int newHeight = Math.Max(MinimumHeight, height ?? (current.bottom - current.top));
+            int newWidth = Math.Max(minimumWidth, width ?? (current.right - current.left));
+            int newHeight = Math.Max(minimumHeight, height ?? (current.bottom - current.top));
             everPositioned = true;
             SetWindowPos(window, IntPtr.Zero, left, top, newWidth, newHeight,
                 SWP_NOZORDER | SWP_NOACTIVATE);
             fitToClientArea();
+        }
+
+        /// <summary>
+        /// The page's <c>overlay.beginMove()</c> / <c>beginResize(edge)</c>:
+        /// from here until the button is released, the window follows the
+        /// cursor. Done with a capture of our own rather than the system's
+        /// modal move loop, because a frameless window has no sizing border
+        /// for that loop to work with, and one mechanism for both halves is
+        /// one mechanism to prove.
+        /// </summary>
+        private void beginDragFromPage(string payload, int requestId)
+        {
+            // Every way out of here either starts a gesture, whose end
+            // answers the page's promise, or answers it now: the page cannot
+            // learn otherwise, because it never sees the button come up.
+            if (!tryParseDrag(payload, out int edges))
+            {
+                // Once per overlay: a page that sends a bad edge from every
+                // pointermove must not turn the log into its echo.
+                string line = "ignored a malformed move or resize request from the page ("
+                    + describe(payload) + "); use 'move' or an edge such as 'bottom-right'.";
+                if (!warnedAboutBadDrag)
+                {
+                    warnedAboutBadDrag = true;
+                    OverlayHost.LogWarning(line);
+                }
+                else
+                {
+                    OverlayHost.LogDiagnostic("overlay '" + title + "': " + line);
+                }
+                answerDrag(requestId, documentGeneration, DragRefused);
+                return;
+            }
+            if (options.Transparent)
+            {
+                if (!warnedAboutHudDrag)
+                {
+                    warnedAboutHudDrag = true;
+                    OverlayHost.LogWarning("overlay '" + title + "' is a HUD: it follows the game window,"
+                        + " so its page cannot move or resize it.");
+                }
+                answerDrag(requestId, documentGeneration, DragRefused);
+                return;
+            }
+            // A gesture already running keeps its own promise; this one is
+            // refused rather than allowed to replace it.
+            if (dragging || closed || state == CreationState.Failed || !isVisible || window == IntPtr.Zero)
+            {
+                answerDrag(requestId, documentGeneration, DragRefused);
+                return;
+            }
+            // The request is a message, and a message can arrive after the
+            // press it came from has ended. Starting then would take the
+            // mouse from the page for a gesture nobody is making. The check
+            // reads the physical mouse button, so a touch or pen press - which
+            // does not set it - is refused here too: mouse only.
+            if (!primaryButtonDown())
+            {
+                OverlayHost.LogDiagnostic("overlay '" + title + "': a move or resize request arrived"
+                    + " with the primary mouse button not down (released already, or a touch or pen"
+                    + " press); ignored.");
+                answerDrag(requestId, documentGeneration, DragRefused);
+                return;
+            }
+            if (!GetCursorPos(out POINT cursor) || !GetWindowRect(window, out WebView2Api.RECT rect))
+            {
+                answerDrag(requestId, documentGeneration, DragRefused);
+                return;
+            }
+            dragEdges = edges;
+            dragStartCursor = cursor;
+            dragStartRect = rect;
+            dragChanged = false;
+            dragRequestId = requestId;
+            dragRequestGeneration = documentGeneration;
+            dragging = true;
+            // The press began in the browser's own window, which holds the
+            // mouse; taking the capture sends the rest of the gesture here.
+            ReleaseCapture();
+            SetCapture(window);
+            if (GetCapture() != window)
+            {
+                dragging = false;
+                dragRequestId = 0;
+                OverlayHost.LogDiagnostic("overlay '" + title + "': could not take the mouse for a move"
+                    + " or resize; ignored.");
+                answerDrag(requestId, documentGeneration, DragRefused);
+                return;
+            }
+            // Released in the moment between the check above and the capture:
+            // the button-up went to the browser, and only the next mouse
+            // movement would notice. Look once more instead.
+            if (!primaryButtonDown())
+                endDrag();
+        }
+
+        private const string DragRefused = "refused";
+
+        /// <summary>
+        /// Settles the page's promise for one gesture. A request id of 0 is a
+        /// plain message from an older page and has nobody waiting. Deferred
+        /// through the command queue, so it never goes out from inside the
+        /// window procedure, and bound to the asking document like every
+        /// other answer to the page.
+        /// </summary>
+        private void answerDrag(int requestId, int generation, string outcome)
+        {
+            if (requestId == 0)
+                return;
+            OverlayHost.Post(() => PostMessageToPage(
+                ChannelProtocol.Answer(ChannelProtocol.DragChannel, outcome, requestId), null, 0, generation));
+        }
+
+        private static bool tryParseDrag(string payload, out int edges)
+        {
+            switch (payload)
+            {
+                case "move": edges = 0; return true;
+                case "left": edges = DragLeft; return true;
+                case "right": edges = DragRight; return true;
+                case "top": edges = DragTop; return true;
+                case "bottom": edges = DragBottom; return true;
+                case "top-left": edges = DragTop | DragLeft; return true;
+                case "top-right": edges = DragTop | DragRight; return true;
+                case "bottom-left": edges = DragBottom | DragLeft; return true;
+                case "bottom-right": edges = DragBottom | DragRight; return true;
+                default: edges = 0; return false;
+            }
+        }
+
+        /// <summary>
+        /// The physical state of the logical primary button - the right one
+        /// for a player who swapped them, which is what the page's
+        /// <c>button === 0</c> meant.
+        /// </summary>
+        private static bool primaryButtonDown()
+        {
+            int key = GetSystemMetrics(SM_SWAPBUTTON) != 0 ? VK_RBUTTON : VK_LBUTTON;
+            return (GetAsyncKeyState(key) & 0x8000) != 0;
+        }
+
+        /// <summary>Mouse messages while a page-started move or resize runs.</summary>
+        private bool handleDrag(uint message, IntPtr lParam)
+        {
+            switch (message)
+            {
+                case WM_MOUSEMOVE:
+                    // A button-up can be lost to a capture change nobody
+                    // reported; the button's own state cannot.
+                    if (!primaryButtonDown())
+                    {
+                        endDrag();
+                        return true;
+                    }
+                    followCursor();
+                    return true;
+                case WM_LBUTTONUP:
+                    followCursor();
+                    endDrag();
+                    return true;
+                case WM_CAPTURECHANGED:
+                    // Alt-Tab, another window taking the mouse: the gesture is
+                    // over wherever the window got to.
+                    if (lParam != window)
+                        endDrag();
+                    return false;
+            }
+            return false;
+        }
+
+        private void followCursor()
+        {
+            if (!GetCursorPos(out POINT cursor))
+                return;
+            int dx = cursor.x - dragStartCursor.x;
+            int dy = cursor.y - dragStartCursor.y;
+            WebView2Api.RECT start = dragStartRect;
+            int left = start.left, top = start.top, right = start.right, bottom = start.bottom;
+            if (dragEdges == 0)
+            {
+                left += dx;
+                right += dx;
+                top += dy;
+                bottom += dy;
+            }
+            else
+            {
+                // The opposite edge stays where it was; the dragged one stops
+                // at the minimum rather than pushing the other along.
+                if ((dragEdges & DragLeft) != 0)
+                    left = Math.Min(start.left + dx, start.right - minimumWidth);
+                if ((dragEdges & DragRight) != 0)
+                    right = Math.Max(start.right + dx, start.left + minimumWidth);
+                if ((dragEdges & DragTop) != 0)
+                    top = Math.Min(start.top + dy, start.bottom - minimumHeight);
+                if ((dragEdges & DragBottom) != 0)
+                    bottom = Math.Max(start.bottom + dy, start.top + minimumHeight);
+            }
+            if (left != start.left || top != start.top || right != start.right || bottom != start.bottom)
+                dragChanged = true;
+            SetWindowPos(window, IntPtr.Zero, left, top, right - left, bottom - top,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        private void endDrag()
+        {
+            if (!dragging)
+                return;
+            // Cleared first: releasing the capture sends WM_CAPTURECHANGED
+            // straight back here.
+            dragging = false;
+            if (GetCapture() == window)
+                ReleaseCapture();
+            int requestId = dragRequestId;
+            dragRequestId = 0;
+            answerDrag(requestId, dragRequestGeneration, dragChanged ? "moved" : "unchanged");
+            if (!dragChanged)
+                return;
+            everPositioned = true;
+            // Exactly what the end of a frame drag does: the spot the player
+            // left the window at is the one to reopen at.
+            saveBounds();
         }
 
         /// <summary>Sends a message to the page on a named channel.</summary>
@@ -2420,9 +2734,13 @@ namespace WebOverlay
             // A panel keeps the spot the player gave it; only the first show,
             // a spot that ended up off every screen, and HUDs (which follow
             // the game window) position anew. RememberBounds off restores the
-            // old recenter-on-every-show behaviour, as its documentation says.
-            if (options.Transparent || !options.RememberBounds || !everPositioned || isOffScreen())
+            // old recenter-on-every-show behaviour, as its documentation says
+            // - unless the mod placed the window itself, which SetBounds
+            // promises wins for the rest of the session.
+            bool keepSpot = everPositioned && !isOffScreen() && (options.RememberBounds || modPlaced);
+            if (options.Transparent || !keepSpot)
                 positionOverGame();
+            applyPendingBounds();
             everPositioned = true;
             fitToClientArea();
             setControllerVisible(true);
@@ -2446,6 +2764,7 @@ namespace WebOverlay
         {
             if (OverlayHost.Stopping)
                 return;
+            endDrag();
             VisibilityCall call = completed == null ? null : new VisibilityCall { Completion = completed };
             supersedeParkedShow();
             if (closed)
@@ -2618,6 +2937,7 @@ namespace WebOverlay
 
         public void CloseFromHost()
         {
+            endDrag();
             closed = true;
             bool wasVisible = isVisible;
             isVisible = false;
@@ -3134,6 +3454,8 @@ namespace WebOverlay
             // A managed exception must never unwind into native frames.
             try
             {
+                if (dragging && handleDrag(message, lParam))
+                    return IntPtr.Zero;
                 switch (message)
                 {
                     case WM_CLOSE:
@@ -3156,8 +3478,8 @@ namespace WebOverlay
                         // session would accept.
                         if (options.Frame && !options.Transparent && lParam != IntPtr.Zero)
                         {
-                            Marshal.WriteInt32(lParam, 24, MinimumWidth);   // ptMinTrackSize.x
-                            Marshal.WriteInt32(lParam, 28, MinimumHeight);  // ptMinTrackSize.y
+                            Marshal.WriteInt32(lParam, 24, minimumWidth);   // ptMinTrackSize.x
+                            Marshal.WriteInt32(lParam, 28, minimumHeight);  // ptMinTrackSize.y
                             return IntPtr.Zero;
                         }
                         break;
@@ -3280,8 +3602,8 @@ namespace WebOverlay
             {
                 x = stored.X;
                 y = stored.Y;
-                width = Math.Max(stored.Width, MinimumWidth);
-                height = Math.Max(stored.Height, MinimumHeight);
+                width = Math.Max(stored.Width, minimumWidth);
+                height = Math.Max(stored.Height, minimumHeight);
                 return;
             }
 
@@ -3325,6 +3647,12 @@ namespace WebOverlay
                 width = Math.Max(640, (int)(clientWidth * 0.8));
             if (options.Height <= 0)
                 height = Math.Max(480, (int)(clientHeight * 0.85));
+            // Only a minimum the mod asked for: the library's own floor never
+            // applied to the size a mod chose, and does not start to now.
+            if (options.MinWidth > 0)
+                width = Math.Max(width, options.MinWidth);
+            if (options.MinHeight > 0)
+                height = Math.Max(height, options.MinHeight);
             x = topLeft.x + Math.Max(0, (clientWidth - width) / 2);
             y = topLeft.y + Math.Max(0, (clientHeight - height) / 2);
         }
@@ -3410,6 +3738,9 @@ namespace WebOverlay
         private const uint SWP_NOACTIVATE = 0x0010;
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
+        private const int SM_SWAPBUTTON = 23;
+        private const int VK_LBUTTON = 0x01;
+        private const int VK_RBUTTON = 0x02;
         private const int SW_HIDE = 0;
         private const int SW_SHOW = 5;
         private const int SW_SHOWNOACTIVATE = 4;
@@ -3474,6 +3805,15 @@ namespace WebOverlay
 
         [DllImport("user32.dll")]
         private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetCapture();
+
+        [DllImport("user32.dll")]
+        private static extern bool GetCursorPos(out POINT point);
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int key);
 
         [DllImport("user32.dll")]
         private static extern IntPtr SetCursor(IntPtr cursor);

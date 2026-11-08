@@ -104,6 +104,11 @@ namespace YourMod.UI
                 FreeCursorWhileShown = true,
                 ClickThroughWhenUnfocused = true,
                 DispatchOnMainThread = true,
+                // Your hotkey closes the panel it opened: a focused overlay
+                // holds the keyboard, so the game never sees the second
+                // press. Fine inside this body - VirtualKey and CloseKeys are
+                // 1.7.0, well under the floor above.
+                CloseKeys = new[] { 0x1B, WebOverlay.WebOverlayPlugin.VirtualKey(UnityEngine.KeyCode.F9) },
             });
             if (handle == null)
             {

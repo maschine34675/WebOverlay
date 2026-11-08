@@ -149,6 +149,9 @@ internal static class Program
             case "trypost": NewApi.TryPostProbe(); return;
             case "share": NewApi.Share(); return;
             case "visibility-result": NewApi.VisibilityResult(); return;
+            case "drag": NewApi.Drag(); return;
+            case "bounds-early": NewApi.BoundsEarly(); return;
+            case "keys": NewApi.Keys(); return;
 
             // Not a fault-matrix row: the mode for looking at your own page.
             case "preview":
@@ -694,6 +697,9 @@ internal static class Program
     internal static void DestroyProbeWindow(IntPtr window) => DestroyWindow(window);
 
     internal static void SendRealClick(int x, int y) => sendRealClick(x, y);
+
+    /// <summary>For modes that send their own input: the same guard the click uses.</summary>
+    internal static void RefuseForeignTarget(int x, int y) => refuseForeignTarget(x, y);
 
     /// <summary>
     /// The per-frame pass the game plugin normally drives; the probe has no

@@ -70,8 +70,9 @@ stops hearing.
 | Option | Default | Meaning |
 |---|---|---|
 | `Width`, `Height` | 0 | Pixels; 0 means 80% / 85% of the game window (HUDs: the whole game picture). |
-| `Frame` | true | Title bar with close button, recolored to a dark game tone. |
-| `CloseKeys` | Escape | Virtual-key codes that hide the overlay while it has the keyboard. |
+| `MinWidth`, `MinHeight` | 0 | The smallest the window may become - the size it opens at, the player's resizing, a page's `beginResize`, `SetBounds` and a remembered size; 0 means the library's floor of 200 x 150. Not for HUDs, which follow the game window, and not larger than the screen. 1.12.0. |
+| `Frame` | true | Title bar with close button, recolored to a dark game tone. Without it the page provides its own: `overlay.beginMove()` / `beginResize(edge)`, see [RECIPES.md](RECIPES.md#a-frameless-window-the-player-moves). |
+| `CloseKeys` | Escape | Virtual-key codes that hide the overlay while it has the keyboard. Put your own toggle key here (`WebOverlayPlugin.CloseKeysFor`), since the game cannot see it while the overlay is focused. Only keys that type no character, or any key with Ctrl/Alt held, arrive - a plain letter types into the page (rows 103-107, 114-115). |
 | `ContextMenu` | false | Allow the browser's right-click menu. |
 | `DevTools` | false | Allow F12 developer tools and browser accelerator keys. |
 | `Opacity` | 1.0 | Whole-window fade, 0.15-1.0. |
@@ -94,7 +95,7 @@ stops hearing.
 |---|---|
 | `Show()`, `Hide()`, `Toggle()` | Visibility. `IsVisible` reads the current state. |
 | `Show(completed)`, `Hide(completed)` | The same, with an answer: an `Action<VisibilityOutcome>` settled exactly once - `Applied`, `AlreadyThere`, `RefusedFullscreen`, `Superseded`, `Failed`, `Disposed` or `QueueRefused` (see below). 1.11.0. |
-| `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. |
+| `Navigate(url)`, `LoadHtml(html)` | Set the page; the URL's origin becomes trusted. A `LoadHtml` page has an opaque origin: no `localStorage`, `sessionStorage` or cookies, and 2 MB at most (see [RECIPES.md](RECIPES.md#pages-with-real-files)). |
 | `Post(message)`, `ExecuteScript(script)` | Send to the page; buffered until it finished loading. |
 | `Post(channel, payload)` | Send on a named channel; arrives at the page's `overlay.on(channel, ...)`. |
 | `Post(channel, payload, options)` | The same, `Retain`ed for pages that load later or only worth sending while `LatestOnly` (see below). |
@@ -105,13 +106,13 @@ stops hearing.
 | `Transparency` | Which transparency this overlay got: `Composition`, `ChromaKey` or `None`. |
 | `ExecuteScript(script, result)` | Same, and hands back what the script evaluated to, as JSON. |
 | `OpenDevTools()` | Opens the browser developer tools (with `DevTools = true`). |
-| `SetBounds(x, y, w, h)` | Move or resize at runtime; null keeps a value. Not persisted. |
+| `SetBounds(x, y, w, h)` | Move or resize at runtime; null keeps a value, and a call naming nothing does nothing. Not persisted, but it holds for the session: called right after `Create` it is applied when the window appears (a spot on no screen falls back to the default), and it survives `Show` with `RememberBounds` off (both 1.12.0). For a window the player moves, use the page's `beginMove` instead. |
 | `SetShape(regions)` | Cut the overlay down to these rectangles - picture and mouse both (see [RECIPES.md](RECIPES.md#shaping-a-hud-and-moving-a-window)). |
 | `IsPageLoaded` | Whether the page you targeted has finished loading. |
 | `Failure`, `FailureMessage` | Why `Failed` fired, as a cause you can act on plus the exact sentence. |
 | `MessageReceived` | The page called `postMessage` with something that is not channel traffic. Overlay thread. |
 | `ChannelMessage` | The page called `overlay.send(channel, payload)`. Overlay thread. |
-| `KeyPressed` | A key pressed in the overlay that did not close it. Overlay thread. |
+| `KeyPressed` | A key pressed in the overlay that did not close it - the same key classes as `CloseKeys`. The place for a hotkey that can be rebound at runtime, or one whose close the page animates first. Overlay thread. |
 | `Closed` | Fires on every hide or close - not only on destruction. Overlay thread. |
 | `VisibilityChanged` | The overlay became visible or invisible; only on real changes. Overlay thread. |
 | `PageLoaded` | Your page is live; fires again on every navigation. Overlay thread. |
@@ -183,7 +184,8 @@ Windows keep the spot the player gave them: toggling does not recenter, and
 the position and size survive restarts (`%LOCALAPPDATA%\WebOverlay\window-bounds.txt`).
 A remembered spot that is no longer on any screen falls back to the centered
 default, HUDs always follow the game window instead, and `RememberBounds =
-false` restores the old center-on-every-show behaviour.
+false` restores the old center-on-every-show behaviour - unless the mod placed
+the window with `SetBounds`, which holds for the session (1.12.0).
 
 ## Named channels and request/reply
 
@@ -283,6 +285,23 @@ sets the library palette as CSS variables - see [`docs/STYLE.md`](STYLE.md).
 `window.overlay` exists only inside an overlay. A page that should also open in
 an ordinary browser wants one guard line (`if (window.overlay) { ... }`) rather
 than a console full of errors.
+
+**`window.overlay` is the library's object.** Keep your own functions and data
+on an object of your own. A member a later version adds to `window.overlay`
+must not collide with a callback a page hung there, and a page doing that is
+betting it never will. Hand the page data over channels - `Post` on one side,
+`overlay.on` on the other - rather than by building `ExecuteScript` strings: a
+channel payload needs no escaping and keeps its order with everything else.
+
+Besides channels the object carries `setShape` (see
+[RECIPES.md](RECIPES.md#shaping-a-hud-and-moving-a-window)) and, since 1.12.0,
+`beginMove()` and `beginResize(edge)` for a frameless window's own title bar
+and resize corners (see
+[RECIPES.md](RECIPES.md#a-frameless-window-the-player-moves)). Each returns a
+promise that settles once when the gesture ends - `'moved'`, `'unchanged'` or
+`'refused'` - and is the page's only sign that it ended, since the page sees
+no `pointerup` for a press the library took over. On an older library they
+are missing, so guard them: `if (overlay.beginMove) ...`.
 
 **Order.** Messages a mod posts arrive at the page in the order it posted
 them - across channels, not merely within one, because every send goes through

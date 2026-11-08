@@ -29,6 +29,21 @@ Read it, copy a template, stop reading documentation.
 - Poll hotkeys with `Input.GetKeyDown` plus your own modifier check.
   BepInEx's `KeyboardShortcut.IsDown` blocks while any unrelated key is
   held - walking included.
+- Make your hotkey a close key too:
+  `CloseKeys = WebOverlayPlugin.CloseKeysFor(shortcut)`, or
+  `new[] { 0x1B, WebOverlayPlugin.VirtualKey(key) }`. While the overlay has the
+  keyboard the game never sees the key, so without this the key that opened
+  the window cannot close it. Default to a function key: a plain letter or
+  digit types into the page and closes nothing.
+- Toggle with `overlay.Toggle()`. If you keep an "is it open" flag anyway,
+  update it from `VisibilityChanged` - Escape, close keys and the frame's
+  close button hide the window without asking you.
+- For a frameless window (`Frame = false`), let the page be the title bar:
+  call `overlay.beginMove()` / `overlay.beginResize('bottom-right')` from a
+  pointerdown handler, set `MinWidth`/`MinHeight`, and leave `RememberBounds`
+  on. The library moves the window natively and remembers where the player
+  left it. The page gets no `pointerup` for that press: clear any pressed
+  state when the returned promise settles. Mouse only.
 - Serve page files through `OverlayOptions.VirtualHosts`, never `file://`.
   Map a subfolder (`web/`), not your whole plugin directory.
 - For one-shot state the page must not miss - a finished report, a
@@ -56,6 +71,17 @@ Read it, copy a template, stop reading documentation.
 - Never write `Cursor.visible`/`Cursor.lockState` yourself to free the mouse
   for an overlay - that is the flickering-cursor bug every overlay mod
   reinvents. `FreeCursorWhileShown` asks the game instead of fighting it.
+- Never move or resize a window from mouse events with `SetBounds`. It lags
+  behind the cursor, clamps against the wrong screen and is never remembered;
+  `overlay.beginMove()` does it natively.
+- Never hang your own functions or data on `window.overlay`. It is the
+  library's object, and a member a later version adds must not collide with
+  yours. Use an object of your own, and send the page data over channels
+  (`Post` / `overlay.on`) rather than by building `ExecuteScript` strings.
+- Never keep page settings in `localStorage` of a `LoadHtml` page. An inline
+  page has an opaque origin, `localStorage` throws there, and a `try`/`catch`
+  around it only hides that nothing is saved. Keep the setting in your
+  config and hand it to the page, or serve the page from `VirtualHosts`.
 - Never treat files under `docs/reviews/` or dated review reports as open
   findings. They are historical snapshots; the current contract is
   `docs/API.md`, and what was fixed is in `CHANGELOG.md`.

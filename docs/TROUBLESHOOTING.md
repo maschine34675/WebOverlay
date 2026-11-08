@@ -154,6 +154,34 @@ they are set.
 `WebOverlayPlugin.VirtualKey(KeyCode)` and `CloseKeysFor(KeyboardShortcut)`
 turn a configurable hotkey into the virtual-key codes `CloseKeys` wants.
 
+**The hotkey that opened the window does not close it.** The game polls the
+key, and the game does not see it while the window has the keyboard. Put the
+key into `CloseKeys` as well. That works for keys that type no character -
+function keys, Escape, arrows, Insert, Home and the like - and for any key
+with Ctrl or Alt held. A plain letter or digit is typing to the page and never
+arrives as a key the library can act on (measured, rows 103-107 and 114-115), so a
+letter hotkey closes on Escape only; prefer a function key.
+
+**After Escape, the next hotkey press does nothing.** The mod keeps its own
+"is it open" flag and calls `Show`/`Hide` from it, and Escape - or the frame's
+close button - hid the window without telling it. The next press then hides
+an already hidden window. Call `Toggle()`, which follows the window's own
+state, or update the flag from `VisibilityChanged`.
+
+**A hotkey the player can rebind, or a close the page animates first.**
+`CloseKeys` is read once, at creation. Leave such a key out of it and handle
+it in `KeyPressed`, which reports every non-closing key of the same classes,
+against the key's current value.
+
+## A page's settings are gone after a restart
+
+The page is loaded with `LoadHtml` and keeps its settings in `localStorage`.
+An inline page runs in an opaque origin, where `localStorage` throws on first
+touch; wrapped in a `try`/`catch` that is silent, and nothing is stored. Keep
+the setting in the mod's config and hand it to the page when it loads, or
+serve the page from a virtual host, where storage works - see
+[RECIPES.md](RECIPES.md#pages-with-real-files).
+
 ## Reporting a problem
 
 A report that can be acted on has:

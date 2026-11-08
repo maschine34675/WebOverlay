@@ -467,6 +467,14 @@ namespace WebOverlay
         /// plus the key that opened the overlay, so the same press closes it
         /// again. Keys without a virtual-key code are left out.
         /// </summary>
+        /// <remarks>
+        /// "The same press" holds for a key that types no character - a
+        /// function key, Insert, Home and the like - and for a shortcut with
+        /// Ctrl or Alt. A plain letter or digit reaches a focused overlay's
+        /// page as typing and never arrives as a key the library can act on,
+        /// so with such a hotkey the overlay closes on Escape only; see
+        /// <see cref="OverlayOptions.CloseKeys"/>. Default to a function key.
+        /// </remarks>
         public static int[] CloseKeysFor(KeyboardShortcut shortcut)
         {
             var keys = new List<int> { 0x1B };

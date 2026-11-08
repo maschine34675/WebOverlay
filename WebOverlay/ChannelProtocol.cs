@@ -39,6 +39,14 @@ namespace WebOverlay
         /// </summary>
         public const string DiagChannel = ReservedPrefix + "diag";
 
+        /// <summary>
+        /// The page asking to move or resize its own window, from a pointer
+        /// press it is handling - the way a frameless overlay gets a title
+        /// bar and a resize corner without the mod relaying every mouse
+        /// movement. The payload is "move" or the edge being dragged.
+        /// </summary>
+        public const string DragChannel = ReservedPrefix + "drag";
+
         public const string KindMessage = "m";
         public const string KindRequest = "q";
         public const string KindAnswer = "a";
@@ -127,6 +135,18 @@ namespace WebOverlay
   var handlers = {}, responders = {}, pending = {}, next = 1;
   var env = /*!WO_ENV!*/;
   function send(o) { window.chrome.webview.postMessage(JSON.stringify(o)); }
+  // A move or resize handed to the library. The page never sees the
+  // button come up - the library holds the mouse until then - so the
+  // answer is the end of the gesture: 'moved', 'unchanged' or 'refused'.
+  // No deadline: a drag lasts as long as the player holds the button,
+  // and the library answers every one.
+  function gesture(what) {
+    return new Promise(function (resolve) {
+      var id = next++;
+      pending[id] = resolve;
+      send({ __wo: 1, t: 'q', c: '__wo.drag', p: what, i: id });
+    });
+  }
   function text(v) { return v === null || v === undefined ? null : String(v); }
   // The page learns what it is running in without asking the mod: a class on
   // the root element, and the palette when the mod asked for it. The document
@@ -194,6 +214,8 @@ namespace WebOverlay
       }
       send({ __wo: 1, t: 'm', c: '__wo.shape', p: parts.join(';') });
     },
+    beginMove: function () { return gesture('move'); },
+    beginResize: function (edge) { return gesture(String(edge)); },
     request: function (channel, payload, timeoutMs) {
       return new Promise(function (resolve) {
         var id = next++;

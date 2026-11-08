@@ -104,8 +104,85 @@ processes is the one used here, which clips.
 `SetBounds(x, y, width, height)` moves or resizes a window at runtime, in
 screen coordinates; any argument left null keeps its current value. It is not written to the
 remembered-bounds store - that belongs to the player - but it does win over a
-remembered spot for the rest of the session. HUDs follow the game picture, so
-this is for panels.
+remembered spot for the rest of the session. Since 1.12.0 that holds in full:
+a call made right after `Create`, before the window exists, is applied when it
+first appears (it used to be dropped, because commands run before creations),
+and the spot survives every `Show` even with `RememberBounds` off (which used
+to re-centre the window on each one). An early spot that is on no screen
+falls back to the default, as a remembered one does, and a call that names
+nothing changes nothing. HUDs follow the game picture, so this is for panels -
+and it is for a mod deciding where its window goes, not for a player dragging
+it, which is the next section.
+
+### A frameless window the player moves
+
+Without a frame the page is the title bar. Since 1.12.0 it can say so: call
+`overlay.beginMove()` or `overlay.beginResize(edge)` from a pointerdown
+handler, and the library moves or sizes the window natively until the button
+is released.
+
+```csharp
+overlay = WebOverlays.Create("My tablet", new OverlayOptions
+{
+    Width = 1200,
+    Height = 800,
+    MinWidth = 1000,     // held while the player resizes, and against
+    MinHeight = 650,     // SetBounds and a remembered size
+    Frame = false,
+    // RememberBounds stays on: where the player leaves it is where it reopens.
+    FreeCursorWhileShown = true,
+    ClickThroughWhenUnfocused = true,
+    DispatchOnMainThread = true,
+    CloseKeys = new[] { 0x1B, WebOverlayPlugin.VirtualKey(KeyCode.F9) },
+});
+```
+
+```js
+grip.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || !overlay.beginMove) return;
+  grip.classList.add('dragging');
+  overlay.beginMove().then(outcome => grip.classList.remove('dragging'));
+});
+corner.addEventListener('pointerdown', e => {
+  if (e.button === 0 && overlay.beginResize) overlay.beginResize('bottom-right');
+});
+```
+
+Edges are `left`, `right`, `top`, `bottom`, `top-left`, `top-right`,
+`bottom-left` and `bottom-right`. The library takes the mouse from the
+browser for the rest of the gesture and places the window from the cursor's
+screen position - not from Unity's `Screen` size, which is the game's picture
+rather than the monitor - with no round trip through your mod per mouse
+movement. The dragged edge stops at `MinWidth`/`MinHeight` instead of pushing
+the other along, and the end of a gesture that moved the window is remembered
+exactly like the end of a frame drag; a press that never moves is a click and
+saves nothing.
+
+**The promise is the end of the gesture.** Once the library holds the mouse,
+the page sees no `pointerup`, `pointercancel` or `lostpointercapture` for that
+press (measured), so a pressed style or a "dragging" flag set on pointerdown
+would never be cleared by them. Both calls return a promise that settles
+exactly once, when the gesture ends: `'moved'`, `'unchanged'` for a press that
+never moved, or `'refused'`.
+
+A request is refused when the button is already up by the time it arrives -
+starting then would take the mouse from the page for a gesture nobody is
+making - when another gesture is running, for an unknown edge (with one
+warning per overlay), and on a HUD, which follows the game window. It is mouse
+only: a touch or pen press does not set the mouse button the library checks,
+so it is refused too.
+
+Rows 93-99 and 108-111 cover this with real mouse input on one monitor:
+moving, resizing, the minimum, the remembered spot, the click that saves
+nothing, every promise outcome, and the refusals. A second monitor, mixed DPI
+and touch are not measured.
+
+What it replaces: a page sending a delta per `pointermove` to the mod, and the
+mod calling `SetBounds`. That lags at least a frame behind the cursor, has to
+clamp against the screen by hand (Unity's `Screen.width` is the game's
+picture, not the monitor, and wrong for a windowed game), is never remembered,
+and writes a config entry per mouse movement if the mod persists the spot
+itself.
 
 ## Pages with real files
 
@@ -161,8 +238,10 @@ An **inline page has none of that**: `LoadHtml` documents run in an opaque
 origin, where `localStorage`, `sessionStorage` and `document.cookie` each throw
 `SecurityError` on first touch (measured). A page that reads `localStorage`
 without a `try`/`catch` therefore aborts the surrounding script and leaves a
-half-built UI with no visible error - if your page wants storage, give it a
-virtual host.
+half-built UI with no visible error - and one that wraps it in a `try`/`catch`
+saves its settings nowhere, just as silently: they are gone at the next game
+start. If your page wants storage, give it a virtual host, or keep the setting
+in your mod's config and hand it to the page when it loads.
 
 The mapped folder is served read-only, and the mapping exists only inside your
 overlay's own browser view - nothing outside it can reach the files. Inside it,
